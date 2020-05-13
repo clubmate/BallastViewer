@@ -1,0 +1,15 @@
+body { background-color: #000000; color: #cccccc;  }
+
+#debug5 { position: absolute; bottom: 400px; left: 500px; }
+#debug6 { position: absolute; bottom: 400px; left: 650px; }
+#debug6 table { width: 300px; font-size: 22px; }
+#debug6 table td { padding-left: 10px; padding-right: 10px; }
+
+#debug2 { position: absolute; bottom: 100px; right: 200px; }
+#debug3 { position: absolute; bottom: 100px; right: 300px; }
+
+#buttons { position: absolute; bottom: 100px; right: 100px; }
+#photos { display: flex; justify-content: space-around; }
+.uri { text-align: center; }
+.wins { text-align: center; }
+.losses { text-align: center; }
