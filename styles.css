@@ -13,3 +13,5 @@ body { background-color: #000000; color: #cccccc;  }
 .uri { text-align: center; }
 .wins { text-align: center; }
 .losses { text-align: center; }
+.score { text-align: center; }
+.chance { text-align: center; }
