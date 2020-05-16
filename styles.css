@@ -1,11 +1,58 @@
-body { background-color: #000000; color: #cccccc;  }
+html { overflow: hidden; }
+body { margin: 0px; background-color: #000000; color: #cccccc; font-family: BlinkMacSystemFont; }
 
-#completeTable table { width: 300px; font-size: 22px; }
-#completeTable table td { padding-left: 10px; padding-right: 10px; }
+#sidebar { position: absolute; width: 345px;  display: flex; flex-direction: column; height: 100%; top: 0; right: -330px; padding: 15px; box-sizing: border-box; background-color: rgba(40, 42, 44, 0.9); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);}
+#sidebar:hover { right: 0px; cursor: default; }
+#sidebar h2 { margin-top: 10px; margin-bottom: 10px; font-size: 14px; }
 
-#photos { display: flex; justify-content: space-around; }
-.uri { text-align: center; }
-.wins { text-align: center; }
-.losses { text-align: center; }
-.score { text-align: center; }
-.chance { text-align: center; }
+
+#completeTable { height: 30px; margin-top: 15px; flex-grow: 4; overflow: scroll; margin-bottom: 15px; }
+#completeTable table { width: 315px; border-collapse: collapse; font-size: 12px; text-transform: uppercase; }
+#completeTable table th { text-align: left; padding: 2px; }
+#completeTable table th:first-child { width: 1%; white-space: nowrap; }
+#completeTable table th:nth-child(2) { width: 100%; }
+#completeTable table th:nth-child(3) { width: 20px; }
+#completeTable table th:nth-child(4) { width: 20px; }
+#completeTable table th:last-child { text-align: right; }
+
+
+#completeTable table tr.line td { border-bottom: 1px solid #cccccc; }
+#completeTable table tr.line th { border-bottom: 1px solid #cccccc; }
+#completeTable table td { padding: 2px; }
+#completeTable table td:last-child { text-align: right; }
+#completeTable table tr.highlight td { font-weight: bold; }
+
+#photos { position: absolute; height: 100%; width: 100%; display: flex; justify-content: space-around; align-items: center; }
+#photos img { max-height: 100%; max-width: 100%; box-sizing: border-box; cursor: pointer; padding-top: 15px; padding-bottom: 15px; }
+
+#left, #right { height: 100%; width: 50%; display: flex; align-items: center; justify-content: center; }
+#left img { padding-left: 30px; padding-right: 15px; }
+#right img { padding-left: 15px; padding-right: 30px; }
+
+#previewContainer { display: flex; align-items: baseline; width: 100%; font-size: 12px; padding-bottom: 15px; border-bottom: 1px solid #313131; }
+#previewContainerLeft, #previewContainerRight { width: 50%; }
+#previewContainerLeft { padding-right: 15px; }
+#previewContainerLeft img, #previewContainerRight img { max-width: 100%; max-height: 100%; }
+
+#leftStats, #rightStats { display: flex; flex-direction: column; text-transform: uppercase; }
+#previewContainer .name { text-align: center; }
+#previewContainer .chance { text-align: center; font-size: 32px; }
+#previewContainer .score { text-align: center; }
+
+#round { font-size: 16px; }
+#round table { width: 100%; border-collapse: collapse; }
+#round table td { padding: 0px; padding-bottom: 2px; }
+#round table td:last-child { text-align: right; }
+#roundAccuracy { margin-top: 15px; font-size: 32px; text-align: center; }
+
+#roundStats { padding-top: 15px; padding-bottom: 15px; border-bottom: 1px solid #313131; border-top: 1px solid #313131;}
+#roundStats table { width: 100%; border-collapse: collapse; }
+#roundStats table td { padding: 0px; padding-bottom: 2px; }
+#roundStats table td:last-child { text-align: right; }
+
+#buttons { display: flex; }
+
+button { margin-top: 15px; width: 100%; font-size: 16px; padding: 10px;  border-radius: 20px; font-weight: bold; background-color: #313131; color: #ffffff; border: 0px; cursor: pointer; }
+button:hover { background-color: #cccccc; color: rgba(40, 42, 44, 1); }
+
+#fullscreen { margin-left: 10px; width: auto; }
