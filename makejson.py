@@ -17,7 +17,11 @@ for num, i in enumerate(photoURIs):
   
   
     # appending data 
-   all.append(y) 
+   if i != ".DS_Store":
+      all.append(y) 
+   
+   
+
  
    
 t = json.dumps(all, indent=4)
