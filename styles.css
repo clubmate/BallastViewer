@@ -26,6 +26,8 @@ body { margin: 0px; background-color: #000000; color: #cccccc; font-family: Blin
 #completeTable table td:last-child { text-align: right; }
 #completeTable table tr.highlight td { font-weight: bold; }
 
+#completeTable table tr.killed td { color: #696969; }
+
 #photos { position: absolute; height: 100%; width: 100%; display: flex; justify-content: space-around; align-items: center; }
 #photos img { max-height: 100%; max-width: 100%; box-sizing: border-box; cursor: pointer; padding-top: 15px; padding-bottom: 15px; }
 
