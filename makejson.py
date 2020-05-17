@@ -8,12 +8,13 @@ all = []
 for num, i in enumerate(photoURIs): 
  
    # python object to be appended 
-   y = {"id":num, 
+   y = { "id":num, 
          "uri": i, 
          "score": 1000,
          "wins":[],
-         "losses":[]
-    } 
+         "losses":[],
+         "killed":"",
+       } 
   
   
     # appending data 
