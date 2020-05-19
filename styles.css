@@ -68,12 +68,12 @@ button:focus {outline:0;}
 #grid h2 { width: 100%; margin-top: 15px; border-bottom: 1px solid #cccccc; padding-bottom: 10px; margin-right: 15px;}
 #grid h2:first-child { margin-top: 10px; }
 .gridItem { padding-right: 15px; padding-bottom: 15px; }
+.gridItem.off { opacity: 0.4; }
+.gridItem.off:hover { opacity: 1; }
 .gridItem img { max-height: 200px; max-width: 200px; }
 .gridItem .glass {
     position: absolute;
     background-color: #00000099;
-    height: 200px;
-    width: 200px;
     display: flex;
     align-items: flex-end;
     justify-content: flex-end;
@@ -81,5 +81,9 @@ button:focus {outline:0;}
     padding: 15px;
     box-sizing: border-box;
 }
+.gridItem .glass:hover { background-color: transparent; }
 
 #fullscreen { margin-left: 10px; width: auto; }
+
+#message { opacity: 0; position: absolute; width: 100%; height: 100%; background-color: #00000099; display: flex; align-items: center; justify-content: center; font-size: 90px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); pointer-events: none; }
+#message.on { opacity: 1; }
