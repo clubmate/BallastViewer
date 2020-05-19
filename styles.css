@@ -5,7 +5,7 @@ body { margin: 0px; background-color: #000000; color: #cccccc; font-family: Blin
 #sidebarLeft:hover { left: 0px; cursor: default; }
 
 
-#sidebarRight { position: absolute; width: 345px;  display: flex; flex-direction: column; height: 100%; top: 0; right: 0px; padding: 15px; box-sizing: border-box; background-color: rgba(40, 42, 44, 0.9); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);}
+#sidebarRight { position: absolute; width: 345px;  display: flex; flex-direction: column; height: 100%; top: 0; right: -330px; padding: 15px; box-sizing: border-box; background-color: rgba(40, 42, 44, 0.9); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);}
 #sidebarRight:hover { right: 0px; cursor: default; }
 #sidebarRight h2 { margin-top: 10px; margin-bottom: 10px; font-size: 14px; }
 
@@ -69,5 +69,17 @@ button:focus {outline:0;}
 #grid h2:first-child { margin-top: 10px; }
 .gridItem { padding-right: 15px; padding-bottom: 15px; }
 .gridItem img { max-height: 200px; max-width: 200px; }
+.gridItem .glass {
+    position: absolute;
+    background-color: #00000099;
+    height: 200px;
+    width: 200px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    font-size: 32px;
+    padding: 15px;
+    box-sizing: border-box;
+}
 
 #fullscreen { margin-left: 10px; width: auto; }

@@ -291,10 +291,12 @@ function rightPhotoWins() {
 
 function showRanking() {
 
+  var rankingArray = json.photos.concat(json.killed);
+
   $("#grid").empty();
   $("#canvas").show();
 
-  for (var i = 0; i < points.length; i++) {
+  for (var i = 0; i < rankingArray.length; i++) {
   
     if (i == 0) {
       $("#grid").append("<h2>&starf;&starf;&starf;&starf;</h2>");
@@ -312,7 +314,12 @@ function showRanking() {
       $("#grid").append("<h2>&starf;</h2>");
     }   
     
-    $("#grid").append("<div class=\"gridItem\"><img src=" + baseUrl + "" + points[i].uri + "></div>");
+    if (rankingArray[i].killed > 0) {  
+      $("#grid").append("<div class=\"gridItem\"><div class=\"glass\">" + rankingArray[i].killed + "</div><img src=" + baseUrl + "" + rankingArray[i].uri + "></div>");
+    } else {
+      $("#grid").append("<div class=\"gridItem\"><img src=" + baseUrl + "" + rankingArray[i].uri + "></div>");
+    }
+    
 
   
   }
