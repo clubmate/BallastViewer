@@ -1,7 +1,7 @@
 import json
 import os
 
-path = "photos/venuskopf"
+path = "photos/venuscloseupsfinal"
 photoURIs = os.listdir(path)
 all = []
 
