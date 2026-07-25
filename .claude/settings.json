@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "next=$(grep -m1 '^- \\[ \\] ' docs/PLAN.md 2>/dev/null | sed -E 's/^- \\[ \\] \\*\\*([^*]+)\\*\\*.*/\\1/'); if [ -n \"$next\" ]; then printf '{\"systemMessage\":\"📋 Roadmap: als Nächstes Schritt %s — starte mit: Mach Schritt %s aus docs/PLAN.md\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"Roadmap status from docs/PLAN.md: the next open step is %s. If the user asks to continue, work on exactly this step.\"}}' \"$next\" \"${next%%.*}\" \"$next\"; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
