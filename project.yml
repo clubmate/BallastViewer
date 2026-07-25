@@ -1,0 +1,49 @@
+name: ballastviewer
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  BallastCore:
+    path: BallastCore
+targets:
+  ballastviewer:
+    type: application
+    platform: macOS
+    sources:
+      - App
+    dependencies:
+      - package: BallastCore
+    info:
+      path: App/Resources/Info.plist
+      properties:
+        LSApplicationCategoryType: public.app-category.photography
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSPrincipalClass: NSApplication
+        NSHighResolutionCapable: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: ballastviewer Library
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - com.bolliboll.ballastviewer.library
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.bolliboll.ballastviewer.library
+            UTTypeDescription: ballastviewer Library
+            UTTypeConformsTo:
+              - com.apple.package
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - ballastlib
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bolliboll.ballastviewer
+        PRODUCT_NAME: ballastviewer
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        CODE_SIGN_ENTITLEMENTS: App/Resources/ballastviewer.entitlements
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
