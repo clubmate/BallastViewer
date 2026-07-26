@@ -6,6 +6,7 @@ import BallastCore
 struct MainWindow: View {
     @Environment(LibraryController.self) private var controller
     @Environment(CenterViewModel.self) private var center
+    @Environment(SidebarViewModel.self) private var sidebar
 
     var body: some View {
         Group {
@@ -83,7 +84,7 @@ struct MainWindow: View {
     private var libraryContent: some View {
         HSplitView {
             if center.showLeftPanel {
-                sidebarPlaceholder
+                SidebarView(sidebar: sidebar, center: center)
                     .frame(minWidth: 200, maxWidth: 300, maxHeight: .infinity)
             }
             centerPane
@@ -93,14 +94,6 @@ struct MainWindow: View {
                     .frame(minWidth: 250, maxWidth: 350, maxHeight: .infinity)
             }
         }
-    }
-
-    private var sidebarPlaceholder: some View {
-        Text("LIBRARY")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(8)
     }
 
     @ViewBuilder
@@ -176,11 +169,6 @@ struct MainWindow: View {
 
             switch center.viewMode {
             case .grid:
-                // Interim stand-in for the sidebar's unrated pseudo-collection;
-                // replaced by real collections in step 7.
-                Toggle("Unrated", isOn: $center.unratedOnly)
-                    .toggleStyle(.checkbox)
-                    .fixedSize()
                 Slider(
                     value: Binding(
                         get: { Double(center.columnCount) },

@@ -18,6 +18,28 @@ public struct LibrarySnapshot: Sendable {
 
     public struct MissingMetaError: Error {}
 
+    /// Rule-evaluation facts for one photo (resolved keyword paths + effective
+    /// groups). Cheap — proportional to the photo's keyword count.
+    public func queryFacts(forPhotoId id: Int64) -> PhotoQueryFacts {
+        guard let keywordIds = keywordIdsByPhoto[id], !keywordIds.isEmpty else {
+            return PhotoQueryFacts()
+        }
+        return PhotoQueryFacts(
+            keywordPaths: keywordIds.map { keywordTree.path(of: $0) },
+            keywordGroupIds: Set(keywordIds.compactMap { keywordTree.effectiveGroupId(of: $0) })
+        )
+    }
+
+    public var collectionsById: [Int64: SmartCollectionRecord] {
+        Dictionary(uniqueKeysWithValues: collections.compactMap { record in
+            record.id.map { ($0, record) }
+        })
+    }
+
+    public var rulesByCollection: [Int64: [CollectionRuleRecord]] {
+        Dictionary(grouping: rules, by: \.collectionId)
+    }
+
     public static func load(_ db: Database) throws -> LibrarySnapshot {
         guard let meta = try LibraryMetaRecord.fetchOne(db) else {
             throw MissingMetaError()

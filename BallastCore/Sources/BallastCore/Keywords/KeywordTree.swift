@@ -98,6 +98,18 @@ public struct KeywordTree: Sendable {
         return currentId
     }
 
+    /// The node's own group, or the nearest grouped ancestor's. This is what
+    /// group rules and chip colours use, so nested keywords under a grouped
+    /// root behave as group members (C2).
+    public func effectiveGroupId(of id: Int64) -> Int64? {
+        var current = nodesById[id]
+        while let record = current {
+            if let groupId = record.groupId { return groupId }
+            current = record.parentId.flatMap { nodesById[$0] }
+        }
+        return nil
+    }
+
     public func descendants(of id: Int64) -> [Int64] {
         var result: [Int64] = []
         var stack = children(of: id)

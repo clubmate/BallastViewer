@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-public struct SmartGroupRecord: Codable, Hashable, Sendable, FetchableRecord, MutablePersistableRecord {
+public struct SmartGroupRecord: Codable, Hashable, Sendable, Identifiable, FetchableRecord, MutablePersistableRecord {
     public static let databaseTableName = "smartGroup"
 
     public var id: Int64?
@@ -19,7 +19,7 @@ public struct SmartGroupRecord: Codable, Hashable, Sendable, FetchableRecord, Mu
     }
 }
 
-public struct SmartCollectionRecord: Codable, Hashable, Sendable, FetchableRecord, MutablePersistableRecord {
+public struct SmartCollectionRecord: Codable, Hashable, Sendable, Identifiable, FetchableRecord, MutablePersistableRecord {
     public static let databaseTableName = "smartCollection"
 
     public var id: Int64?

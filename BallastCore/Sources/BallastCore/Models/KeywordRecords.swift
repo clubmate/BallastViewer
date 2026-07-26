@@ -28,7 +28,7 @@ public struct KeywordRecord: Codable, Hashable, Sendable, FetchableRecord, Mutab
     }
 }
 
-public struct KeywordGroupRecord: Codable, Hashable, Sendable, FetchableRecord, MutablePersistableRecord {
+public struct KeywordGroupRecord: Codable, Hashable, Sendable, Identifiable, FetchableRecord, MutablePersistableRecord {
     public static let databaseTableName = "keywordGroup"
 
     public var id: Int64?

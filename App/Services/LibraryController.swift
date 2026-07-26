@@ -62,6 +62,13 @@ final class LibraryController {
         photoIndexById[id].map { snapshot!.photos[$0] }
     }
 
+    /// In-place snapshot mutation for extensions (snapshot's setter is
+    /// file-private by design — all mutations funnel through the controller).
+    func mutateSnapshot(_ body: (inout LibrarySnapshot) -> Void) {
+        guard snapshot != nil else { return }
+        body(&snapshot!)
+    }
+
     /// In-place mutation of catalog photos: memory first (synchronous, instant
     /// UI), the returned records are what the caller persists asynchronously.
     func mutatePhotos(ids: [Int64], _ mutate: (inout PhotoRecord) -> Void) -> [PhotoRecord] {

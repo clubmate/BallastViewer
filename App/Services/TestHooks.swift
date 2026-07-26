@@ -16,11 +16,15 @@ enum TestHooks {
     static func runIfRequested(
         _ controller: LibraryController,
         center: CenterViewModel,
+        sidebar: SidebarViewModel,
         dispatcher: ActionDispatcher
     ) async {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
         guard env["BV_TEST"] != nil else { return }
+        // Line-buffered stdout is block-buffered when piped; hook output must
+        // arrive even if a later step hangs.
+        setbuf(stdout, nil)
 
         if let name = env["BV_TEST_CREATE"] {
             let url = testURL(named: name)
@@ -49,7 +53,7 @@ enum TestHooks {
             printImportState(controller, label: "remove")
         }
         if env["BV_TEST_CULL"] != nil {
-            await runCullingChecks(controller, center: center, dispatcher: dispatcher)
+            await runCullingChecks(controller, center: center, sidebar: sidebar, dispatcher: dispatcher)
         }
         // Visual check: jump into single view on the second photo (no quit).
         if env["BV_TEST_SINGLE"] != nil {
@@ -83,17 +87,30 @@ enum TestHooks {
     }
 
     #if DEBUG
-    /// Step-6 acceptance flow, headless: in an "unrated" filter, rating the
-    /// anchor advances to the next unrated photo (Q1) — never back to the top;
-    /// rotate cycles the stored orientation (Q5); ratingUp is reachable (C5);
-    /// everything persists across a close/reopen.
+    /// Step-6/7 acceptance flow, headless: inside a real "unrated" smart
+    /// collection, rating the anchor advances to the next unrated photo (Q1) —
+    /// never back to the top; rotate cycles the stored orientation (Q5);
+    /// ratingUp is reachable (C5); star badges update via delta; everything
+    /// (including the sidebar selection) persists across a close/reopen.
     @MainActor
     private static func runCullingChecks(
         _ controller: LibraryController,
         center: CenterViewModel,
+        sidebar: SidebarViewModel,
         dispatcher: ActionDispatcher
     ) async {
-        center.unratedOnly = true
+        controller.createSmartGroup(named: "CULLING")
+        guard let groupId = controller.snapshot?.smartGroups.last?.id,
+              let collectionId = controller.createCollection(named: "UNRATED", inGroup: groupId),
+              var unrated = controller.snapshot?.collections.first(where: { $0.id == collectionId })
+        else {
+            print("BVCULL error=could-not-create-collection")
+            return
+        }
+        unrated.matchAll = true
+        controller.saveCollection(unrated, rules: [("rating", "equals", "0")])
+        center.selectSidebarItem(.collection(collectionId))
+        print("BVCULL selectedCollection anchorIsFirst=\(center.selection.anchorId == center.visiblePhotos.first?.id)")
         // Move into the middle of the list so "advance" is distinguishable
         // from "jump to top".
         dispatcher.dispatch(.app(.nextPhoto))
@@ -108,6 +125,11 @@ enum TestHooks {
         dispatcher.dispatch(.app(.rate3))
         let advanced = center.selection.anchorId == expectedNext
         printCullState(controller, center, label: "rated3 advancedToNeighbour=\(advanced)")
+        print(
+            "BVQUERY counts all=\(sidebar.counts.allPhotos)",
+            "ratings=\(sidebar.counts.ratings)",
+            "unratedCollection=\(sidebar.counts.collections[collectionId].map(String.init) ?? "-")"
+        )
 
         dispatcher.dispatch(.app(.ratingUp))
         printCullState(controller, center, label: "ratingUp")
@@ -127,6 +149,23 @@ enum TestHooks {
             "BVCULL persisted rated=\(photos.filter { $0.rating > 0 }.count)",
             "rotated=\(photos.filter { $0.orientation != 1 }.count)",
             "ratings=\(photos.filter { $0.rating > 0 }.map(\.rating).sorted())"
+        )
+        print(
+            "BVQUERY restored item=\(center.activeItem.encoded)",
+            "visible=\(center.visiblePhotos.count)",
+            "collections=\(controller.snapshot?.collections.count ?? -1)"
+        )
+
+        // Collection-switch acceptance: switching always selects the first photo.
+        center.selectSidebarItem(.rating(3))
+        print(
+            "BVQUERY switchRating3 visible=\(center.visiblePhotos.count)",
+            "anchorIsFirst=\(center.selection.anchorId == center.visiblePhotos.first?.id)"
+        )
+        center.selectSidebarItem(.allPhotos)
+        print(
+            "BVQUERY switchAll visible=\(center.visiblePhotos.count)",
+            "anchorIsFirst=\(center.selection.anchorId == center.visiblePhotos.first?.id)"
         )
     }
 

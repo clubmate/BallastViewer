@@ -5,6 +5,8 @@
 public enum CatalogEvent: Equatable, Sendable {
     /// The listed photos changed in place (rating, orientation, keywords…).
     case photosUpdated([Int64])
+    /// Smart groups, collections or rules changed (create/edit/delete/reorder).
+    case collectionsChanged
     /// The whole snapshot was reloaded — rebuild derived state.
     case catalogReplaced
 }

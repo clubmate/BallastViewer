@@ -4,6 +4,7 @@ import SwiftUI
 struct BallastviewerApp: App {
     @State private var controller: LibraryController
     @State private var center: CenterViewModel
+    @State private var sidebar: SidebarViewModel
     @State private var keyMap: KeyMapStore
     @State private var dispatcher: ActionDispatcher
     @State private var shortcutMonitor: ShortcutMonitor
@@ -11,10 +12,12 @@ struct BallastviewerApp: App {
     init() {
         let controller = LibraryController()
         let center = CenterViewModel(controller: controller)
+        let sidebar = SidebarViewModel(controller: controller)
         let keyMap = KeyMapStore()
         let dispatcher = ActionDispatcher(controller: controller, center: center)
         _controller = State(initialValue: controller)
         _center = State(initialValue: center)
+        _sidebar = State(initialValue: sidebar)
         _keyMap = State(initialValue: keyMap)
         _dispatcher = State(initialValue: dispatcher)
         _shortcutMonitor = State(initialValue: ShortcutMonitor(keyMap: keyMap, dispatcher: dispatcher))
@@ -25,7 +28,12 @@ struct BallastviewerApp: App {
             MainWindow()
                 .environment(controller)
                 .environment(center)
-                .task { await TestHooks.runIfRequested(controller, center: center, dispatcher: dispatcher) }
+                .environment(sidebar)
+                .task {
+                    await TestHooks.runIfRequested(
+                        controller, center: center, sidebar: sidebar, dispatcher: dispatcher
+                    )
+                }
         }
         .commands {
             LibraryCommands(controller: controller)

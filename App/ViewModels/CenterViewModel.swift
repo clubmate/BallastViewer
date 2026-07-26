@@ -56,26 +56,48 @@ final class CenterViewModel {
         }
     }
 
-    /// Interim stand-in for the sidebar's "unrated" pseudo-collection until the
-    /// query engine lands (step 7) — exercises the Q1 neighbour rule live.
-    var unratedOnly = false {
-        didSet {
-            guard oldValue != unratedOnly else { return }
-            applyFilterChange()
-        }
-    }
+    /// The selected sidebar entry — drives the centre filter. Restored per
+    /// library from `libraryMeta` (Q24: survives relaunch, unlike sort/mode).
+    private(set) var activeItem: SidebarItem = .allPhotos
 
     @ObservationIgnored private var randomOrder = StableRandomOrder()
     @ObservationIgnored private var visibleIdSet: Set<Int64> = []
+    /// Query caches, refreshed on collection/catalog changes.
+    @ObservationIgnored private var collectionsById: [Int64: SmartCollectionRecord] = [:]
+    @ObservationIgnored private var rulesByCollection: [Int64: [CollectionRuleRecord]] = [:]
+    @ObservationIgnored private var currentLibraryURL: URL?
 
     init(controller: LibraryController) {
         self.controller = controller
         controller.addCatalogObserver { [weak self] event in
             self?.handle(event)
         }
+        currentLibraryURL = controller.libraryURL
+        refreshQueryCaches()
+        activeItem = validated(controller.storedSidebarItem)
         rebuildVisible()
         selection.selectSingle(visiblePhotos.first?.id)
         updateControlSurface()
+    }
+
+    // MARK: Sidebar selection (spec §10.4: switching auto-selects the first photo)
+
+    func selectSidebarItem(_ item: SidebarItem) {
+        guard item != activeItem else { return }
+        activeItem = item
+        rebuildVisible()
+        selection.selectSingle(visiblePhotos.first?.id)
+        updateControlSurface()
+        controller.setSelectedSidebarItem(item)
+    }
+
+    /// A stored/active collection that no longer exists degrades to ALL PHOTOS.
+    private func validated(_ item: SidebarItem?) -> SidebarItem {
+        guard let item else { return .allPhotos }
+        if case .collection(let id) = item, collectionsById[id] == nil {
+            return .allPhotos
+        }
+        return item
     }
 
     // MARK: Catalog events
@@ -83,21 +105,56 @@ final class CenterViewModel {
     private func handle(_ event: CatalogEvent) {
         switch event {
         case .catalogReplaced:
-            rebuildVisible()
-            if let anchor = selection.anchorId, visibleIdSet.contains(anchor) {
-                selection.prune(keeping: visibleIdSet)
-            } else {
-                // Never leave the user with nothing current (spec §10.4).
+            refreshQueryCaches()
+            if currentLibraryURL != controller.libraryURL {
+                // A different library: restore its own persisted selection.
+                currentLibraryURL = controller.libraryURL
+                activeItem = validated(controller.storedSidebarItem)
+                rebuildVisible()
                 selection.selectSingle(visiblePhotos.first?.id)
+            } else {
+                // Same library, bulk change (import, folder removal).
+                activeItem = validated(activeItem)
+                rebuildVisible()
+                if let anchor = selection.anchorId, visibleIdSet.contains(anchor) {
+                    selection.prune(keeping: visibleIdSet)
+                } else {
+                    // Never leave the user with nothing current (spec §10.4).
+                    selection.selectSingle(visiblePhotos.first?.id)
+                }
             }
             updateControlSurface()
+        case .collectionsChanged:
+            refreshQueryCaches()
+            let validatedItem = validated(activeItem)
+            if validatedItem != activeItem {
+                // The active collection was deleted (spec §7.7).
+                selectSidebarItem(validatedItem)
+            } else if case .collection = activeItem {
+                // Rules of the active collection may have changed: re-apply
+                // immediately (spec §7.7 quirk), relocating via Q1.
+                applyFilterChange()
+            }
         case .photosUpdated(let ids):
             photosDidChange(ids)
         }
     }
 
+    private func refreshQueryCaches() {
+        collectionsById = controller.snapshot?.collectionsById ?? [:]
+        rulesByCollection = controller.snapshot?.rulesByCollection ?? [:]
+    }
+
     private func passesFilter(_ photo: PhotoRecord) -> Bool {
-        !unratedOnly || photo.rating == 0
+        guard let snapshot = controller.snapshot else { return false }
+        return SidebarFilter.matches(
+            photo,
+            facts: photo.id.map { snapshot.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts(),
+            item: activeItem,
+            collectionsById: collectionsById,
+            rulesByCollection: rulesByCollection,
+            lastImportBatchId: snapshot.meta.lastImportBatchId
+        )
     }
 
     /// Full recompute — bulk changes only (library open/import, sort or filter
