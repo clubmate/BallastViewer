@@ -26,6 +26,16 @@ import Testing
         #expect(s.selectedIds == [40] && s.anchorId == 40)
     }
 
+    @Test func pruneDropsInvisibleIdsAndOrphanedAnchor() {
+        var s = SelectionModel()
+        s.selectSingle(20)
+        s.selectRange(to: 40, in: order)
+        s.prune(keeping: [20, 30, 50])
+        #expect(s.selectedIds == [20, 30] && s.anchorId == nil)
+        s.prune(keeping: [30])
+        #expect(s.selectedIds == [30] && s.anchorId == nil)
+    }
+
     @Test func rangeSelectionSpansAnchorToTargetInclusive() {
         var s = SelectionModel()
         s.selectSingle(20)

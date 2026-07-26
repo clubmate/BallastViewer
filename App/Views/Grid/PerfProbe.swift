@@ -10,7 +10,7 @@ enum PerfProbe {
     @MainActor
     static func runIfRequested(
         photos: [GridPhoto],
-        viewModel: GridViewModel,
+        viewModel: CenterViewModel,
         pipeline: ThumbnailPipeline
     ) async {
         #if DEBUG

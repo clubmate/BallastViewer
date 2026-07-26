@@ -39,6 +39,16 @@ public struct SelectionModel: Equatable, Sendable {
         }
     }
 
+    /// Drops selected ids that are no longer visible; the anchor follows the
+    /// same rule. Used after list membership changes that did not remove the
+    /// anchor (the neighbour rule handles that case).
+    public mutating func prune(keeping visibleIds: Set<Int64>) {
+        selectedIds.formIntersection(visibleIds)
+        if let anchorId, !selectedIds.contains(anchorId) {
+            self.anchorId = nil
+        }
+    }
+
     /// Shift-click: everything between the anchor and `id` in the *visible*
     /// order, inclusive; the anchor moves to `id`. Without an anchor this
     /// degrades to a single selection.

@@ -30,6 +30,23 @@ public enum PhotoDAO {
             .updateAll(db, Column("orientation").set(to: orientation))
     }
 
+    /// Per-photo values (ratingUp/ratingDown produce different results across a
+    /// batch). Single-row UPDATEs via one cached statement, caller's transaction.
+    public static func setRatings(_ updates: [(photoId: Int64, rating: Int)], in db: Database) throws {
+        let statement = try db.cachedStatement(sql: "UPDATE photo SET rating = ? WHERE id = ?")
+        for update in updates {
+            try statement.execute(arguments: [update.rating, update.photoId])
+        }
+    }
+
+    /// Per-photo values (each photo advances its own orientation cycle).
+    public static func setOrientations(_ updates: [(photoId: Int64, orientation: Int)], in db: Database) throws {
+        let statement = try db.cachedStatement(sql: "UPDATE photo SET orientation = ? WHERE id = ?")
+        for update in updates {
+            try statement.execute(arguments: [update.orientation, update.photoId])
+        }
+    }
+
     /// Idempotent: assigning an already-assigned keyword is a no-op.
     public static func assignKeyword(_ keywordId: Int64, toPhotoIds ids: [Int64], in db: Database) throws {
         for photoId in ids {

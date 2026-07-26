@@ -41,6 +41,55 @@ final class LibraryController {
     /// URL we successfully called startAccessingSecurityScopedResource on.
     private var accessedURL: URL?
 
+    // MARK: Catalog events + fast photo lookup
+
+    /// snapshot.photos index by photo id, kept in sync with the snapshot so
+    /// single-photo mutations are O(1) (see CLAUDE.md mutation contract).
+    private var photoIndexById: [Int64: Int] = [:]
+    private var catalogObservers: [(CatalogEvent) -> Void] = []
+
+    /// Observers live as long as the controller (i.e. the app) — there is no
+    /// removal; long-lived view models register once at construction.
+    func addCatalogObserver(_ observer: @escaping (CatalogEvent) -> Void) {
+        catalogObservers.append(observer)
+    }
+
+    func emitCatalogEvent(_ event: CatalogEvent) {
+        for observer in catalogObservers { observer(event) }
+    }
+
+    func photo(withId id: Int64) -> PhotoRecord? {
+        photoIndexById[id].map { snapshot!.photos[$0] }
+    }
+
+    /// In-place mutation of catalog photos: memory first (synchronous, instant
+    /// UI), the returned records are what the caller persists asynchronously.
+    func mutatePhotos(ids: [Int64], _ mutate: (inout PhotoRecord) -> Void) -> [PhotoRecord] {
+        guard snapshot != nil else { return [] }
+        var changed: [PhotoRecord] = []
+        for id in ids {
+            guard let index = photoIndexById[id] else { continue }
+            let before = snapshot!.photos[index]
+            mutate(&snapshot!.photos[index])
+            if snapshot!.photos[index] != before {
+                changed.append(snapshot!.photos[index])
+            }
+        }
+        return changed
+    }
+
+    private func rebuildPhotoIndex() {
+        guard let snapshot else {
+            photoIndexById = [:]
+            return
+        }
+        photoIndexById = Dictionary(
+            uniqueKeysWithValues: snapshot.photos.enumerated().compactMap { index, photo in
+                photo.id.map { ($0, index) }
+            }
+        )
+    }
+
     var isLibraryOpen: Bool { library != nil }
 
     init() {
@@ -82,7 +131,9 @@ final class LibraryController {
         libraryURL = nil
         snapshot = nil
         thumbnails = nil
+        rebuildPhotoIndex()
         bookmarks.clearLastOpened()
+        emitCatalogEvent(.catalogReplaced)
     }
 
     func clearRecents() {
@@ -124,9 +175,11 @@ final class LibraryController {
         thumbnails = ThumbnailPipeline(libraryUUID: loaded.meta.libraryUUID)
         library = database
         libraryURL = url
+        rebuildPhotoIndex()
         bookmarks.saveLastOpened(url)
         bookmarks.addRecent(url)
         recentLibraries = bookmarks.recentURLs()
+        emitCatalogEvent(.catalogReplaced)
     }
 
     private func releaseCurrent() {
@@ -137,15 +190,20 @@ final class LibraryController {
         }
     }
 
-    /// Reloads the in-memory snapshot after mutations. Interim solution until
-    /// the incremental CatalogEvent pipeline lands (step 6/7).
+    /// Reloads the in-memory snapshot after bulk changes (import, folder
+    /// removal). Single-photo mutations go through `mutatePhotos` + a
+    /// `.photosUpdated` event instead — never through a full reload.
     func refreshSnapshot() {
         guard let library else {
             snapshot = nil
+            rebuildPhotoIndex()
+            emitCatalogEvent(.catalogReplaced)
             return
         }
         do {
             snapshot = try library.pool.read { try LibrarySnapshot.load($0) }
+            rebuildPhotoIndex()
+            emitCatalogEvent(.catalogReplaced)
         } catch {
             errorMessage = "Could not reload the library.\n\(error.localizedDescription)"
         }

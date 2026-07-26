@@ -21,10 +21,10 @@ final class GridViewItem: NSCollectionViewItem {
         bucket: Int,
         isSelected: Bool,
         pipeline: ThumbnailPipeline,
-        onClick: @escaping (Int64, NSEvent.ModifierFlags) -> Void
+        onClick: @escaping (Int64, NSEvent.ModifierFlags, Int) -> Void
     ) {
         photoId = photo.id
-        itemView.onClick = { modifiers in onClick(photo.id, modifiers) }
+        itemView.onClick = { modifiers, clickCount in onClick(photo.id, modifiers, clickCount) }
         itemView.setOrientation(photo.orientation)
         itemView.setImage(nil)
         setSelected(isSelected)
@@ -41,6 +41,13 @@ final class GridViewItem: NSCollectionViewItem {
         itemView.setSelectedVisual(selected)
     }
 
+    /// Value-only refresh for an already-configured item — rotation updates the
+    /// layer transform without touching the cached bitmap (Q5).
+    func update(photo: GridPhoto) {
+        guard photo.id == photoId else { return }
+        itemView.setOrientation(photo.orientation)
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         loadTask?.cancel()
@@ -52,7 +59,7 @@ final class GridViewItem: NSCollectionViewItem {
 /// Fill-crop via contentsGravity (center crop for now — the Q22 top-aligned
 /// crop refinement is tracked for the polish step).
 final class GridItemView: NSView {
-    var onClick: ((NSEvent.ModifierFlags) -> Void)?
+    var onClick: ((NSEvent.ModifierFlags, Int) -> Void)?
 
     private let imageLayer = CALayer()
     private var transform = OrientationTransform.forEXIF(1)
@@ -102,8 +109,7 @@ final class GridItemView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        // Double-click → single view arrives with step 6.
-        onClick?(event.modifierFlags)
+        onClick?(event.modifierFlags, event.clickCount)
     }
 
     private func applyTransform() {

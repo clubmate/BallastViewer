@@ -12,7 +12,7 @@ import SwiftUI
 struct PhotoGridView: NSViewRepresentable {
     let photos: [GridPhoto]
     let pipeline: ThumbnailPipeline
-    let viewModel: GridViewModel
+    let viewModel: CenterViewModel
 
     func makeCoordinator() -> Coordinator {
         Coordinator(viewModel: viewModel)
@@ -47,7 +47,7 @@ struct PhotoGridView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSCollectionViewDataSource {
-        private let viewModel: GridViewModel
+        private let viewModel: CenterViewModel
         weak var collectionView: NSCollectionView?
 
         private var photos: [GridPhoto] = []
@@ -56,7 +56,7 @@ struct PhotoGridView: NSViewRepresentable {
         private var selection = SelectionModel()
         private var pipeline: ThumbnailPipeline?
 
-        init(viewModel: GridViewModel) {
+        init(viewModel: CenterViewModel) {
             self.viewModel = viewModel
         }
 
@@ -70,12 +70,25 @@ struct PhotoGridView: NSViewRepresentable {
 
             var needsReload = false
             if newPhotos != photos {
-                photos = newPhotos
-                orderedIds = newPhotos.map(\.id)
-                indexById = Dictionary(
-                    uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) }
-                )
-                needsReload = true
+                if newPhotos.map(\.id) == orderedIds {
+                    // Same photos, changed values (rotation): update realized
+                    // items in place — no reload, no thumbnail churn.
+                    photos = newPhotos
+                    if let collectionView {
+                        for case let item as GridViewItem in collectionView.visibleItems() {
+                            if let index = indexById[item.photoId] {
+                                item.update(photo: photos[index])
+                            }
+                        }
+                    }
+                } else {
+                    photos = newPhotos
+                    orderedIds = newPhotos.map(\.id)
+                    indexById = Dictionary(
+                        uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) }
+                    )
+                    needsReload = true
+                }
             }
 
             if let layout = collectionView?.collectionViewLayout as? GridFlowLayout,
@@ -145,9 +158,8 @@ struct PhotoGridView: NSViewRepresentable {
                 bucket: bucket,
                 isSelected: selection.isSelected(photo.id),
                 pipeline: pipeline
-            ) { [weak self] id, modifiers in
-                guard let self else { return }
-                self.viewModel.handleClick(on: id, modifiers: modifiers, orderedIds: self.orderedIds)
+            ) { [weak self] id, modifiers, clickCount in
+                self?.viewModel.handleClick(on: id, modifiers: modifiers, clickCount: clickCount)
             }
             return item
         }

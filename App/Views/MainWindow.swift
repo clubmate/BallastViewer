@@ -5,10 +5,9 @@ import BallastCore
 /// Panels are placeholders until their steps land (sidebar: step 7, grid: step 5, inspector: step 8).
 struct MainWindow: View {
     @Environment(LibraryController.self) private var controller
-    @State private var gridViewModel = GridViewModel()
+    @Environment(CenterViewModel.self) private var center
 
     var body: some View {
-        @Bindable var controller = controller
         Group {
             if controller.isLibraryOpen {
                 libraryContent
@@ -18,9 +17,6 @@ struct MainWindow: View {
         }
         .frame(minWidth: 800, minHeight: 600)
         .navigationTitle(controller.libraryURL?.lastPathComponent ?? "ballastviewer")
-        .onChange(of: controller.libraryURL) {
-            gridViewModel.selection = SelectionModel()
-        }
         .dropDestination(for: URL.self) { urls, _ in
             handleDrop(urls)
         }
@@ -86,12 +82,16 @@ struct MainWindow: View {
 
     private var libraryContent: some View {
         HSplitView {
-            sidebarPlaceholder
-                .frame(minWidth: 200, maxWidth: 300, maxHeight: .infinity)
-            centerPlaceholder
+            if center.showLeftPanel {
+                sidebarPlaceholder
+                    .frame(minWidth: 200, maxWidth: 300, maxHeight: .infinity)
+            }
+            centerPane
                 .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
-            inspectorPlaceholder
-                .frame(minWidth: 250, maxWidth: 350, maxHeight: .infinity)
+            if center.showRightPanel {
+                inspectorPlaceholder
+                    .frame(minWidth: 250, maxWidth: 350, maxHeight: .infinity)
+            }
         }
     }
 
@@ -103,58 +103,105 @@ struct MainWindow: View {
             .padding(8)
     }
 
-    private var gridPhotos: [GridPhoto] {
-        controller.snapshot?.photos.compactMap { photo in
-            photo.id.map { GridPhoto(id: $0, path: photo.path, orientation: photo.orientation) }
-        } ?? []
+    @ViewBuilder
+    private var centerPane: some View {
+        VStack(spacing: 0) {
+            centerContent
+            if center.showBottomPanel {
+                bottomBar
+            }
+        }
+        // Default background until the Settings appearance tab lands (spec §9.5).
+        .background(Color(red: 0x1E / 255.0, green: 0x1E / 255.0, blue: 0x1E / 255.0))
     }
 
     @ViewBuilder
-    private var centerPlaceholder: some View {
-        let photos = gridPhotos
-        if !photos.isEmpty, let pipeline = controller.thumbnails {
-            VStack(spacing: 0) {
-                PhotoGridView(photos: photos, pipeline: pipeline, viewModel: gridViewModel)
-                bottomBar(photoCount: photos.count)
+    private var centerContent: some View {
+        let photos = center.visiblePhotos
+        if let pipeline = controller.thumbnails, !photos.isEmpty {
+            Group {
+                switch center.viewMode {
+                case .grid:
+                    PhotoGridView(photos: photos, pipeline: pipeline, viewModel: center)
+                case .single:
+                    SingleView(photo: center.anchorPhoto, pipeline: pipeline)
+                }
             }
-            // Default background until the Settings appearance tab lands.
-            .background(Color(red: 0x1E / 255.0, green: 0x1E / 255.0, blue: 0x1E / 255.0))
             .task(id: photos.count) {
                 await PerfProbe.runIfRequested(
-                    photos: photos, viewModel: gridViewModel, pipeline: pipeline
+                    photos: photos, viewModel: center, pipeline: pipeline
                 )
             }
+        } else if controller.snapshot?.photos.isEmpty ?? true {
+            emptyState(
+                title: "No Photos",
+                message: "Add a folder to import photos."
+            )
         } else {
-            VStack(spacing: 8) {
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.largeTitle)
-                    .foregroundStyle(.secondary)
-                Text("No Photos")
-                    .font(.title)
-                Text("Add a folder to import photos.")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Photos exist but the active filter matches none (spec §9.5).
+            emptyState(
+                title: "No Photos Found",
+                message: "No photos match the current selection."
+            )
         }
     }
 
-    /// Minimal bottom bar — grows into the full spec §9.6 bar in step 6.
-    private func bottomBar(photoCount: Int) -> some View {
-        @Bindable var gridViewModel = gridViewModel
-        return HStack {
-            Text("\(photoCount) photos")
-                .font(.caption)
+    private func emptyState(title: String, message: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.largeTitle)
                 .foregroundStyle(.secondary)
+            Text(title)
+                .font(.title)
+            Text(message)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Bottom bar per spec §9.6 — mode switch always; slider + sort in grid
+    /// mode; position indicator in single mode. Search arrives in step 9.
+    private var bottomBar: some View {
+        @Bindable var center = center
+        return HStack {
+            Picker("View Mode", selection: $center.viewMode) {
+                Image(systemName: "square.grid.2x2").tag(ViewMode.grid)
+                Image(systemName: "rectangle").tag(ViewMode.single)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+
             Spacer()
-            Slider(
-                value: Binding(
-                    get: { Double(gridViewModel.columnCount) },
-                    set: { gridViewModel.columnCount = Int($0.rounded()) }
-                ),
-                in: 1...10,
-                step: 1
-            )
-            .frame(width: 150)
+
+            switch center.viewMode {
+            case .grid:
+                // Interim stand-in for the sidebar's unrated pseudo-collection;
+                // replaced by real collections in step 7.
+                Toggle("Unrated", isOn: $center.unratedOnly)
+                    .toggleStyle(.checkbox)
+                    .fixedSize()
+                Slider(
+                    value: Binding(
+                        get: { Double(center.columnCount) },
+                        set: { center.columnCount = Int($0.rounded()) }
+                    ),
+                    in: 1...10,
+                    step: 1
+                )
+                .frame(width: 150)
+                Picker("Sort", selection: $center.sortOption) {
+                    ForEach(SortOption.allCases, id: \.self) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+            case .single:
+                Text("\(center.anchorPosition.map { String($0 + 1) } ?? "–") / \(center.visiblePhotos.count)")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor))
