@@ -142,7 +142,7 @@ struct SidebarView: View {
         }
         .onDrop(
             of: [UTType.plainText],
-            delegate: SidebarReorderDelegate(
+            delegate: RowReorderDelegate(
                 targetId: groupId,
                 draggedId: $draggedGroupId,
                 orderedIds: sidebar.groups.compactMap(\.id),
@@ -178,7 +178,7 @@ struct SidebarView: View {
             }
             .onDrop(
                 of: [UTType.plainText],
-                delegate: SidebarReorderDelegate(
+                delegate: RowReorderDelegate(
                     targetId: collectionId,
                     draggedId: $draggedCollectionId,
                     orderedIds: sidebar.collections(inGroup: groupId).compactMap(\.id),
@@ -186,35 +186,6 @@ struct SidebarView: View {
                 )
             )
         }
-    }
-}
-
-/// Live reordering while the drag hovers (spec §9.2): rows shuffle under the
-/// cursor in `dropEntered`; the drop itself is a no-op. Reordering within one
-/// id list only — collections cannot move between groups (spec §7.7).
-private struct SidebarReorderDelegate: DropDelegate {
-    let targetId: Int64
-    @Binding var draggedId: Int64?
-    let orderedIds: [Int64]
-    let reorder: ([Int64]) -> Void
-
-    func dropEntered(info: DropInfo) {
-        guard let draggedId, draggedId != targetId,
-              let from = orderedIds.firstIndex(of: draggedId),
-              let to = orderedIds.firstIndex(of: targetId)
-        else { return }
-        var ids = orderedIds
-        ids.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-        reorder(ids)
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        draggedId = nil
-        return true
     }
 }
 

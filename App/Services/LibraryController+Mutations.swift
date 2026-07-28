@@ -33,7 +33,7 @@ extension LibraryController {
 
     /// Async write-through. A failure here means memory and DB diverged for the
     /// affected rows — surfaced loudly; the next snapshot load resyncs.
-    private func persist(_ write: @escaping @Sendable (Database) throws -> Void) {
+    func persist(_ write: @escaping @Sendable (Database) throws -> Void) {
         guard let library else { return }
         Task {
             do {

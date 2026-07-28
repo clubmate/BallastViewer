@@ -76,6 +76,16 @@ public enum KeywordDAO {
         try KeywordGroupRecord.deleteOne(db, key: id)
     }
 
+    public static func renameGroup(_ id: Int64, to name: String, in db: Database) throws {
+        try KeywordGroupRecord.filter(key: id)
+            .updateAll(db, Column("name").set(to: normalize(name)))
+    }
+
+    public static func setGroupColor(_ id: Int64, color: String, in db: Database) throws {
+        try KeywordGroupRecord.filter(key: id)
+            .updateAll(db, Column("color").set(to: color))
+    }
+
     public static func fetchGroups(_ db: Database) throws -> [KeywordGroupRecord] {
         try KeywordGroupRecord.order(Column("sortOrder")).fetchAll(db)
     }

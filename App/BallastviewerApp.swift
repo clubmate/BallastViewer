@@ -40,5 +40,10 @@ struct BallastviewerApp: App {
             PhotoCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
             ViewCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
         }
+
+        Settings {
+            SettingsView()
+                .environment(controller)
+        }
     }
 }

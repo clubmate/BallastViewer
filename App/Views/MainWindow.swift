@@ -2,7 +2,6 @@ import SwiftUI
 import BallastCore
 
 /// Three-pane layout per spec §9.1: sidebar 200–300, center min 400, inspector 250–350.
-/// Panels are placeholders until their steps land (sidebar: step 7, grid: step 5, inspector: step 8).
 struct MainWindow: View {
     @Environment(LibraryController.self) private var controller
     @Environment(CenterViewModel.self) private var center
@@ -90,7 +89,7 @@ struct MainWindow: View {
             centerPane
                 .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
             if center.showRightPanel {
-                inspectorPlaceholder
+                InspectorView()
                     .frame(minWidth: 250, maxWidth: 350, maxHeight: .infinity)
             }
         }
@@ -193,13 +192,5 @@ struct MainWindow: View {
         }
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor))
-    }
-
-    private var inspectorPlaceholder: some View {
-        Text("No Selection")
-            .font(.title3)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(8)
     }
 }

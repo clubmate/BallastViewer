@@ -8,8 +8,9 @@ import BallastCore
 ///
 /// Hooks: BV_TEST_CREATE=<name> · BV_TEST_OPEN=<name> · BV_TEST_IMPORT=<abs path>
 /// (twice with BV_TEST_RESCAN=1) · BV_TEST_NONRECURSIVE=1 · BV_TEST_REMOVE=<abs path>
-/// · BV_TEST_CULL=1 (step-6 acceptance flow) · BV_TEST_SINGLE=1 (single view, no
-/// quit) · BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
+/// · BV_TEST_CULL=1 (step-6 acceptance flow) · BV_TEST_KEYWORDS=1 (step-8
+/// acceptance flow) · BV_TEST_SINGLE=1 (single view, no quit) ·
+/// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
 /// · BV_TEST_QUIT=1
 enum TestHooks {
     @MainActor
@@ -54,6 +55,9 @@ enum TestHooks {
         }
         if env["BV_TEST_CULL"] != nil {
             await runCullingChecks(controller, center: center, sidebar: sidebar, dispatcher: dispatcher)
+        }
+        if env["BV_TEST_KEYWORDS"] != nil {
+            await runKeywordChecks(controller, center: center, sidebar: sidebar)
         }
         // Visual check: jump into single view on the second photo (no quit).
         if env["BV_TEST_SINGLE"] != nil {
@@ -166,6 +170,82 @@ enum TestHooks {
         print(
             "BVQUERY switchAll visible=\(center.visiblePhotos.count)",
             "anchorIsFirst=\(center.selection.anchorId == center.visiblePhotos.first?.id)"
+        )
+    }
+
+    /// Step-8 acceptance flow, headless: typing `ANNA` assigns `PEOPLE > ANNA`
+    /// when the node exists (Q16); chips are ordered group-then-alpha with
+    /// ungrouped grey last (Q18) and show the selection's intersection (Q14);
+    /// renaming a node updates every chip path instantly (C4); assignments
+    /// persist across a close/reopen.
+    @MainActor
+    private static func runKeywordChecks(
+        _ controller: LibraryController,
+        center: CenterViewModel,
+        sidebar: SidebarViewModel
+    ) async {
+        func chips(for photoIds: [Int64]) -> [KeywordChip] {
+            guard let snapshot = controller.snapshot else { return [] }
+            return KeywordChipBuilder.chips(
+                forKeywordIds: KeywordChipBuilder.commonKeywordIds(
+                    photoIds: photoIds, keywordIdsByPhoto: snapshot.keywordIdsByPhoto
+                ),
+                tree: snapshot.keywordTree,
+                groups: snapshot.keywordGroups
+            )
+        }
+        func describe(_ chips: [KeywordChip]) -> String {
+            chips.map { "\($0.path)[\($0.colorHex ?? "grey")]" }.joined(separator: ", ")
+        }
+
+        // Vocabulary: PEOPLE group gets PEOPLE > ANNA.
+        guard let peopleGroupId = controller.snapshot?.keywordGroups
+            .first(where: { $0.name == "PEOPLE" })?.id,
+            let peopleId = controller.createKeyword(baseName: "PEOPLE", parentId: nil, groupId: peopleGroupId),
+            let annaId = controller.createKeyword(baseName: "ANNA", parentId: peopleId, groupId: nil)
+        else {
+            print("BVKEY error=could-not-create-vocabulary")
+            return
+        }
+
+        let photoIds = center.visiblePhotos.prefix(3).map(\.id)
+        guard photoIds.count == 3 else {
+            print("BVKEY error=needs-three-photos")
+            return
+        }
+
+        // Q16: typing the bare name resolves to the full path.
+        controller.assignKeyword(text: "anna", toPhotoIds: [photoIds[0], photoIds[1]])
+        // Ad-hoc keyword (no vocabulary match) → grey chip, sorted last (Q18).
+        controller.assignKeyword(text: "sunset", toPhotoIds: [photoIds[0], photoIds[1]])
+        print("BVKEY assigned chips=\(describe(chips(for: [photoIds[0]])))")
+
+        // Q14: the third photo has nothing — intersection over all three is empty.
+        print(
+            "BVKEY intersection pair=\(chips(for: [photoIds[0], photoIds[1]]).count)",
+            "triple=\(chips(for: photoIds).count)"
+        )
+
+        // C4: renaming the node rewrites every derived chip path instantly.
+        controller.renameKeyword(annaId, to: "ANNA-LENA")
+        print("BVKEY renamed chips=\(describe(chips(for: [photoIds[0]])))")
+
+        // Toggle removes from all carriers (spec §8.4).
+        controller.toggleKeyword(text: "SUNSET", forPhotoIds: [photoIds[0], photoIds[1]])
+        print("BVKEY toggledOff chips=\(describe(chips(for: [photoIds[0]])))")
+
+        // Durability: reopen from disk.
+        try? await Task.sleep(for: .seconds(1))
+        if let url = controller.libraryURL {
+            controller.closeLibrary()
+            controller.openLibrary(at: url)
+        }
+        let restoredFirst = controller.snapshot?.photos.compactMap(\.id)
+            .first(where: { controller.snapshot?.keywordIdsByPhoto[$0]?.isEmpty == false })
+        print(
+            "BVKEY persisted assignments=\(controller.snapshot?.keywordIdsByPhoto.values.map(\.count).reduce(0, +) ?? -1)",
+            "keywords=\(controller.snapshot?.keywordTree.count ?? -1)",
+            "firstCarrierChips=\(describe(restoredFirst.map { chips(for: [$0]) } ?? []))"
         )
     }
 
