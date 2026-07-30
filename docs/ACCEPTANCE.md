@@ -85,8 +85,10 @@ Legend: **[x]** verified · **[U]** deliberately deviates (U-number in `docs/PLA
 - [x] Rating 4 lights pads 1–4, rate-0 exact (Q4; core `LEDStateComputerTests`).
 - [x] View-mode pads incl. toggleViewMode lit in single (core tests).
 - [x] Keyword pads exact match (core tests + virtual-controller E2E, step 11).
-- [x] Note Off re-assert (Q3; E2E — release re-sent `90 3C 7F`). **[HW]** confirm on a physical pad controller.
-- [x] Selection change updates LEDs immediately (Observation-driven diff sends; E2E). **[HW]** "within one frame" on hardware.
+- [x] Note Off re-assert (Q3; E2E + **hardware-confirmed on an Intech Grid**: released pads stay lit).
+- [x] Selection change updates LEDs immediately (E2E + hardware-confirmed: pad lighting follows navigation without visible lag).
+
+**Hardware checklist (Intech Grid, USB), user-verified:** star pads light cumulatively and rate-0 lights only at exactly 0; downrating dims the meter correctly; view-mode pad lights in single view only; navigation re-lights per photo; USB hot-plug reconnects and re-lights the pads (C10). The device sends no spurious MIDI on plug-in (captured). Debounce untested on hardware (device does not double-trigger; window logic unit-level only).
 
 ## UI
 
@@ -115,6 +117,5 @@ Legend: **[x]** verified · **[U]** deliberately deviates (U-number in `docs/PLA
 
 ## Open items
 
-- Hardware MIDI checklist (§18 MIDI block) on a physical pad controller — including released-pads-stay-lit and USB hot-plug.
 - Instruments session with real photo files.
-- §9.10 overlay scrollbars applied to the grid; sidebar/inspector keep the system SwiftUI scroller behaviour.
+- §9.10 overlay scrollbars: enforced on the grid (re-asserted across system scroller-style flips — composite HID/MIDI devices trigger those on plug/unplug); sidebar/inspector keep the system SwiftUI scroller behaviour.

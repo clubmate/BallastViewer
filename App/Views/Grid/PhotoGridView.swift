@@ -36,10 +36,28 @@ struct PhotoGridView: NSViewRepresentable {
         scrollView.verticalScroller?.controlSize = .mini
         scrollView.documentView = collectionView
         context.coordinator.collectionView = collectionView
+        // macOS resets scrollerStyle whenever the system's preferred style
+        // changes — with scroll bars on "automatic", plugging/unplugging any
+        // HID device (composite MIDI controllers count) flips it to legacy,
+        // which TAKES LAYOUT SPACE and visibly reflows the grid. Re-assert
+        // overlay so the bar never affects cell geometry.
+        context.coordinator.scrollerStyleObserver = NotificationCenter.default.addObserver(
+            forName: NSScroller.preferredScrollerStyleDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak scrollView] _ in
+            MainActor.assumeIsolated {
+                scrollView?.scrollerStyle = .overlay
+            }
+        }
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        // Belt to the notification's braces: AppKit also resets the style when
+        // the view lands in a window.
+        if scrollView.scrollerStyle != .overlay {
+            scrollView.scrollerStyle = .overlay
+        }
         // Reading viewModel properties here registers Observation dependencies,
         // so SwiftUI re-runs this update on selection/column changes.
         context.coordinator.apply(
@@ -56,6 +74,15 @@ struct PhotoGridView: NSViewRepresentable {
     final class Coordinator: NSObject, NSCollectionViewDataSource {
         private let viewModel: CenterViewModel
         weak var collectionView: NSCollectionView?
+        // nonisolated(unsafe): only written once on the main actor; deinit
+        // (nonisolated) must be able to unregister it.
+        nonisolated(unsafe) var scrollerStyleObserver: NSObjectProtocol?
+
+        deinit {
+            if let scrollerStyleObserver {
+                NotificationCenter.default.removeObserver(scrollerStyleObserver)
+            }
+        }
 
         private var photos: [GridPhoto] = []
         private var orderedIds: [Int64] = []
@@ -205,7 +232,12 @@ final class GridFlowLayout: NSCollectionViewFlowLayout {
 
     override func prepare() {
         if let width = collectionView?.bounds.width {
-            let cell = max(10, (width - spacing * CGFloat(columnCount + 1)) / CGFloat(columnCount))
+            // Floor the cell size: computing it to EXACTLY fill the width sits
+            // on a floating-point knife edge where the flow layout sometimes
+            // wraps a row early and justifies the leftovers into huge gaps —
+            // visible whenever the width shifts by a scroller. Sub-point slack
+            // per row is invisible; an early wrap is not.
+            let cell = max(10, ((width - spacing * CGFloat(columnCount + 1)) / CGFloat(columnCount)).rounded(.down))
             itemSize = NSSize(width: cell, height: cell)
             minimumInteritemSpacing = spacing
             minimumLineSpacing = spacing
