@@ -36,6 +36,10 @@ extension KeyChord {
 /// focus (spec §10.5). Unmatched events pass on to the menu system.
 @MainActor
 final class ShortcutMonitor {
+    /// True while a Settings key recorder is capturing — the recorder's own
+    /// monitor must see the press instead of the dispatcher.
+    static var recorderActive = false
+
     private let keyMap: KeyMapStore
     private let dispatcher: ActionDispatcher
     /// Monitor token — never removed; this object lives as long as the app.
@@ -70,13 +74,16 @@ final class ShortcutMonitor {
         return true
     }
 
-    /// Shortcuts stay out of text entry (Q21 — search lands in step 9, the
-    /// suppression mechanism is load-bearing now), out of panels (save/open
-    /// dialogs) and out of windows showing a sheet (alerts).
+    /// Shortcuts stay out of text entry (Q21 — pressing `5` in the search field
+    /// must type, never rate), out of panels (save/open dialogs), out of windows
+    /// showing a sheet (alerts), and out of the Settings window (pressing a key
+    /// there edits bindings, it must not cull photos).
     private static func shouldHandle(_ event: NSEvent) -> Bool {
-        guard let window = event.window,
+        guard !recorderActive,
+              let window = event.window,
               !(window is NSPanel),
-              window.attachedSheet == nil
+              window.attachedSheet == nil,
+              window.identifier?.rawValue.lowercased().contains("settings") != true
         else { return false }
         if window.firstResponder is NSText || window.firstResponder is NSTextView {
             return false

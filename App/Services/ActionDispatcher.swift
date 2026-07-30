@@ -25,10 +25,10 @@ final class ActionDispatcher {
 
     func dispatch(_ command: ActionCommand, source: DispatchSource = .keyboard) {
         switch command {
-        case .keyword:
-            // Keyword toggling needs the assignment pipeline (step 8) and the
-            // shortcut normalisation fix C7 (step 9).
-            break
+        case .keyword(let text):
+            // C7: the resolver normalises whatever text the binding stores;
+            // U3: toggles apply to the whole selection, not just the anchor.
+            controller.toggleKeyword(text: text, forPhotoIds: Array(center.selection.selectedIds))
         case .app(let action):
             dispatch(action, source: source)
         }

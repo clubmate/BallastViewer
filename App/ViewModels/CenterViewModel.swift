@@ -60,6 +60,13 @@ final class CenterViewModel {
     /// library from `libraryMeta` (Q24: survives relaunch, unlike sort/mode).
     private(set) var activeItem: SidebarItem = .allPhotos
 
+    /// Bottom-bar search (spec §11.3): ANDs with the active collection, applies
+    /// on every keystroke, session-only. Deliberately NOT cleared on collection
+    /// switch — the always-visible field + chip keep it visible instead (C6/U5).
+    var searchText = "" {
+        didSet { if oldValue != searchText { applyFilterChange() } }
+    }
+
     @ObservationIgnored private var randomOrder = StableRandomOrder()
     @ObservationIgnored private var visibleIdSet: Set<Int64> = []
     /// Query caches, refreshed on collection/catalog changes.
@@ -147,13 +154,19 @@ final class CenterViewModel {
 
     private func passesFilter(_ photo: PhotoRecord) -> Bool {
         guard let snapshot = controller.snapshot else { return false }
-        return SidebarFilter.matches(
+        guard SidebarFilter.matches(
             photo,
             facts: photo.id.map { snapshot.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts(),
             item: activeItem,
             collectionsById: collectionsById,
             rulesByCollection: rulesByCollection,
             lastImportBatchId: snapshot.meta.lastImportBatchId
+        ) else { return false }
+        guard !searchText.isEmpty else { return true }
+        return SearchFilter.matches(
+            filename: photo.filename,
+            keywordPaths: photo.id.map { snapshot.queryFacts(forPhotoId: $0).keywordPaths } ?? [],
+            query: searchText
         )
     }
 

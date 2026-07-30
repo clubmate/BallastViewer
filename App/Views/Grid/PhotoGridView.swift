@@ -13,6 +13,8 @@ struct PhotoGridView: NSViewRepresentable {
     let photos: [GridPhoto]
     let pipeline: ThumbnailPipeline
     let viewModel: CenterViewModel
+    /// Settings ▸ Appearance "Spacing between images" (0–50, Q23).
+    var spacing: Double = 12
 
     func makeCoordinator() -> Coordinator {
         Coordinator(viewModel: viewModel)
@@ -40,6 +42,7 @@ struct PhotoGridView: NSViewRepresentable {
         context.coordinator.apply(
             photos: photos,
             columnCount: viewModel.columnCount,
+            spacing: spacing,
             selection: viewModel.selection,
             pipeline: pipeline
         )
@@ -63,6 +66,7 @@ struct PhotoGridView: NSViewRepresentable {
         func apply(
             photos newPhotos: [GridPhoto],
             columnCount: Int,
+            spacing: Double,
             selection newSelection: SelectionModel,
             pipeline: ThumbnailPipeline
         ) {
@@ -92,8 +96,9 @@ struct PhotoGridView: NSViewRepresentable {
             }
 
             if let layout = collectionView?.collectionViewLayout as? GridFlowLayout,
-               layout.columnCount != columnCount {
+               layout.columnCount != columnCount || layout.spacing != spacing {
                 layout.columnCount = columnCount
+                layout.spacing = spacing
                 layout.invalidateLayout()
             }
 

@@ -28,6 +28,21 @@ public enum KeywordResolver {
         }
         return .create(components)
     }
+
+    /// The canonical text a keyword *binding* stores (C7): resolve exactly like
+    /// the panel would, then render the result — an existing node becomes its
+    /// full derived path, unmatched text stays as uppercased components. This
+    /// keeps `keyword:anna` and the panel's `PEOPLE > ANNA` the same keyword.
+    public static func canonicalText(_ input: String, tree: KeywordTree) -> String? {
+        switch resolve(input, tree: tree) {
+        case nil:
+            return nil
+        case .existing(let id):
+            return tree.path(of: id)
+        case .create(let components):
+            return components.joined(separator: KeywordTree.separator)
+        }
+    }
 }
 
 /// Autocomplete over the whole tree: every node is offered, not just leaves (Q17).

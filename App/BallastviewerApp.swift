@@ -6,6 +6,7 @@ struct BallastviewerApp: App {
     @State private var center: CenterViewModel
     @State private var sidebar: SidebarViewModel
     @State private var keyMap: KeyMapStore
+    @State private var appearance: AppearanceStore
     @State private var dispatcher: ActionDispatcher
     @State private var shortcutMonitor: ShortcutMonitor
 
@@ -19,6 +20,7 @@ struct BallastviewerApp: App {
         _center = State(initialValue: center)
         _sidebar = State(initialValue: sidebar)
         _keyMap = State(initialValue: keyMap)
+        _appearance = State(initialValue: AppearanceStore())
         _dispatcher = State(initialValue: dispatcher)
         _shortcutMonitor = State(initialValue: ShortcutMonitor(keyMap: keyMap, dispatcher: dispatcher))
     }
@@ -29,9 +31,11 @@ struct BallastviewerApp: App {
                 .environment(controller)
                 .environment(center)
                 .environment(sidebar)
+                .environment(appearance)
                 .task {
                     await TestHooks.runIfRequested(
-                        controller, center: center, sidebar: sidebar, dispatcher: dispatcher
+                        controller, center: center, sidebar: sidebar,
+                        dispatcher: dispatcher, keyMap: keyMap
                     )
                 }
         }
@@ -44,6 +48,8 @@ struct BallastviewerApp: App {
         Settings {
             SettingsView()
                 .environment(controller)
+                .environment(keyMap)
+                .environment(appearance)
         }
     }
 }

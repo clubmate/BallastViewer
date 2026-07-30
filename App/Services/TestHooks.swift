@@ -9,7 +9,8 @@ import BallastCore
 /// Hooks: BV_TEST_CREATE=<name> · BV_TEST_OPEN=<name> · BV_TEST_IMPORT=<abs path>
 /// (twice with BV_TEST_RESCAN=1) · BV_TEST_NONRECURSIVE=1 · BV_TEST_REMOVE=<abs path>
 /// · BV_TEST_CULL=1 (step-6 acceptance flow) · BV_TEST_KEYWORDS=1 (step-8
-/// acceptance flow) · BV_TEST_SINGLE=1 (single view, no quit) ·
+/// acceptance flow) · BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
+/// BV_TEST_SINGLE=1 (single view, no quit) ·
 /// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
 /// · BV_TEST_QUIT=1
 enum TestHooks {
@@ -18,7 +19,8 @@ enum TestHooks {
         _ controller: LibraryController,
         center: CenterViewModel,
         sidebar: SidebarViewModel,
-        dispatcher: ActionDispatcher
+        dispatcher: ActionDispatcher,
+        keyMap: KeyMapStore
     ) async {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
@@ -58,6 +60,9 @@ enum TestHooks {
         }
         if env["BV_TEST_KEYWORDS"] != nil {
             await runKeywordChecks(controller, center: center, sidebar: sidebar)
+        }
+        if env["BV_TEST_STEP9"] != nil {
+            runStep9Checks(controller, center: center, dispatcher: dispatcher, keyMap: keyMap)
         }
         // Visual check: jump into single view on the second photo (no quit).
         if env["BV_TEST_SINGLE"] != nil {
@@ -247,6 +252,61 @@ enum TestHooks {
             "keywords=\(controller.snapshot?.keywordTree.count ?? -1)",
             "firstCarrierChips=\(describe(restoredFirst.map { chips(for: [$0]) } ?? []))"
         )
+    }
+
+    /// Step-9 acceptance flow, headless: a keyword shortcut created for `anna`
+    /// stores the canonical `keyword:PEOPLE > ANNA` binding (C7), dispatching
+    /// it toggles the resolved keyword on the selection, and search filters by
+    /// keyword AND filename (U5) on top of the active collection.
+    @MainActor
+    private static func runStep9Checks(
+        _ controller: LibraryController,
+        center: CenterViewModel,
+        dispatcher: ActionDispatcher,
+        keyMap: KeyMapStore
+    ) {
+        func anchorPaths() -> [String] {
+            guard let snapshot = controller.snapshot,
+                  let anchor = center.selection.anchorId else { return [] }
+            return (snapshot.keywordIdsByPhoto[anchor] ?? [])
+                .map { snapshot.keywordTree.path(of: $0) }
+                .sorted()
+        }
+
+        guard let peopleId = controller.createKeyword(baseName: "PEOPLE", parentId: nil, groupId: nil),
+              controller.createKeyword(baseName: "ANNA", parentId: peopleId, groupId: nil) != nil,
+              let tree = controller.snapshot?.keywordTree
+        else {
+            print("BVS9 error=could-not-create-vocabulary")
+            return
+        }
+
+        // C7: the binding stores the resolved path, not the literal text.
+        let canonical = KeywordResolver.canonicalText("anna", tree: tree)
+        if let canonical, let chord = KeyChord(key: "k") {
+            keyMap.assign(chord, to: .keyword(canonical))
+        }
+        print("BVS9 binding=\(keyMap.map.bindings["k"] ?? "none")")
+
+        // Dispatch toggles the resolved keyword on the anchor (on, then off).
+        dispatcher.dispatch(.keyword("anna"))
+        print("BVS9 toggledOn=\(anchorPaths())")
+        dispatcher.dispatch(.keyword("anna"))
+        print("BVS9 toggledOff=\(anchorPaths())")
+
+        // Search: keyword hit, filename hit, miss — then cleared (U5 chip flow).
+        dispatcher.dispatch(.keyword("anna"))
+        let total = center.visiblePhotos.count
+        center.searchText = "anna"
+        print("BVS9 searchKeyword visible=\(center.visiblePhotos.count) of=\(total)")
+        let fragment = controller.snapshot?.photos.first
+            .map { String($0.filename.prefix(4)) } ?? ""
+        center.searchText = fragment
+        print("BVS9 searchFilename query=\(fragment) visible=\(center.visiblePhotos.count)")
+        center.searchText = "zzz-no-match"
+        print("BVS9 searchMiss visible=\(center.visiblePhotos.count)")
+        center.searchText = ""
+        print("BVS9 searchCleared visible=\(center.visiblePhotos.count)")
     }
 
     @MainActor
