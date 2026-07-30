@@ -3,11 +3,16 @@ import BallastCore
 import Observation
 
 /// Lightweight value the grid renders — decoupled from PhotoRecord so the
-/// view layer never touches DB types directly.
+/// view layer never touches DB types directly. Carries the badge facts (U6);
+/// their visibility is a view-layer concern.
 struct GridPhoto: Identifiable, Hashable, Sendable {
     let id: Int64
     let path: String
     let orientation: Int
+    let rating: Int
+    /// Keyword badge dot colors (hex): one per effective group in group order,
+    /// grey last for ad-hoc keywords (mirrors the Q18 chip order), capped at 5.
+    let badgeColors: [String]
 }
 
 enum ViewMode: Equatable {
@@ -33,9 +38,20 @@ final class CenterViewModel {
     var selection = SelectionModel() {
         didSet { if oldValue.anchorId != selection.anchorId { updateControlSurface() } }
     }
-    var showLeftPanel = true
-    var showRightPanel = true
-    var showBottomPanel = true
+    /// Panel visibility persists across launches (spec §18 UI block).
+    var showLeftPanel = true {
+        didSet { UserDefaults.standard.set(showLeftPanel, forKey: "showLeftPanel") }
+    }
+    var showRightPanel = true {
+        didSet { UserDefaults.standard.set(showRightPanel, forKey: "showRightPanel") }
+    }
+    var showBottomPanel = true {
+        didSet { UserDefaults.standard.set(showBottomPanel, forKey: "showBottomPanel") }
+    }
+    /// Grid badges (U6): rating pips + keyword group dots, default on.
+    var showBadges = true {
+        didSet { UserDefaults.standard.set(showBadges, forKey: "showGridBadges") }
+    }
 
     /// Filtered + sorted photos, in display order. Maintained incrementally.
     private(set) var visiblePhotos: [GridPhoto] = []
@@ -69,6 +85,9 @@ final class CenterViewModel {
 
     @ObservationIgnored private var randomOrder = StableRandomOrder()
     @ObservationIgnored private var visibleIdSet: Set<Int64> = []
+    /// id → index into visiblePhotos, maintained alongside it — rebuilding this
+    /// per keystroke is an O(50k) tax the 16 ms budget cannot afford.
+    @ObservationIgnored private var visibleIndexById: [Int64: Int] = [:]
     /// Query caches, refreshed on collection/catalog changes.
     @ObservationIgnored private var collectionsById: [Int64: SmartCollectionRecord] = [:]
     @ObservationIgnored private var rulesByCollection: [Int64: [CollectionRuleRecord]] = [:]
@@ -76,6 +95,11 @@ final class CenterViewModel {
 
     init(controller: LibraryController) {
         self.controller = controller
+        let defaults = UserDefaults.standard
+        showLeftPanel = defaults.object(forKey: "showLeftPanel") as? Bool ?? true
+        showRightPanel = defaults.object(forKey: "showRightPanel") as? Bool ?? true
+        showBottomPanel = defaults.object(forKey: "showBottomPanel") as? Bool ?? true
+        showBadges = defaults.object(forKey: "showGridBadges") as? Bool ?? true
         controller.addCatalogObserver { [weak self] event in
             self?.handle(event)
         }
@@ -179,10 +203,45 @@ final class CenterViewModel {
             randomOrder.reconcile(with: Set(records.compactMap(\.id)), using: &rng)
         }
         let sorted = SortEngine.sorted(records, by: sortOption, randomOrder: randomOrder.order)
-        visiblePhotos = sorted.compactMap { photo in
-            photo.id.map { GridPhoto(id: $0, path: photo.path, orientation: photo.orientation) }
-        }
+        visiblePhotos = sorted.compactMap(makeGridPhoto)
         visibleIdSet = Set(visiblePhotos.map(\.id))
+        rebuildVisibleIndex()
+    }
+
+    private func rebuildVisibleIndex() {
+        visibleIndexById = Dictionary(
+            uniqueKeysWithValues: visiblePhotos.enumerated().map { ($1.id, $0) }
+        )
+    }
+
+    private func makeGridPhoto(_ photo: PhotoRecord) -> GridPhoto? {
+        guard let id = photo.id else { return nil }
+        return GridPhoto(
+            id: id, path: photo.path, orientation: photo.orientation,
+            rating: photo.rating, badgeColors: badgeColors(forPhotoId: id)
+        )
+    }
+
+    /// U6 keyword dots: the photo's effective groups in group order, grey last
+    /// for ad-hoc keywords — the same priority the chips use (Q18).
+    private func badgeColors(forPhotoId id: Int64) -> [String] {
+        guard let snapshot = controller.snapshot,
+              let keywordIds = snapshot.keywordIdsByPhoto[id], !keywordIds.isEmpty
+        else { return [] }
+        var groupIds: Set<Int64> = []
+        var hasAdHoc = false
+        for keywordId in keywordIds {
+            if let groupId = snapshot.keywordTree.effectiveGroupId(of: keywordId) {
+                groupIds.insert(groupId)
+            } else {
+                hasAdHoc = true
+            }
+        }
+        var colors = snapshot.keywordGroups
+            .filter { $0.id.map(groupIds.contains) ?? false }
+            .map(\.color)
+        if hasAdHoc { colors.append("#8E8E93FF") }
+        return Array(colors.prefix(5))
     }
 
     /// Q1: a filter change relocates the anchor via the neighbour rule instead
@@ -216,8 +275,8 @@ final class CenterViewModel {
                 removals.insert(id)
             } else if !isVisible && matches, let record {
                 insertions.append(record)
-            } else if isVisible, let record {
-                valueUpdates.append(GridPhoto(id: id, path: record.path, orientation: record.orientation))
+            } else if isVisible, let record, let updated = makeGridPhoto(record) {
+                valueUpdates.append(updated)
             }
         }
         guard !(removals.isEmpty && insertions.isEmpty && valueUpdates.isEmpty) else { return }
@@ -227,11 +286,8 @@ final class CenterViewModel {
         let previousOrder = anchorRemoved ? visiblePhotos.map(\.id) : []
 
         if !valueUpdates.isEmpty {
-            let indexById = Dictionary(
-                uniqueKeysWithValues: visiblePhotos.enumerated().map { ($1.id, $0) }
-            )
             for updated in valueUpdates {
-                if let index = indexById[updated.id], visiblePhotos[index] != updated {
+                if let index = visibleIndexById[updated.id], visiblePhotos[index] != updated {
                     visiblePhotos[index] = updated
                 }
             }
@@ -242,6 +298,9 @@ final class CenterViewModel {
         }
         if !insertions.isEmpty {
             insert(insertions)
+        }
+        if !removals.isEmpty || !insertions.isEmpty {
+            rebuildVisibleIndex()
         }
 
         if anchorRemoved, let anchor {
@@ -269,18 +328,15 @@ final class CenterViewModel {
             for record in records.sorted(by: {
                 (position[$0.id ?? -1] ?? .max) < (position[$1.id ?? -1] ?? .max)
             }) {
-                guard let id = record.id else { continue }
-                visiblePhotos.append(GridPhoto(id: id, path: record.path, orientation: record.orientation))
-                visibleIdSet.insert(id)
+                guard let gridPhoto = makeGridPhoto(record) else { continue }
+                visiblePhotos.append(gridPhoto)
+                visibleIdSet.insert(gridPhoto.id)
             }
         } else {
             for record in records.sorted(by: { SortEngine.areInIncreasingOrder($0, $1, by: sortOption) }) {
-                guard let id = record.id else { continue }
-                visiblePhotos.insert(
-                    GridPhoto(id: id, path: record.path, orientation: record.orientation),
-                    at: insertionIndex(for: record)
-                )
-                visibleIdSet.insert(id)
+                guard let gridPhoto = makeGridPhoto(record) else { continue }
+                visiblePhotos.insert(gridPhoto, at: insertionIndex(for: record))
+                visibleIdSet.insert(gridPhoto.id)
             }
         }
     }
@@ -307,7 +363,7 @@ final class CenterViewModel {
     func moveAnchor(by delta: Int) {
         guard !visiblePhotos.isEmpty else { return }
         guard let anchor = selection.anchorId,
-              let index = visiblePhotos.firstIndex(where: { $0.id == anchor })
+              let index = visibleIndexById[anchor]
         else {
             selection.selectSingle(delta > 0 ? visiblePhotos.first?.id : visiblePhotos.last?.id)
             return
@@ -321,7 +377,7 @@ final class CenterViewModel {
     /// ignored (no clamping to the edge).
     func moveAnchorByRow(_ direction: Int) {
         guard let anchor = selection.anchorId,
-              let index = visiblePhotos.firstIndex(where: { $0.id == anchor })
+              let index = visibleIndexById[anchor]
         else { return }
         let target = index + direction * columnCount
         guard visiblePhotos.indices.contains(target) else { return }
@@ -344,12 +400,12 @@ final class CenterViewModel {
     // MARK: Anchor lookups (single view, position indicator)
 
     var anchorPhoto: GridPhoto? {
-        selection.anchorId.flatMap { id in visiblePhotos.first { $0.id == id } }
+        anchorPosition.map { visiblePhotos[$0] }
     }
 
     /// 0-based position of the anchor in the visible order.
     var anchorPosition: Int? {
-        selection.anchorId.flatMap { id in visiblePhotos.firstIndex { $0.id == id } }
+        selection.anchorId.flatMap { visibleIndexById[$0] }
     }
 
     // MARK: Control surface (spec §13.6 triggers: anchor, list, view mode)

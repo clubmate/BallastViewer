@@ -11,7 +11,8 @@ enum PerfProbe {
     static func runIfRequested(
         photos: [GridPhoto],
         viewModel: CenterViewModel,
-        pipeline: ThumbnailPipeline
+        pipeline: ThumbnailPipeline,
+        controller: LibraryController
     ) async {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
@@ -43,10 +44,32 @@ enum PerfProbe {
             jumpMs.append(ms(elapsed))
         }
 
+        // Step-12 acceptance: keystroke → committed UI turn (< 16 ms) and
+        // keystroke → durable in the WAL (< 100 ms). "Durable" is measured by
+        // queueing an empty write behind the pending rating UPDATE — the pool
+        // serialises writes, so its return implies the mutation reached disk.
+        var rateUiMs: [Double] = []
+        var rateDurableMs: [Double] = []
+        if let library = controller.library {
+            for i in 0..<10 {
+                let target = photos[base + 40 + i]
+                viewModel.selection.selectSingle(target.id)
+                await afterRunloopTurn()
+                let start = clock.now
+                controller.updateRatings(ids: [target.id]) { _ in (i % 5) + 1 }
+                await afterRunloopTurn()
+                rateUiMs.append(ms(clock.now - start))
+                try? await library.pool.write { _ in }
+                rateDurableMs.append(ms(clock.now - start))
+            }
+        }
+
         let stats = await pipeline.stats()
         print("BVPERF photos=\(photos.count)")
         print("BVPERF select ms median=\(median(selectMs)) max=\(selectMs.max() ?? 0)")
         print("BVPERF jump ms median=\(median(jumpMs)) max=\(jumpMs.max() ?? 0)")
+        print("BVPERF rateUI ms median=\(median(rateUiMs)) max=\(rateUiMs.max() ?? 0)")
+        print("BVPERF rateDurable ms median=\(median(rateDurableMs)) max=\(rateDurableMs.max() ?? 0)")
         print("BVPERF thumbs memoryHits=\(stats.memoryHits) diskHits=\(stats.diskHits) decodes=\(stats.decodes)")
         print("BVPERF footprintMB=\(Int(memoryFootprintMB()))")
         if env["BV_TEST_QUIT"] != nil { exit(0) }

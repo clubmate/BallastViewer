@@ -17,6 +17,7 @@ targets:
     info:
       path: App/Resources/Info.plist
       properties:
+        CFBundleIconFile: AppIcon
         LSApplicationCategoryType: public.app-category.photography
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSPrincipalClass: NSApplication

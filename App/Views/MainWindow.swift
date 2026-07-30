@@ -162,7 +162,8 @@ struct MainWindow: View {
             }
             .task(id: photos.count) {
                 await PerfProbe.runIfRequested(
-                    photos: photos, viewModel: center, pipeline: pipeline
+                    photos: photos, viewModel: center, pipeline: pipeline,
+                    controller: controller
                 )
             }
         } else if controller.snapshot?.photos.isEmpty ?? true {

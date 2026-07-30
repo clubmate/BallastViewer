@@ -31,6 +31,9 @@ struct PhotoGridView: NSViewRepresentable {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
+        // Thin auto-hiding overlay scroller (spec §9.10 look).
+        scrollView.scrollerStyle = .overlay
+        scrollView.verticalScroller?.controlSize = .mini
         scrollView.documentView = collectionView
         context.coordinator.collectionView = collectionView
         return scrollView
@@ -44,6 +47,7 @@ struct PhotoGridView: NSViewRepresentable {
             columnCount: viewModel.columnCount,
             spacing: spacing,
             selection: viewModel.selection,
+            showBadges: viewModel.showBadges,
             pipeline: pipeline
         )
     }
@@ -57,6 +61,7 @@ struct PhotoGridView: NSViewRepresentable {
         private var orderedIds: [Int64] = []
         private var indexById: [Int64: Int] = [:]
         private var selection = SelectionModel()
+        private var showBadges = true
         private var pipeline: ThumbnailPipeline?
 
         init(viewModel: CenterViewModel) {
@@ -68,31 +73,43 @@ struct PhotoGridView: NSViewRepresentable {
             columnCount: Int,
             spacing: Double,
             selection newSelection: SelectionModel,
+            showBadges newShowBadges: Bool,
             pipeline: ThumbnailPipeline
         ) {
             self.pipeline = pipeline
+            if newShowBadges != showBadges {
+                showBadges = newShowBadges
+                if let collectionView {
+                    for case let item as GridViewItem in collectionView.visibleItems() {
+                        item.setBadgesVisible(newShowBadges)
+                    }
+                }
+            }
 
+            // Fast path first: comparing ids is a cheap Int64 sweep, while a
+            // full GridPhoto array compare walks 50k strings per keystroke —
+            // that alone blew the 16 ms budget.
             var needsReload = false
-            if newPhotos != photos {
-                if newPhotos.map(\.id) == orderedIds {
-                    // Same photos, changed values (rotation): update realized
-                    // items in place — no reload, no thumbnail churn.
-                    photos = newPhotos
-                    if let collectionView {
-                        for case let item as GridViewItem in collectionView.visibleItems() {
-                            if let index = indexById[item.photoId] {
-                                item.update(photo: photos[index])
-                            }
+            if sameIds(newPhotos) {
+                // Same membership and order; only values can differ. Realized
+                // items are few — compare and refresh just those.
+                let previous = photos
+                photos = newPhotos
+                if let collectionView, !previous.isEmpty {
+                    for case let item as GridViewItem in collectionView.visibleItems() {
+                        if let index = indexById[item.photoId],
+                           photos[index] != previous[index] {
+                            item.update(photo: photos[index], showBadges: showBadges)
                         }
                     }
-                } else {
-                    photos = newPhotos
-                    orderedIds = newPhotos.map(\.id)
-                    indexById = Dictionary(
-                        uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) }
-                    )
-                    needsReload = true
                 }
+            } else {
+                photos = newPhotos
+                orderedIds = newPhotos.map(\.id)
+                indexById = Dictionary(
+                    uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) }
+                )
+                needsReload = true
             }
 
             if let layout = collectionView?.collectionViewLayout as? GridFlowLayout,
@@ -112,6 +129,14 @@ struct PhotoGridView: NSViewRepresentable {
             if previousSelection.anchorId != newSelection.anchorId {
                 scrollToAnchorIfNeeded()
             }
+        }
+
+        private func sameIds(_ newPhotos: [GridPhoto]) -> Bool {
+            guard newPhotos.count == orderedIds.count else { return false }
+            for index in newPhotos.indices where newPhotos[index].id != orderedIds[index] {
+                return false
+            }
+            return true
         }
 
         private func refreshVisibleSelection() {
@@ -162,6 +187,7 @@ struct PhotoGridView: NSViewRepresentable {
                 photo: photo,
                 bucket: bucket,
                 isSelected: selection.isSelected(photo.id),
+                showBadges: showBadges,
                 pipeline: pipeline
             ) { [weak self] id, modifiers, clickCount in
                 self?.viewModel.handleClick(on: id, modifiers: modifiers, clickCount: clickCount)
