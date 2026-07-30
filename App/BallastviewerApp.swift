@@ -13,6 +13,7 @@ struct BallastviewerApp: App {
     @State private var dispatcher: ActionDispatcher
     @State private var shortcutMonitor: ShortcutMonitor
     @State private var midiService: MidiService
+    @State private var settingsRouter = SettingsRouter()
 
     init() {
         let controller = LibraryController()
@@ -61,7 +62,7 @@ struct BallastviewerApp: App {
                 Button("Close") { NSApp.keyWindow?.performClose(nil) }
                     .keyboardShortcut("w")
             }
-            LibraryCommands(controller: controller)
+            LibraryCommands(controller: controller, settingsRouter: settingsRouter)
             PhotoCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
             ViewCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
         }
@@ -73,6 +74,7 @@ struct BallastviewerApp: App {
                 .environment(midiMap)
                 .environment(appearance)
                 .environment(midiService)
+                .environment(settingsRouter)
         }
     }
 }

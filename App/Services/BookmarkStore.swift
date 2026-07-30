@@ -1,16 +1,18 @@
 import Foundation
 
-/// Persists security-scoped bookmarks in UserDefaults: the auto-reopened library
-/// and the recents list (max 10, most recent first, deduped by path, spec §4.5).
+/// Persists security-scoped bookmarks in UserDefaults: the auto-reopened
+/// library and the list of ALL known libraries (U14 — the original's
+/// 10-entry recents list became the Library menu's switcher, so it is
+/// unbounded and only shrinks when the user removes an entry in Settings).
 ///
-/// Recents are stored as raw bookmark blobs and never re-created wholesale —
+/// Entries are stored as raw bookmark blobs and never re-created wholesale —
 /// creating a bookmark requires live access to the URL, which we only have for
 /// the entry being added.
 struct BookmarkStore {
     private let defaults = UserDefaults.standard
     private static let lastOpenedKey = "lastOpenedLibraryBookmark"
-    private static let recentsKey = "recentLibraryBookmarks"
-    static let maxRecents = 10
+    /// Historic key name — pre-U14 recents carry over as known libraries.
+    private static let knownKey = "recentLibraryBookmarks"
 
     // MARK: Last opened (auto-reopen)
 
@@ -27,27 +29,31 @@ struct BookmarkStore {
         defaults.data(forKey: Self.lastOpenedKey).flatMap(resolve)
     }
 
-    // MARK: Recents
+    // MARK: Known libraries
 
-    func addRecent(_ url: URL) {
+    /// Most recently opened first, deduped by path, unbounded.
+    func addKnown(_ url: URL) {
         guard let newEntry = try? bookmarkData(url) else { return }
-        var entries = rawRecents()
+        var entries = rawKnown()
         entries.removeAll { resolve($0)?.path == url.path }
         entries.insert(newEntry, at: 0)
-        defaults.set(Array(entries.prefix(Self.maxRecents)), forKey: Self.recentsKey)
+        defaults.set(entries, forKey: Self.knownKey)
     }
 
-    /// Entries that no longer resolve are dropped silently (spec §4.5).
-    func recentURLs() -> [URL] {
-        rawRecents().compactMap(resolve)
+    /// Removes the entry from the list only — the library on disk is untouched.
+    func removeKnown(_ url: URL) {
+        var entries = rawKnown()
+        entries.removeAll { resolve($0)?.path == url.path }
+        defaults.set(entries, forKey: Self.knownKey)
     }
 
-    func clearRecents() {
-        defaults.removeObject(forKey: Self.recentsKey)
+    /// Entries that no longer resolve are dropped silently.
+    func knownURLs() -> [URL] {
+        rawKnown().compactMap(resolve)
     }
 
-    private func rawRecents() -> [Data] {
-        defaults.array(forKey: Self.recentsKey) as? [Data] ?? []
+    private func rawKnown() -> [Data] {
+        defaults.array(forKey: Self.knownKey) as? [Data] ?? []
     }
 
     // MARK: Bookmarks

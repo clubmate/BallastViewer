@@ -80,6 +80,22 @@ enum TestHooks {
         if env["BV_TEST_STEP10"] != nil {
             await runStep10Checks(controller, center: center, dispatcher: dispatcher)
         }
+        // U14: import into a CLOSED library and read its folders without ever
+        // opening it into the UI.
+        if let name = env["BV_TEST_MANAGE"], let path = env["BV_TEST_MANAGE_FOLDER"] {
+            let target = testURL(named: name)
+            let before = controller.folders(inLibraryAt: target).count
+            await controller.importFolders(
+                [URL(fileURLWithPath: path, isDirectory: true)], recursive: true, into: target
+            )
+            let after = controller.folders(inLibraryAt: target)
+            print(
+                "BVMANAGE target=\(target.lastPathComponent)",
+                "foldersBefore=\(before) after=\(after.count)",
+                "stillOpen=\(controller.libraryURL?.lastPathComponent ?? "none")",
+                "info=\(quoted(controller.infoMessage))"
+            )
+        }
         // WAL crash test: rate photos in a tight loop until killed from outside.
         if env["BV_TEST_CHURN"] != nil {
             await runChurn(controller)
@@ -105,7 +121,7 @@ enum TestHooks {
 
         print(
             "BVTEST opened=\(controller.libraryURL?.lastPathComponent ?? "none")",
-            "recents=\(controller.recentLibraries.count)",
+            "known=\(controller.knownLibraries.count)",
             "photos=\(controller.snapshot?.photos.count.description ?? "-")",
             "error=\(quoted(controller.errorMessage))"
         )

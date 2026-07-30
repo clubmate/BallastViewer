@@ -16,7 +16,7 @@ Legend: **[x]** verified · **[U]** deliberately deviates (U-number in `docs/PLA
 
 - [x] Last opened library reopens automatically at launch (BVTEST, step 3).
 - [x] *Close Library* prevents auto-reopen, recents stay (BVTEST, step 3).
-- [x] Recents hold max 10, most recent first, deduped (step 3; visible in Open Recent menu).
+- [U] Recents hold max 10 — **U14**: replaced by the unbounded known-libraries list (the Library menu's switcher), deduped, curated in Settings ▸ Libraries.
 
 ## Import
 
@@ -105,7 +105,7 @@ Legend: **[x]** verified · **[U]** deliberately deviates (U-number in `docs/PLA
 
 ## Menus
 
-- [x] ⇧⌘N / ⇧⌘O / ⇧⌘I fixed, not remappable (LibraryCommands hard-coded).
+- [U] ⇧⌘N / ⇧⌘O / ⇧⌘I fixed shortcuts — **U14**: gone with the menu redesign; the Library menu is a pure switcher plus ⇧⌘L Manage Libraries…, and creation/open/import live in Settings ▸ Libraries (import also via drag & drop and the sidebar button).
 - [x] Photo/View items show live key bindings and update on change (⌥⌘N appeared instantly, step 9).
 - [x] Enable/disable per §14 (Photo menu disabled without anchor; Library items gated on open library).
 

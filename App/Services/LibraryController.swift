@@ -15,7 +15,9 @@ final class LibraryController {
     private(set) var libraryURL: URL?
     private(set) var snapshot: LibrarySnapshot?
     private(set) var thumbnails: ThumbnailPipeline?
-    private(set) var recentLibraries: [URL] = []
+    /// Every library the app knows (U14): the Library menu's switcher list,
+    /// managed in Settings ▸ Libraries. Most recently opened first.
+    private(set) var knownLibraries: [URL] = []
 
     /// Non-nil presents the app-wide error alert. User-initiated failures are
     /// never silent (fixes spec §4.1/§4.2).
@@ -166,7 +168,7 @@ final class LibraryController {
     var isLibraryOpen: Bool { library != nil }
 
     init() {
-        recentLibraries = bookmarks.recentURLs()
+        knownLibraries = bookmarks.knownURLs()
         reopenLastLibrary()
     }
 
@@ -209,9 +211,28 @@ final class LibraryController {
         emitCatalogEvent(.catalogReplaced)
     }
 
-    func clearRecents() {
-        bookmarks.clearRecents()
-        recentLibraries = []
+    /// Adds a library to the known list without opening it (U14).
+    func addKnownLibrary(_ url: URL) {
+        bookmarks.addKnown(url)
+        knownLibraries = bookmarks.knownURLs()
+    }
+
+    /// Deletes a library (Settings ▸ Libraries, after its U7 confirmation):
+    /// closes it if open, moves the package to the Trash — recoverable, and
+    /// photo files are never inside the package — and drops it from the list.
+    func deleteLibrary(at url: URL) {
+        if url.path == libraryURL?.path {
+            closeLibrary()
+        }
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            errorMessage = "Could not move “\(url.lastPathComponent)” to the Trash.\n\(error.localizedDescription)"
+        }
+        bookmarks.removeKnown(url)
+        knownLibraries = bookmarks.knownURLs()
     }
 
     private func reopenLastLibrary() {
@@ -255,8 +276,8 @@ final class LibraryController {
         rebuildPhotoIndex()
         startFolderAccess(for: loaded.folders)
         bookmarks.saveLastOpened(url)
-        bookmarks.addRecent(url)
-        recentLibraries = bookmarks.recentURLs()
+        bookmarks.addKnown(url)
+        knownLibraries = bookmarks.knownURLs()
         emitCatalogEvent(.catalogReplaced)
     }
 
