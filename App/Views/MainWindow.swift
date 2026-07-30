@@ -8,6 +8,10 @@ struct MainWindow: View {
     @Environment(CenterViewModel.self) private var center
     @Environment(SidebarViewModel.self) private var sidebar
     @Environment(AppearanceStore.self) private var appearance
+    /// The window's undo manager — handed to the controller so photo mutations
+    /// are undoable via the standard Edit menu (U8) while text fields keep
+    /// their own undo through the responder chain.
+    @Environment(\.undoManager) private var windowUndoManager
 
     @FocusState private var searchFocused: Bool
     /// Closed on accept/submit even though text is still present (spec §11.3).
@@ -24,6 +28,7 @@ struct MainWindow: View {
         .frame(minWidth: 800, minHeight: 600)
         .navigationTitle(controller.libraryURL?.lastPathComponent ?? "ballastviewer")
         .onAppear {
+            controller.undoManager = windowUndoManager
             // The search field must not grab first responder at launch —
             // focused text suppresses every culling shortcut (Q21). Clearing
             // initialFirstResponder also keeps later activations from
@@ -41,8 +46,8 @@ struct MainWindow: View {
             handleDrop(urls)
         }
         .overlay {
-            if controller.isImporting {
-                ProgressView("Importing…")
+            if controller.isImporting || controller.isSyncing {
+                ProgressView(controller.isImporting ? "Importing…" : "Syncing metadata…")
                     .padding(20)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
@@ -59,7 +64,7 @@ struct MainWindow: View {
             Text(controller.errorMessage ?? "")
         }
         .alert(
-            "Import",
+            "Library",
             isPresented: Binding(
                 get: { controller.infoMessage != nil },
                 set: { if !$0 { controller.infoMessage = nil } }

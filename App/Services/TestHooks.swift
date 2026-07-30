@@ -64,6 +64,13 @@ enum TestHooks {
         if env["BV_TEST_STEP9"] != nil {
             runStep9Checks(controller, center: center, dispatcher: dispatcher, keyMap: keyMap)
         }
+        if env["BV_TEST_STEP10"] != nil {
+            await runStep10Checks(controller, center: center, dispatcher: dispatcher)
+        }
+        // WAL crash test: rate photos in a tight loop until killed from outside.
+        if env["BV_TEST_CHURN"] != nil {
+            await runChurn(controller)
+        }
         // Visual check: jump into single view on the second photo (no quit).
         if env["BV_TEST_SINGLE"] != nil {
             dispatcher.dispatch(.app(.nextPhoto))
@@ -307,6 +314,135 @@ enum TestHooks {
         print("BVS9 searchMiss visible=\(center.visiblePhotos.count)")
         center.searchText = ""
         print("BVS9 searchCleared visible=\(center.visiblePhotos.count)")
+    }
+
+    /// Step-10 acceptance flow, headless. Undo groups close per runloop turn,
+    /// so distinct steps are separated by short sleeps — mirroring real
+    /// one-gesture-per-event usage.
+    @MainActor
+    private static func runStep10Checks(
+        _ controller: LibraryController,
+        center: CenterViewModel,
+        dispatcher: ActionDispatcher
+    ) async {
+        func pause() async {
+            // Spin the runloop so NSUndoManager's end-of-event checkpoint fires
+            // and the per-gesture undo group closes — headless runs have no
+            // real events, and Task.sleep alone does not reliably reach the
+            // before-waiting phase that closes groups.
+            spinRunLoop()
+            try? await Task.sleep(for: .milliseconds(30))
+        }
+        func anchorState() -> String {
+            guard let id = center.selection.anchorId, let record = controller.photo(withId: id),
+                  let snapshot = controller.snapshot else { return "none" }
+            let paths = snapshot.queryFacts(forPhotoId: id).keywordPaths.sorted()
+            return "rating=\(record.rating) orientation=\(record.orientation) keywords=\(paths)"
+        }
+        print("BVS10 undoManager=\(controller.undoManager != nil)")
+
+        // Library state: rating 4, one rotation (1→6), PEOPLE > ANNA assigned.
+        guard let peopleId = controller.createKeyword(baseName: "PEOPLE", parentId: nil, groupId: nil),
+              controller.createKeyword(baseName: "ANNA", parentId: peopleId, groupId: nil) != nil
+        else {
+            print("BVS10 error=vocabulary")
+            return
+        }
+        dispatcher.dispatch(.app(.rate4))
+        await pause()
+        dispatcher.dispatch(.app(.rotate))
+        await pause()
+        controller.toggleKeyword(text: "anna", forPhotoIds: [center.selection.anchorId!])
+        await pause()
+        print("BVS10 before-save \(anchorState())")
+
+        // Save → the file carries the library's values (D1 via app path).
+        await controller.saveMetadataToFiles()
+        print("BVS10 save info=\(quoted(controller.infoMessage))")
+        controller.infoMessage = nil
+        if let id = center.selection.anchorId, let record = controller.photo(withId: id) {
+            let fileValues = MetadataReader.read(from: URL(fileURLWithPath: record.path))
+            print("BVS10 file rating=\(fileValues.rating) orientation=\(fileValues.orientation) keywords=\(fileValues.keywords)")
+        }
+
+        // Diverge the library, prepare unused vocabulary, then Load.
+        dispatcher.dispatch(.app(.rate2))
+        await pause()
+        print("BVS10 stack after-rate2 top=\(controller.undoManager?.undoActionName ?? "-") canUndo=\(controller.undoManager?.canUndo ?? false)")
+        controller.createKeyword(baseName: "UNUSED", parentId: nil, groupId: nil)
+        await pause()
+        await controller.loadMetadataFromFiles()
+        print("BVS10 stack after-load top=\(controller.undoManager?.undoActionName ?? "-")")
+        print("BVS10 load info=\(quoted(controller.infoMessage)) \(anchorState())")
+        controller.infoMessage = nil
+        let hasUnused = controller.snapshot?.keywordTree.allPaths().contains("UNUSED") ?? false
+        print("BVS10 d2 unusedSurvivesLoad=\(hasUnused)")
+
+        // Undo the load (one step) → rating back to 2; redo → 4 again.
+        // Undo groups close per runloop turn — pause so the group is closed
+        // before undoing (real usage: one gesture per event).
+        await pause()
+        controller.undoManager?.undo()
+        print("BVS10 undo-load \(anchorState())")
+        await pause()
+        controller.undoManager?.redo()
+        print("BVS10 redo-load \(anchorState())")
+        await pause()
+
+        // Batch rating: three photos → one ⌘Z reverts all three (U8).
+        let ids = center.visiblePhotos.prefix(3).map(\.id)
+        center.selection.selectSingle(ids[0])
+        for id in ids.dropFirst() { center.selection.toggle(id) }
+        dispatcher.dispatch(.app(.rate5))
+        await pause()
+        func ratings() -> [Int] { ids.compactMap { controller.photo(withId: $0)?.rating } }
+        print("BVS10 batch-rated ratings=\(ratings())")
+        await pause()
+        controller.undoManager?.undo()
+        print("BVS10 batch-undone ratings=\(ratings())")
+        await pause()
+
+        // Keyword toggle undo.
+        controller.toggleKeyword(text: "anna", forPhotoIds: Array(ids))
+        await pause()
+        await pause()
+        controller.undoManager?.undo()
+        let carriers = controller.snapshot?.keywordIdsByPhoto.values.filter { !$0.isEmpty }.count ?? -1
+        print("BVS10 keyword-undone carriers=\(carriers)")
+        await pause()
+
+        // Folder removal undo restores photos and assignments.
+        let countBefore = controller.snapshot?.photos.count ?? -1
+        if let folder = controller.snapshot?.folders.first {
+            await controller.removeFolder(folder)
+            controller.infoMessage = nil
+            print("BVS10 folder-removed photos=\(controller.snapshot?.photos.count ?? -1)")
+            await pause()
+            controller.undoManager?.undo()
+            await pause()
+            let assignments = controller.snapshot?.keywordIdsByPhoto.values.map(\.count).reduce(0, +) ?? -1
+            print("BVS10 folder-restored photos=\(controller.snapshot?.photos.count ?? -1) of=\(countBefore) assignments=\(assignments)")
+        }
+    }
+
+    /// Synchronous on purpose: `RunLoop.run(until:)` is barred from async
+    /// contexts, but a sync helper called from one is fine.
+    @MainActor
+    private static func spinRunLoop() {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+    }
+
+    @MainActor
+    private static func runChurn(_ controller: LibraryController) async {
+        print("BVCHURN start")
+        var iteration = 0
+        while true {
+            let ids = controller.snapshot?.photos.compactMap(\.id) ?? []
+            controller.updateRatings(ids: ids) { rating in (rating + 1) % 6 }
+            iteration += 1
+            if iteration % 20 == 0 { print("BVCHURN iter=\(iteration)") }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
     }
 
     @MainActor

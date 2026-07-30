@@ -34,6 +34,8 @@ extension LibraryController {
         }
         guard !changed.isEmpty else { return }
         let photoIds = changed
+        // U8: the inverse re-registers its own inverse, so redo works too.
+        registerUndo("Add Keyword") { $0.removeKeyword(id: keywordId, fromPhotoIds: photoIds) }
         persist { db in try PhotoDAO.assignKeyword(keywordId, toPhotoIds: photoIds, in: db) }
         emitCatalogEvent(.photosUpdated(photoIds))
     }
@@ -49,6 +51,7 @@ extension LibraryController {
         }
         guard !changed.isEmpty else { return }
         let photoIds = changed
+        registerUndo("Remove Keyword") { $0.assignKeyword(id: keywordId, toPhotoIds: photoIds) }
         persist { db in try PhotoDAO.removeKeyword(keywordId, fromPhotoIds: photoIds, in: db) }
         emitCatalogEvent(.photosUpdated(photoIds))
     }

@@ -61,6 +61,16 @@ public enum PhotoDAO {
             .deleteAll(db)
     }
 
+    /// Replaces a photo's entire assignment set — metadata Load, where the
+    /// file's keyword list wins wholesale (spec §6.4).
+    public static func setKeywords(_ keywordIds: [Int64], forPhotoId photoId: Int64, in db: Database) throws {
+        try PhotoKeywordRecord.filter(Column("photoId") == photoId).deleteAll(db)
+        for keywordId in keywordIds {
+            try PhotoKeywordRecord(photoId: photoId, keywordId: keywordId)
+                .insert(db, onConflict: .ignore)
+        }
+    }
+
     /// All (photoId, keywordId) pairs — one query, used by the snapshot load.
     public static func fetchKeywordAssignments(_ db: Database) throws -> [(photoId: Int64, keywordId: Int64)] {
         try Row.fetchAll(db, sql: "SELECT photoId, keywordId FROM photoKeyword")

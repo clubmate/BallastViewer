@@ -39,6 +39,17 @@ struct LibraryCommands: Commands {
                     }
                 }
                 Divider()
+                // Distinct wording for the two sync directions (U12) — the
+                // original used one alert text for both.
+                Button("Save Metadata into Files") {
+                    Task { await controller.saveMetadataToFiles() }
+                }
+                .disabled(controller.isSyncing)
+                Button("Load Metadata from Files") {
+                    Task { await controller.loadMetadataFromFiles() }
+                }
+                .disabled(controller.isSyncing)
+                Divider()
                 Button("Close Library") { controller.closeLibrary() }
             }
         }

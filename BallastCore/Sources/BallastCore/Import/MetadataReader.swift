@@ -27,10 +27,20 @@ public enum MetadataReader {
     /// An unreadable file yields the defaults — an *empty success*, matching the
     /// original (spec §6.1 [QUIRK]): import keeps defaults instead of failing.
     public static func read(from url: URL) -> PhotoFileMetadata {
+        readIfReadable(from: url) ?? PhotoFileMetadata()
+    }
+
+    /// Like `read(from:)` but distinguishes "unreadable" (nil) from "readable
+    /// with no metadata". The sync commands must skip unreadable files instead
+    /// of treating them as empty — otherwise Load wipes library data (spec §6.1
+    /// quirk, Q27 makes the skipped files visible).
+    public static func readIfReadable(from url: URL) -> PhotoFileMetadata? {
         var result = PhotoFileMetadata()
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
-            return result
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
+              CGImageSourceGetCount(source) > 0
+        else {
+            return nil
         }
 
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, sourceOptions)

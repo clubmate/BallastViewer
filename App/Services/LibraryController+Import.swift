@@ -1,5 +1,6 @@
 import AppKit
 import BallastCore
+import GRDB
 
 extension LibraryController {
     // MARK: Add folders
@@ -113,13 +114,52 @@ extension LibraryController {
     func removeFolder(_ folder: FolderRecord) async {
         guard let library, let folderId = folder.id else { return }
         do {
+            // Capture the subtree first so removal is undoable (U8): the folder
+            // row, its photos (with ids), and their keyword assignments.
+            let captured: (photos: [PhotoRecord], pairs: [(photoId: Int64, keywordId: Int64)]) =
+                try await library.pool.read { db in
+                    let photos = try PhotoRecord.filter(Column("folderId") == folderId).fetchAll(db)
+                    let ids = Set(photos.compactMap(\.id))
+                    let pairs = try PhotoDAO.fetchKeywordAssignments(db)
+                        .filter { ids.contains($0.photoId) }
+                    return (photos, pairs)
+                }
             let removed = try await library.pool.write { db in
                 try ImportDAO.removeFolder(folderId, in: db)
+            }
+            registerUndo("Remove Folder") {
+                $0.reinsertFolder(folder, photos: captured.photos, pairs: captured.pairs)
             }
             refreshSnapshot()
             infoMessage = "Removed the folder and \(removed) photo\(removed == 1 ? "" : "s") from the catalog. Files on disk are untouched."
         } catch {
             errorMessage = "Could not remove the folder.\n\(error.localizedDescription)"
         }
+    }
+
+    /// Undo of a folder removal: restores the captured rows verbatim (original
+    /// ids included, so batches and assignments stay consistent).
+    private func reinsertFolder(
+        _ folder: FolderRecord,
+        photos: [PhotoRecord],
+        pairs: [(photoId: Int64, keywordId: Int64)]
+    ) {
+        let written: Void? = writeSync { db in
+            var folderRecord = folder
+            try folderRecord.insert(db)
+            for photo in photos {
+                var record = photo
+                try record.insert(db)
+            }
+            for pair in pairs {
+                try PhotoKeywordRecord(photoId: pair.photoId, keywordId: pair.keywordId)
+                    .insert(db, onConflict: .ignore)
+            }
+        }
+        guard written != nil else { return }
+        registerUndo("Remove Folder") { controller in
+            Task { await controller.removeFolder(folder) }
+        }
+        refreshSnapshot()
     }
 }

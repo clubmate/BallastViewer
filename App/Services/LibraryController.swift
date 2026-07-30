@@ -26,6 +26,25 @@ final class LibraryController {
     // MARK: Import state (used by LibraryController+Import)
 
     var isImporting = false
+    /// A metadata sync command is running (used by LibraryController+Sync).
+    var isSyncing = false
+
+    // MARK: Undo (U8)
+
+    /// The host window's undo manager, injected by MainWindow — using the
+    /// window's own manager keeps text fields' undo intact and lets the
+    /// standard Edit menu drive photo-mutation undo via the responder chain.
+    weak var undoManager: UndoManager?
+
+    /// One call = one undoable step; batch mutations register once with the
+    /// whole before-state, so ⌘Z reverts the batch atomically (U8).
+    func registerUndo(_ actionName: String, _ handler: @escaping @MainActor (LibraryController) -> Void) {
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated { handler(target) }
+        }
+        undoManager.setActionName(actionName)
+    }
 
     struct PendingFolderRemoval: Identifiable {
         let folder: FolderRecord
@@ -40,6 +59,10 @@ final class LibraryController {
     private let bookmarks = BookmarkStore()
     /// URL we successfully called startAccessingSecurityScopedResource on.
     private var accessedURL: URL?
+    /// Folder URLs with active security scope — photos live outside the library
+    /// package, so thumbnails and metadata write-back need the folder bookmarks
+    /// started for the whole time the library is open.
+    private var accessedFolderURLs: [URL] = []
 
     // MARK: Catalog events + fast photo lookup
 
@@ -183,6 +206,7 @@ final class LibraryController {
         library = database
         libraryURL = url
         rebuildPhotoIndex()
+        startFolderAccess(for: loaded.folders)
         bookmarks.saveLastOpened(url)
         bookmarks.addRecent(url)
         recentLibraries = bookmarks.recentURLs()
@@ -194,6 +218,26 @@ final class LibraryController {
         if let url = accessedURL {
             url.stopAccessingSecurityScopedResource()
             accessedURL = nil
+        }
+        for url in accessedFolderURLs {
+            url.stopAccessingSecurityScopedResource()
+        }
+        accessedFolderURLs = []
+        undoManager?.removeAllActions(withTarget: self)
+    }
+
+    /// Resolves and starts every folder's security-scoped bookmark. Folders
+    /// added this session are implicitly accessible via their panel/drop URLs;
+    /// this is what restores access after a relaunch.
+    private func startFolderAccess(for folders: [FolderRecord]) {
+        for folder in folders {
+            guard let data = folder.bookmark else { continue }
+            var isStale = false
+            guard let url = try? URL(
+                resolvingBookmarkData: data, options: .withSecurityScope,
+                relativeTo: nil, bookmarkDataIsStale: &isStale
+            ), url.startAccessingSecurityScopedResource() else { continue }
+            accessedFolderURLs.append(url)
         }
     }
 
