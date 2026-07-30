@@ -111,6 +111,13 @@ public enum LibrarySchema {
             try db.create(index: "collectionRule_collectionId", on: "collectionRule", columns: ["collectionId"])
         }
 
+        migrator.registerMigration("v2-fk-indexes") { db in
+            // FK columns SQLite consults on cascade/setNull: without these a
+            // folder removal or batch deletion scans the whole photo table.
+            try db.create(index: "photo_folderId", on: "photo", columns: ["folderId"])
+            try db.create(index: "photo_importBatchId", on: "photo", columns: ["importBatchId"])
+        }
+
         return migrator
     }
 

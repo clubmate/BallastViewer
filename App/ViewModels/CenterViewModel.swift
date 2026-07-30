@@ -76,11 +76,36 @@ final class CenterViewModel {
     /// library from `libraryMeta` (Q24: survives relaunch, unlike sort/mode).
     private(set) var activeItem: SidebarItem = .allPhotos
 
-    /// Bottom-bar search (spec §11.3): ANDs with the active collection, applies
-    /// on every keystroke, session-only. Deliberately NOT cleared on collection
-    /// switch — the always-visible field + chip keep it visible instead (C6/U5).
+    /// Bottom-bar search (spec §11.3): ANDs with the active collection,
+    /// session-only. Deliberately NOT cleared on collection switch — the
+    /// always-visible field + chip keep it visible instead (C6/U5).
+    ///
+    /// Typing is debounced 150 ms (small deviation from the spec's
+    /// per-keystroke apply): one refilter costs ~200 ms at 50k photos, which
+    /// would stutter under every keystroke. Clearing applies immediately so
+    /// dismissing the chip feels instant.
     var searchText = "" {
-        didSet { if oldValue != searchText { applyFilterChange() } }
+        didSet {
+            guard oldValue != searchText else { return }
+            searchDebounce?.cancel()
+            if searchText.isEmpty {
+                applyFilterChange()
+            } else {
+                searchDebounce = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard !Task.isCancelled else { return }
+                    self?.applyFilterChange()
+                }
+            }
+        }
+    }
+    @ObservationIgnored private var searchDebounce: Task<Void, Never>?
+
+    /// Applies a pending debounced search immediately (perf probe, test hooks).
+    func applySearchNow() {
+        searchDebounce?.cancel()
+        searchDebounce = nil
+        applyFilterChange()
     }
 
     @ObservationIgnored private var randomOrder = StableRandomOrder()
@@ -180,7 +205,7 @@ final class CenterViewModel {
         guard let snapshot = controller.snapshot else { return false }
         guard SidebarFilter.matches(
             photo,
-            facts: photo.id.map { snapshot.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts(),
+            facts: photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts(),
             item: activeItem,
             collectionsById: collectionsById,
             rulesByCollection: rulesByCollection,
@@ -189,7 +214,7 @@ final class CenterViewModel {
         guard !searchText.isEmpty else { return true }
         return SearchFilter.matches(
             filename: photo.filename,
-            keywordPaths: photo.id.map { snapshot.queryFacts(forPhotoId: $0).keywordPaths } ?? [],
+            keywordPaths: photo.id.map { controller.queryFacts(forPhotoId: $0).keywordPaths } ?? [],
             query: searchText
         )
     }

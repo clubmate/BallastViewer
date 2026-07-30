@@ -1,11 +1,12 @@
 import Darwin
 import SwiftUI
 
-/// Debug-only performance gate instrumentation for step 5 (see docs/PLAN.md).
-/// Activated by BV_TEST_PERF=1: measures selection latency and jump-to-random-
-/// region latency (selection change + scrollTo + one full main-runloop turn,
-/// i.e. including SwiftUI diffing over the whole photo array and layout of the
-/// newly realized cells), then prints pipeline cache stats and memory footprint.
+/// Debug-only performance gate instrumentation (see docs/PLAN.md steps 5/12).
+/// Activated by BV_TEST_PERF=1: measures selection, jump, rating and search
+/// latency, then prints pipeline cache stats and memory footprint.
+///
+/// NOTE: do NOT combine with BV_TEST_QUIT — TestHooks exits before this
+/// probe's 2 s warm-up elapses. Launch without it and kill the app instead.
 enum PerfProbe {
     @MainActor
     static func runIfRequested(
@@ -64,12 +65,25 @@ enum PerfProbe {
             }
         }
 
+        // Search latency: the cost of ONE debounced apply (refilter + resort +
+        // grid reload) — typing itself only pays this once per pause.
+        var searchMs: [Double] = []
+        for query in ["photo_1", "photo_12", "zzz-none", ""] {
+            let elapsed = await clock.measure {
+                viewModel.searchText = query
+                viewModel.applySearchNow()
+                await afterRunloopTurn()
+            }
+            searchMs.append(ms(elapsed))
+        }
+
         let stats = await pipeline.stats()
         print("BVPERF photos=\(photos.count)")
         print("BVPERF select ms median=\(median(selectMs)) max=\(selectMs.max() ?? 0)")
         print("BVPERF jump ms median=\(median(jumpMs)) max=\(jumpMs.max() ?? 0)")
         print("BVPERF rateUI ms median=\(median(rateUiMs)) max=\(rateUiMs.max() ?? 0)")
         print("BVPERF rateDurable ms median=\(median(rateDurableMs)) max=\(rateDurableMs.max() ?? 0)")
+        print("BVPERF search ms median=\(median(searchMs)) max=\(searchMs.max() ?? 0)")
         print("BVPERF thumbs memoryHits=\(stats.memoryHits) diskHits=\(stats.diskHits) decodes=\(stats.decodes)")
         print("BVPERF footprintMB=\(Int(memoryFootprintMB()))")
         if env["BV_TEST_QUIT"] != nil { exit(0) }

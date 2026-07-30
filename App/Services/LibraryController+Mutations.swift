@@ -82,16 +82,10 @@ extension LibraryController {
         ids.compactMap { id in photo(withId: id).map { (id, $0.orientation) } }
     }
 
-    /// Async write-through. A failure here means memory and DB diverged for the
-    /// affected rows — surfaced loudly; the next snapshot load resyncs.
+    /// Async write-through, strictly in submission order via the library's
+    /// write pipeline. A failure means memory and DB diverged for the affected
+    /// rows — surfaced loudly; the next snapshot load resyncs.
     func persist(_ write: @escaping @Sendable (Database) throws -> Void) {
-        guard let library else { return }
-        Task {
-            do {
-                try await library.pool.write(write)
-            } catch {
-                errorMessage = "Could not save changes to the library.\n\(error.localizedDescription)"
-            }
-        }
+        writePipeline?.submit(write)
     }
 }

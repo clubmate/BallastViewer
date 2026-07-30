@@ -32,7 +32,7 @@ extension LibraryController {
                     libraryValues: PhotoFileMetadata(
                         rating: photo.rating,
                         orientation: photo.orientation,
-                        keywords: snapshot.queryFacts(forPhotoId: id).keywordPaths.sorted()
+                        keywords: queryFacts(forPhotoId: id).keywordPaths.sorted()
                     )
                 )
             }
@@ -118,7 +118,7 @@ extension LibraryController {
                 (change.photoId, PhotoFileMetadata(
                     rating: record.rating,
                     orientation: record.orientation,
-                    keywords: snapshot.queryFacts(forPhotoId: change.photoId).keywordPaths.sorted()
+                    keywords: queryFacts(forPhotoId: change.photoId).keywordPaths.sorted()
                 ))
             }
         }
@@ -154,6 +154,7 @@ extension LibraryController {
                 snapshot.keywordIdsByPhoto[photoId] = keywordIds
             }
         }
+        invalidateFacts(forPhotoIds: changes.map(\.photoId))
         registerUndo(actionName) { $0.applyMetadataValues(before, actionName: actionName) }
         emitCatalogEvent(.photosUpdated(changes.map(\.photoId)))
     }

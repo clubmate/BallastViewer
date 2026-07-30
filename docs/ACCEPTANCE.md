@@ -67,7 +67,7 @@ Legend: **[x]** verified · **[U]** deliberately deviates (U-number in `docs/PLA
 
 - [x] Filename = full path; Rating deliberately **removed** in favour of U9's five options (Filename/Path/Capture Date/Date Added/Random — core `SortEngineTests`).
 - [x] Random stable across filter changes, re-rolls only on switching to Random (Q2; core `StableRandomOrderTests`).
-- [x] Search case-insensitive, stacks with the collection — and includes filenames (U5; core `SearchFilterTests` + BVS9).
+- [x] Search case-insensitive, stacks with the collection — and includes filenames (U5; core `SearchFilterTests` + BVS9). Typing is debounced 150 ms (deviation from per-keystroke apply: one refilter costs ~185 ms at 50k); clearing applies instantly.
 
 ## Shortcuts
 
@@ -107,9 +107,10 @@ Legend: **[x]** verified · **[U]** deliberately deviates (U-number in `docs/PLA
 - [x] Photo/View items show live key bindings and update on change (⌥⌘N appeared instantly, step 9).
 - [x] Enable/disable per §14 (Photo menu disabled without anchor; Library items gated on open library).
 
-## Performance (step 12 gate, 50k synthetic photos)
+## Performance (post-hardening gate, 50k synthetic photos)
 
-- select median 9.0 ms, jump median 12.3 ms, **keystroke→UI (rate) median 7.4 ms** (< 16), **keystroke→durable median 7.5 ms** (< 100), footprint 114 MB.
+- select median 9.1 ms, jump median 11.0 ms, **keystroke→UI (rate) median 6.5 ms** (< 16), **keystroke→durable median 6.6 ms** (< 100), one debounced search apply 185 ms, footprint 121 MB.
+- Async write-through commits strictly in submission order (WritePipeline); kill -9 WAL guarantee unchanged.
 - No main-thread I/O by construction: DB writes on GRDB's pool queues, thumbnail decodes in nonisolated tasks behind an actor, metadata sync in bounded task groups. A formal Instruments pass with 50k *real* photos remains open (fixtures are synthetic PNGs).
 
 ## Open items

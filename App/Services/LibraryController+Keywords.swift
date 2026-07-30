@@ -34,6 +34,7 @@ extension LibraryController {
         }
         guard !changed.isEmpty else { return }
         let photoIds = changed
+        invalidateFacts(forPhotoIds: photoIds)
         // U8: the inverse re-registers its own inverse, so redo works too.
         registerUndo("Add Keyword") { $0.removeKeyword(id: keywordId, fromPhotoIds: photoIds) }
         persist { db in try PhotoDAO.assignKeyword(keywordId, toPhotoIds: photoIds, in: db) }
@@ -51,6 +52,7 @@ extension LibraryController {
         }
         guard !changed.isEmpty else { return }
         let photoIds = changed
+        invalidateFacts(forPhotoIds: photoIds)
         registerUndo("Remove Keyword") { $0.assignKeyword(id: keywordId, toPhotoIds: photoIds) }
         persist { db in try PhotoDAO.removeKeyword(keywordId, fromPhotoIds: photoIds, in: db) }
         emitCatalogEvent(.photosUpdated(photoIds))
@@ -127,6 +129,7 @@ extension LibraryController {
         }) else { return }
         let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
         mutateSnapshot { $0.keywordTree = KeywordTree(records: records) }
+        invalidateAllFacts()
         emitCatalogEvent(.photosUpdated(carriers))
     }
 
@@ -151,6 +154,7 @@ extension LibraryController {
                 snapshot.keywordIdsByPhoto[photoId]?.subtract(removedIds)
             }
         }
+        invalidateAllFacts()
         emitCatalogEvent(.photosUpdated(carriers))
     }
 
@@ -170,13 +174,21 @@ extension LibraryController {
     }
 
     func setKeywordGroupColor(_ id: Int64, color: String) {
-        guard writeSync({ db in try KeywordDAO.setGroupColor(id, color: color, in: db) }) != nil
+        guard let snapshot,
+              writeSync({ db in try KeywordDAO.setGroupColor(id, color: color, in: db) }) != nil
         else { return }
+        // Colors are not query facts, but the grid badges derive dot colors
+        // per photo — tell carriers so dots refresh immediately.
+        let memberIds = Set(snapshot.keywordTree.allIdsDepthFirst().filter {
+            snapshot.keywordTree.effectiveGroupId(of: $0) == id
+        })
+        let carriers = photoIdsCarrying(keywordIds: memberIds)
         mutateSnapshot { snapshot in
             if let index = snapshot.keywordGroups.firstIndex(where: { $0.id == id }) {
                 snapshot.keywordGroups[index].color = color
             }
         }
+        emitCatalogEvent(.photosUpdated(carriers))
     }
 
     /// Deletion numbers for the U7 alert: member keywords (they become ad-hoc,
@@ -208,6 +220,7 @@ extension LibraryController {
             snapshot.keywordGroups.removeAll { $0.id == id }
             snapshot.keywordTree = KeywordTree(records: records)
         }
+        invalidateAllFacts()
         emitCatalogEvent(.photosUpdated(carriers))
     }
 

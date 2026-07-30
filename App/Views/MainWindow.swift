@@ -27,8 +27,12 @@ struct MainWindow: View {
         }
         .frame(minWidth: 800, minHeight: 600)
         .navigationTitle(controller.libraryURL?.lastPathComponent ?? "ballastviewer")
+        .background(MainWindowRegistrar())
         .onAppear {
             controller.undoManager = windowUndoManager
+            // Bound so a pathological undo entry (a 50k-photo folder removal
+            // captures every row) cannot accumulate without limit.
+            windowUndoManager?.levelsOfUndo = 50
             // The search field must not grab first responder at launch —
             // focused text suppresses every culling shortcut (Q21). Clearing
             // initialFirstResponder also keeps later activations from
@@ -55,7 +59,7 @@ struct MainWindow: View {
         .alert(
             "ballastviewer",
             isPresented: Binding(
-                get: { controller.errorMessage != nil },
+                get: { controller.errorMessage != nil && !TestHooks.suppressesAlerts },
                 set: { if !$0 { controller.errorMessage = nil } }
             )
         ) {
@@ -66,7 +70,7 @@ struct MainWindow: View {
         .alert(
             "Library",
             isPresented: Binding(
-                get: { controller.infoMessage != nil },
+                get: { controller.infoMessage != nil && !TestHooks.suppressesAlerts },
                 set: { if !$0 { controller.infoMessage = nil } }
             )
         ) {
@@ -291,6 +295,25 @@ struct MainWindow: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
         .offset(y: -(height + 6))
+    }
+
+    /// Hands the hosting NSWindow to the ShortcutMonitor whitelist.
+    private struct MainWindowRegistrar: NSViewRepresentable {
+        func makeNSView(context: Context) -> NSView {
+            let view = NSView()
+            DispatchQueue.main.async { [weak view] in
+                ShortcutMonitor.mainWindow = view?.window
+            }
+            return view
+        }
+
+        func updateNSView(_ view: NSView, context: Context) {
+            if let window = view.window, ShortcutMonitor.mainWindow !== window {
+                DispatchQueue.main.async {
+                    ShortcutMonitor.mainWindow = window
+                }
+            }
+        }
     }
 
     /// U5: the active filter as a dismissible chip — visible in both modes, so

@@ -40,6 +40,12 @@ final class ShortcutMonitor {
     /// monitor must see the press instead of the dispatcher.
     static var recorderActive = false
 
+    /// The one window whose key events drive shortcuts, registered by
+    /// MainWindow on appearance. A whitelist — everything else (Settings,
+    /// panels, future windows) is ignored by construction, instead of sniffing
+    /// undocumented window identifiers.
+    static weak var mainWindow: NSWindow?
+
     private let keyMap: KeyMapStore
     private let dispatcher: ActionDispatcher
     /// Monitor token — never removed; this object lives as long as the app.
@@ -74,16 +80,14 @@ final class ShortcutMonitor {
         return true
     }
 
-    /// Shortcuts stay out of text entry (Q21 — pressing `5` in the search field
-    /// must type, never rate), out of panels (save/open dialogs), out of windows
-    /// showing a sheet (alerts), and out of the Settings window (pressing a key
-    /// there edits bindings, it must not cull photos).
+    /// Shortcuts fire only in the registered main window (never Settings or
+    /// panels), never while it shows a sheet (alerts), and stay out of text
+    /// entry (Q21 — pressing `5` in the search field must type, never rate).
     private static func shouldHandle(_ event: NSEvent) -> Bool {
         guard !recorderActive,
               let window = event.window,
-              !(window is NSPanel),
-              window.attachedSheet == nil,
-              window.identifier?.rawValue.lowercased().contains("settings") != true
+              window === mainWindow,
+              window.attachedSheet == nil
         else { return false }
         if window.firstResponder is NSText || window.firstResponder is NSTextView {
             return false

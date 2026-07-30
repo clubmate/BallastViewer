@@ -91,8 +91,8 @@ final class SidebarViewModel {
                 collections: snapshot.collections,
                 rulesByCollection: snapshot.rulesByCollection,
                 lastImportBatchId: snapshot.meta.lastImportBatchId,
-                facts: { photo in
-                    photo.id.map { snapshot.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
+                facts: { [controller] photo in
+                    photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
                 }
             )
             counts = store.counts
@@ -110,8 +110,8 @@ final class SidebarViewModel {
             collections: snapshot.collections,
             rulesByCollection: snapshot.rulesByCollection,
             lastImportBatchId: snapshot.meta.lastImportBatchId,
-            facts: { photo in
-                photo.id.map { snapshot.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
+            facts: { [controller] photo in
+                photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
             }
         )
         counts = store.counts

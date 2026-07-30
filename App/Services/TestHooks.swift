@@ -14,6 +14,18 @@ import BallastCore
 /// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
 /// · BV_TEST_QUIT=1
 enum TestHooks {
+    /// True in headless hook runs. MainWindow skips presenting alerts then:
+    /// sheet-close animations running inside the hooks' nested runloop spins
+    /// crash AppKit's NSMoveHelper observer (flaky EXC_BAD_ACCESS). The hooks
+    /// read `infoMessage`/`errorMessage` directly anyway.
+    static var suppressesAlerts: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["BV_TEST"] != nil
+        #else
+        false
+        #endif
+    }
+
     @MainActor
     static func runIfRequested(
         _ controller: LibraryController,
@@ -311,12 +323,15 @@ enum TestHooks {
         dispatcher.dispatch(.keyword("anna"))
         let total = center.visiblePhotos.count
         center.searchText = "anna"
+        center.applySearchNow()
         print("BVS9 searchKeyword visible=\(center.visiblePhotos.count) of=\(total)")
         let fragment = controller.snapshot?.photos.first
             .map { String($0.filename.prefix(4)) } ?? ""
         center.searchText = fragment
+        center.applySearchNow()
         print("BVS9 searchFilename query=\(fragment) visible=\(center.visiblePhotos.count)")
         center.searchText = "zzz-no-match"
+        center.applySearchNow()
         print("BVS9 searchMiss visible=\(center.visiblePhotos.count)")
         center.searchText = ""
         print("BVS9 searchCleared visible=\(center.visiblePhotos.count)")
@@ -332,18 +347,26 @@ enum TestHooks {
         dispatcher: ActionDispatcher
     ) async {
         func pause() async {
-            // Spin the runloop so NSUndoManager's end-of-event checkpoint fires
-            // and the per-gesture undo group closes — headless runs have no
-            // real events, and Task.sleep alone does not reliably reach the
-            // before-waiting phase that closes groups.
             spinRunLoop()
             try? await Task.sleep(for: .milliseconds(30))
         }
+        // NSUndoManager's implicit per-event groups never close in a headless
+        // run (no real events reach sendEvent), which would merge every
+        // gesture into one giant group. With groupsByEvent off, the explicit
+        // begin/end pair in LibraryController.registerUndo delimits each
+        // gesture instead.
+        controller.undoManager?.groupsByEvent = false
         func anchorState() -> String {
             guard let id = center.selection.anchorId, let record = controller.photo(withId: id),
                   let snapshot = controller.snapshot else { return "none" }
             let paths = snapshot.queryFacts(forPhotoId: id).keywordPaths.sorted()
-            return "rating=\(record.rating) orientation=\(record.orientation) keywords=\(paths)"
+            return "anchor=\(id) rating=\(record.rating) orientation=\(record.orientation) keywords=\(paths)"
+        }
+        func dumpAll(_ label: String) {
+            let rows = (controller.snapshot?.photos ?? []).map {
+                "\($0.id ?? -1):\($0.rating)/\($0.orientation)"
+            }
+            print("BVS10 dump \(label) \(rows.joined(separator: " "))")
         }
         print("BVS10 undoManager=\(controller.undoManager != nil)")
 
@@ -361,6 +384,7 @@ enum TestHooks {
         controller.toggleKeyword(text: "anna", forPhotoIds: [center.selection.anchorId!])
         await pause()
         print("BVS10 before-save \(anchorState())")
+        dumpAll("before-save")
 
         // Save → the file carries the library's values (D1 via app path).
         await controller.saveMetadataToFiles()
@@ -375,6 +399,7 @@ enum TestHooks {
         dispatcher.dispatch(.app(.rate2))
         await pause()
         print("BVS10 stack after-rate2 top=\(controller.undoManager?.undoActionName ?? "-") canUndo=\(controller.undoManager?.canUndo ?? false)")
+        dumpAll("after-rate2")
         controller.createKeyword(baseName: "UNUSED", parentId: nil, groupId: nil)
         await pause()
         await controller.loadMetadataFromFiles()
@@ -477,6 +502,7 @@ enum TestHooks {
     private static func spinRunLoop() {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
     }
+
 
     @MainActor
     private static func runChurn(_ controller: LibraryController) async {

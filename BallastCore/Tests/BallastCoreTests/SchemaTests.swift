@@ -39,6 +39,34 @@ func insertPhoto(_ db: Database, folderId: Int64, path: String, rating: Int = 0)
         }
     }
 
+    @Test func v2AddsForeignKeyIndexes() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.read { db in
+            let indexes = try String.fetchAll(
+                db, sql: "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+            #expect(indexes.contains("photo_folderId"))
+            #expect(indexes.contains("photo_importBatchId"))
+        }
+    }
+
+    @Test func v2MigratesAnExistingV1Database() throws {
+        // A database stopped at v1 (as every pre-hardening library is) must
+        // migrate cleanly when reopened.
+        let dbQueue = try DatabaseQueue()
+        var v1Only = DatabaseMigrator()
+        // Run just the v1 step by asking the full migrator to stop after it.
+        v1Only = LibrarySchema.migrator
+        try v1Only.migrate(dbQueue, upTo: "v1")
+        try LibrarySchema.migrator.migrate(dbQueue)
+        try dbQueue.read { db in
+            let indexes = try String.fetchAll(
+                db, sql: "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+            #expect(indexes.contains("photo_folderId"))
+        }
+    }
+
     @Test func seedCreatesMetaAndSixDefaultGroups() throws {
         let dbQueue = try makeTestDatabase()
         try dbQueue.read { db in

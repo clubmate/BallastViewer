@@ -41,15 +41,25 @@ actor ThumbnailPipeline {
             .appendingPathComponent("Thumbnails", isDirectory: true)
             .appendingPathComponent(libraryUUID, isDirectory: true)
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        // The disk cache has no other eviction: stale entries (changed mtime)
+        // and closed-forever libraries would grow it without bound.
+        Task.detached(priority: .utility) { [cacheDirectory] in
+            Self.pruneDiskCache(at: cacheDirectory, budgetBytes: 2 * 1024 * 1024 * 1024)
+        }
     }
 
     func stats() -> Stats { counters }
 
-    func thumbnail(forPath path: String, longEdge: Int) async -> CGImageBox? {
-        let modificationTime = (try? FileManager.default
-            .attributesOfItem(atPath: path)[.modificationDate] as? Date)?
-            .timeIntervalSince1970 ?? 0
+    /// Nonisolated on purpose: the mtime stat is disk I/O — inside the actor it
+    /// would serialise every thumbnail request (including pure memory hits)
+    /// behind a syscall.
+    nonisolated func thumbnail(forPath path: String, longEdge: Int) async -> CGImageBox? {
+        let modificationTime = Self.modificationTime(atPath: path)
         let key = "\(path)|\(Int(modificationTime))|\(longEdge)"
+        return await cachedThumbnail(key: key, path: path, longEdge: longEdge)
+    }
+
+    private func cachedThumbnail(key: String, path: String, longEdge: Int) async -> CGImageBox? {
         if let hit = memory.object(forKey: key as NSString) {
             counters.memoryHits += 1
             return CGImageBox(image: hit)
@@ -123,13 +133,43 @@ actor ThumbnailPipeline {
     }
 
     nonisolated private static func decodeCacheFile(_ url: URL) async -> CGImageBox? {
-        guard FileManager.default.fileExists(atPath: url.path),
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(
                 source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
               )
         else { return nil }
         return CGImageBox(image: image)
+    }
+
+    nonisolated private static func modificationTime(atPath path: String) -> TimeInterval {
+        ((try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date)?
+            .timeIntervalSince1970) ?? 0
+    }
+
+    /// Oldest-first prune to a byte budget. Access times are not tracked
+    /// (touching on every hit would cost more than it saves); creation order is
+    /// a good-enough proxy for a regenerable cache.
+    nonisolated private static func pruneDiskCache(at directory: URL, budgetBytes: Int) {
+        let fileManager = FileManager.default
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+            options: .skipsHiddenFiles
+        ) else { return }
+        var files: [(url: URL, size: Int, date: Date)] = entries.compactMap { url in
+            guard let values = try? url.resourceValues(
+                forKeys: [.fileSizeKey, .contentModificationDateKey]
+            ) else { return nil }
+            return (url, values.fileSize ?? 0, values.contentModificationDate ?? .distantPast)
+        }
+        var total = files.reduce(0) { $0 + $1.size }
+        guard total > budgetBytes else { return }
+        files.sort { $0.date < $1.date }
+        for file in files {
+            guard total > budgetBytes else { break }
+            try? fileManager.removeItem(at: file.url)
+            total -= file.size
+        }
     }
 
     nonisolated private static func writeCacheFile(_ box: CGImageBox, to url: URL) async {

@@ -38,12 +38,19 @@ final class LibraryController {
 
     /// One call = one undoable step; batch mutations register once with the
     /// whole before-state, so ⌘Z reverts the batch atomically (U8).
+    ///
+    /// The explicit begin/end pair is inert interactively (nested inside the
+    /// per-event group AppKit manages) but is what keeps gestures separate in
+    /// headless runs, where TestHooks turns `groupsByEvent` off because no
+    /// real events ever close the implicit groups.
     func registerUndo(_ actionName: String, _ handler: @escaping @MainActor (LibraryController) -> Void) {
         guard let undoManager else { return }
+        undoManager.beginUndoGrouping()
         undoManager.registerUndo(withTarget: self) { target in
             MainActor.assumeIsolated { handler(target) }
         }
         undoManager.setActionName(actionName)
+        undoManager.endUndoGrouping()
     }
 
     struct PendingFolderRemoval: Identifiable {
@@ -55,6 +62,33 @@ final class LibraryController {
     var pendingFolderRemoval: PendingFolderRemoval?
     /// Folders dropped while no library was open — imported after creation (U1).
     private var pendingImportFolders: [URL] = []
+
+    /// Serialises async write-through mutations for the open library — see
+    /// WritePipeline for why unstructured Tasks are not enough. Internal so
+    /// the mutation extensions can submit.
+    var writePipeline: WritePipeline?
+
+    /// Derived query facts per photo (resolved keyword paths + effective group
+    /// ids). Building these walks the keyword tree and joins strings — cached
+    /// here because counts rebuilds, collection filters, search and metadata
+    /// sync all hammer the same lookups. Invalidated on assignment changes
+    /// (per photo) and vocabulary changes (wholesale).
+    @ObservationIgnored private var factsCache: [Int64: PhotoQueryFacts] = [:]
+
+    func queryFacts(forPhotoId id: Int64) -> PhotoQueryFacts {
+        if let cached = factsCache[id] { return cached }
+        let facts = snapshot?.queryFacts(forPhotoId: id) ?? PhotoQueryFacts()
+        factsCache[id] = facts
+        return facts
+    }
+
+    func invalidateFacts(forPhotoIds ids: [Int64]) {
+        for id in ids { factsCache[id] = nil }
+    }
+
+    func invalidateAllFacts() {
+        factsCache = [:]
+    }
 
     private let bookmarks = BookmarkStore()
     /// URL we successfully called startAccessingSecurityScopedResource on.
@@ -205,6 +239,10 @@ final class LibraryController {
         thumbnails = ThumbnailPipeline(libraryUUID: loaded.meta.libraryUUID)
         library = database
         libraryURL = url
+        writePipeline = WritePipeline(pool: database.pool) { [weak self] message in
+            self?.errorMessage = "Could not save changes to the library.\n\(message)"
+        }
+        invalidateAllFacts()
         rebuildPhotoIndex()
         startFolderAccess(for: loaded.folders)
         bookmarks.saveLastOpened(url)
@@ -214,7 +252,20 @@ final class LibraryController {
     }
 
     private func releaseCurrent() {
-        try? library?.pool.close()
+        if let pipeline = writePipeline {
+            // Drain pending writes, then close — closing under a pending write
+            // would surface spurious errors. The captured pool keeps the
+            // connection alive until the drain completes.
+            let pool = library?.pool
+            writePipeline = nil
+            Task {
+                await pipeline.shutdown()
+                try? pool?.close()
+            }
+        } else {
+            try? library?.pool.close()
+        }
+        invalidateAllFacts()
         if let url = accessedURL {
             url.stopAccessingSecurityScopedResource()
             accessedURL = nil
@@ -253,6 +304,7 @@ final class LibraryController {
         }
         do {
             snapshot = try library.pool.read { try LibrarySnapshot.load($0) }
+            invalidateAllFacts()
             rebuildPhotoIndex()
             emitCatalogEvent(.catalogReplaced)
         } catch {
