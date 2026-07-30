@@ -10,6 +10,7 @@ final class AppearanceStore {
     private static let spacingKey = "gridSpacing"
     private static let backgroundKey = "backgroundColor"
     private static let debounceKey = "midiDebounceTime"
+    private static let outputKey = "midiOutputDestination"
 
     static let defaultBackgroundHex = "#1E1E1EFF"
 
@@ -23,10 +24,15 @@ final class AppearanceStore {
         didSet { UserDefaults.standard.set(backgroundHex, forKey: Self.backgroundKey) }
     }
 
-    /// Per-action MIDI debounce in milliseconds, 0 = off. Stored now so the
-    /// Appearance tab is complete; consumed by the MIDI service in step 11.
+    /// Per-action MIDI debounce in milliseconds, 0 = off (spec §13.4).
     var midiDebounceMs: Int {
         didSet { UserDefaults.standard.set(midiDebounceMs, forKey: Self.debounceKey) }
+    }
+
+    /// LED output destination by display name; "" = all destinations (the
+    /// original's broadcast behaviour, U12 adds the picker).
+    var midiOutputDestination: String {
+        didSet { UserDefaults.standard.set(midiOutputDestination, forKey: Self.outputKey) }
     }
 
     init() {
@@ -37,5 +43,6 @@ final class AppearanceStore {
         backgroundHex = defaults.string(forKey: Self.backgroundKey)
             .flatMap(HexColor.parse)?.formatted ?? Self.defaultBackgroundHex
         midiDebounceMs = defaults.integer(forKey: Self.debounceKey)
+        midiOutputDestination = defaults.string(forKey: Self.outputKey) ?? ""
     }
 }

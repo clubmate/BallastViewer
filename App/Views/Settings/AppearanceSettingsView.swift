@@ -4,6 +4,7 @@ import SwiftUI
 /// MIDI debounce. All values live in `AppearanceStore` (UserDefaults).
 struct AppearanceSettingsView: View {
     @Environment(AppearanceStore.self) private var appearance
+    @Environment(MidiService.self) private var midi
 
     var body: some View {
         @Bindable var appearance = appearance
@@ -35,6 +36,12 @@ struct AppearanceSettingsView: View {
                 Text("Prevents double-triggering")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Picker("LED Output Device", selection: $appearance.midiOutputDestination) {
+                    Text("All Destinations").tag("")
+                    ForEach(midi.destinationNames, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
             }
         }
         .formStyle(.grouped)

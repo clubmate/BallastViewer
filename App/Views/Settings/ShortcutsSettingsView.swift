@@ -8,11 +8,13 @@ import SwiftUI
 struct ShortcutsSettingsView: View {
     @Environment(LibraryController.self) private var controller
     @Environment(KeyMapStore.self) private var keyMap
+    @Environment(MidiMapStore.self) private var midiMap
 
     /// U11: per-row "was: …" hint, keyed by the row's action string.
     @State private var conflictHints: [String: String] = [:]
     @State private var newKeywordName = ""
     @State private var newKeywordChord: KeyChord?
+    @State private var newKeywordAddress: MidiAddress?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,18 +53,31 @@ struct ShortcutsSettingsView: View {
             KeyRecorderView(chord: keyMap.map.chord(for: command)) { chord in
                 record(chord, for: command)
             }
+            MidiRecorderView(
+                address: midiMap.map.address(for: command),
+                onRecord: { address in recordMidi(address, for: command) },
+                onClear: {
+                    if let address = midiMap.map.address(for: command) {
+                        midiMap.removeBinding(for: address)
+                    }
+                }
+            )
         }
     }
 
-    private func keywordRow(_ binding: (keyword: String, chord: KeyChord?)) -> some View {
+    private func keywordRow(_ binding: KeywordBinding) -> some View {
         HStack {
             recorderRow(
                 title: Text(binding.keyword).fontWeight(.medium),
                 command: .keyword(binding.keyword)
             )
+            // The trash clears BOTH bindings (spec §9.9).
             Button {
                 if let chord = binding.chord {
                     keyMap.removeBinding(for: chord)
+                }
+                if let address = binding.address {
+                    midiMap.removeBinding(for: address)
                 }
                 conflictHints["keyword:\(binding.keyword)"] = nil
             } label: {
@@ -83,12 +98,18 @@ struct ShortcutsSettingsView: View {
                 .frame(width: 180)
             Spacer()
             KeyRecorderView(chord: newKeywordChord) { newKeywordChord = $0 }
+            MidiRecorderView(
+                address: newKeywordAddress,
+                onRecord: { newKeywordAddress = $0 },
+                onClear: { newKeywordAddress = nil }
+            )
             Button("Add") {
                 addKeywordShortcut()
             }
+            // A name plus at least one binding enables Add (spec §9.9).
             .disabled(
                 newKeywordName.trimmingCharacters(in: .whitespaces).isEmpty
-                    || newKeywordChord == nil
+                    || (newKeywordChord == nil && newKeywordAddress == nil)
             )
         }
     }
@@ -100,9 +121,10 @@ struct ShortcutsSettingsView: View {
                 .foregroundStyle(.secondary)
             Spacer()
             Button("Reset Defaults") {
-                // Restores the spec §12.3 map; keyword bindings are dropped
-                // (and step 11 clears the MIDI map here too).
+                // Restores the spec §12.3 key map and clears the MIDI map
+                // entirely — there are no MIDI defaults (spec §9.9/§13.1).
                 keyMap.resetToDefaults()
+                midiMap.clearAll()
                 conflictHints = [:]
             }
         }
@@ -111,15 +133,32 @@ struct ShortcutsSettingsView: View {
 
     // MARK: Model
 
-    private var keywordBindings: [(keyword: String, chord: KeyChord?)] {
-        keyMap.map.bindings
-            .compactMap { key, value -> (keyword: String, chord: KeyChord?)? in
-                guard case .keyword(let text)? = ActionCommand(actionString: value) else {
-                    return nil
-                }
-                return (text, KeyChord(keyString: key))
+    struct KeywordBinding {
+        var keyword: String
+        var chord: KeyChord?
+        var address: MidiAddress?
+    }
+
+    /// One row per keyword that has a key OR MIDI binding (spec §9.9).
+    private var keywordBindings: [KeywordBinding] {
+        var keywords: Set<String> = []
+        for value in keyMap.map.bindings.values {
+            if case .keyword(let text)? = ActionCommand(actionString: value) {
+                keywords.insert(text)
             }
-            .sorted { $0.keyword < $1.keyword }
+        }
+        for value in midiMap.map.bindings.values {
+            if case .keyword(let text)? = ActionCommand(actionString: value) {
+                keywords.insert(text)
+            }
+        }
+        return keywords.sorted().map { keyword in
+            KeywordBinding(
+                keyword: keyword,
+                chord: keyMap.map.chord(for: .keyword(keyword)),
+                address: midiMap.map.address(for: .keyword(keyword))
+            )
+        }
     }
 
     private func record(_ chord: KeyChord, for command: ActionCommand) {
@@ -133,14 +172,29 @@ struct ShortcutsSettingsView: View {
         keyMap.assign(chord, to: command)
     }
 
+    private func recordMidi(_ address: MidiAddress, for command: ActionCommand) {
+        // Same overwrite hint as keys (U11), same 1:1 semantics (§13.1).
+        if let previous = midiMap.map.command(for: address), previous != command {
+            conflictHints[command.actionString] = "was: \(displayName(of: previous))"
+        } else {
+            conflictHints[command.actionString] = nil
+        }
+        midiMap.assign(address, to: command)
+    }
+
     private func addKeywordShortcut() {
         let tree = controller.snapshot?.keywordTree ?? KeywordTree(records: [])
-        guard let chord = newKeywordChord,
-              let canonical = KeywordResolver.canonicalText(newKeywordName, tree: tree)
+        guard let canonical = KeywordResolver.canonicalText(newKeywordName, tree: tree)
         else { return }
-        record(chord, for: .keyword(canonical))
+        if let chord = newKeywordChord {
+            record(chord, for: .keyword(canonical))
+        }
+        if let address = newKeywordAddress {
+            recordMidi(address, for: .keyword(canonical))
+        }
         newKeywordName = ""
         newKeywordChord = nil
+        newKeywordAddress = nil
     }
 
     private func displayName(of command: ActionCommand) -> String {

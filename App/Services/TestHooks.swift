@@ -20,7 +20,8 @@ enum TestHooks {
         center: CenterViewModel,
         sidebar: SidebarViewModel,
         dispatcher: ActionDispatcher,
-        keyMap: KeyMapStore
+        keyMap: KeyMapStore,
+        midiMap: MidiMapStore
     ) async {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
@@ -70,6 +71,11 @@ enum TestHooks {
         // WAL crash test: rate photos in a tight loop until killed from outside.
         if env["BV_TEST_CHURN"] != nil {
             await runChurn(controller)
+        }
+        // MIDI end-to-end: seed bindings, then report state changes for a while
+        // so an external virtual controller (scripts) can drive the app.
+        if env["BV_TEST_MIDI"] != nil {
+            await runMidiChecks(controller, center: center, midiMap: midiMap)
         }
         // Visual check: jump into single view on the second photo (no quit).
         if env["BV_TEST_SINGLE"] != nil {
@@ -423,6 +429,46 @@ enum TestHooks {
             let assignments = controller.snapshot?.keywordIdsByPhoto.values.map(\.count).reduce(0, +) ?? -1
             print("BVS10 folder-restored photos=\(controller.snapshot?.photos.count ?? -1) of=\(countBefore) assignments=\(assignments)")
         }
+    }
+
+    /// Seeds MIDI bindings (notes 60–63 on channel 0) and prints every anchor
+    /// rating/view/keyword change for ~10 s — a virtual source outside the
+    /// process sends notes, a virtual destination collects the LED echoes.
+    @MainActor
+    private static func runMidiChecks(
+        _ controller: LibraryController,
+        center: CenterViewModel,
+        midiMap: MidiMapStore
+    ) async {
+        guard let peopleId = controller.createKeyword(baseName: "PEOPLE", parentId: nil, groupId: nil),
+              controller.createKeyword(baseName: "ANNA", parentId: peopleId, groupId: nil) != nil
+        else {
+            print("BVMIDI error=vocabulary")
+            return
+        }
+        midiMap.assign(MidiAddress(channel: 0, note: 60)!, to: .app(.rate3))
+        midiMap.assign(MidiAddress(channel: 0, note: 61)!, to: .app(.rate0))
+        midiMap.assign(MidiAddress(channel: 0, note: 62)!, to: .keyword("PEOPLE > ANNA"))
+        midiMap.assign(MidiAddress(channel: 0, note: 63)!, to: .app(.viewSingle))
+        print("BVMIDI seeded bindings=\(midiMap.map.bindings.count)")
+
+        var lastReport = ""
+        for _ in 0..<100 {
+            spinRunLoop()
+            try? await Task.sleep(for: .milliseconds(50))
+            let anchor = center.selection.anchorId
+            let rating = anchor.flatMap { controller.photo(withId: $0)?.rating } ?? -1
+            let keywords = anchor.map { id in
+                (controller.snapshot?.keywordIdsByPhoto[id] ?? [])
+                    .compactMap { controller.snapshot?.keywordTree.path(of: $0) }.sorted()
+            } ?? []
+            let report = "rating=\(rating) single=\(center.viewMode == .single) keywords=\(keywords)"
+            if report != lastReport {
+                print("BVMIDI state \(report)")
+                lastReport = report
+            }
+        }
+        print("BVMIDI done")
     }
 
     /// Synchronous on purpose: `RunLoop.run(until:)` is barred from async
