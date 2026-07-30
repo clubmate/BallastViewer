@@ -90,6 +90,15 @@ final class LibraryController {
         factsCache = [:]
     }
 
+    /// Waits until every pending write-through mutation has committed — the
+    /// app-termination path (AppDelegate). The pipeline is spent afterwards,
+    /// which is fine: the process is about to exit.
+    func drainWrites() async {
+        guard let pipeline = writePipeline else { return }
+        writePipeline = nil
+        await pipeline.shutdown()
+    }
+
     private let bookmarks = BookmarkStore()
     /// URL we successfully called startAccessingSecurityScopedResource on.
     private var accessedURL: URL?
