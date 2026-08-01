@@ -45,13 +45,22 @@ struct MainWindow: View {
         return stored > 0 ? stored : fallback
     }
 
+    /// AppKit's titlebar-separator tone: black in dark mode, softened in light.
+    private static let titlebarSeparatorColor = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? .black
+            : NSColor.black.withAlphaComponent(0.2)
+    })
+
     var body: some View {
         VStack(spacing: 0) {
-            // Our own always-on titlebar separator: AppKit's .automatic one
-            // appears and disappears with layout state, so it is pinned off
-            // and this Divider (same style as the panel footer lines) marks
-            // the titlebar edge deterministically.
-            Divider()
+            // Always-on titlebar separator in AppKit's own tone (black in dark
+            // mode, soft black in light) — the system separator is unreliable
+            // with a transparent titlebar (.automatic flickers with layout
+            // state, .line draws nothing at all), so this line is ours.
+            Rectangle()
+                .fill(Self.titlebarSeparatorColor)
+                .frame(height: 1)
             if controller.isLibraryOpen {
                 libraryContent
             } else {
@@ -438,8 +447,8 @@ struct MainWindow: View {
         private static func configureTitlebar(_ window: NSWindow) {
             window.titlebarAppearsTransparent = true
             window.styleMask.insert(.fullSizeContentView)
-            // .automatic draws a hairline under the titlebar at launch that
-            // vanishes after layout changes — pin it off for a stable look.
+            // The system separator cannot be used with a transparent titlebar
+            // (.automatic flickers, .line draws nothing) — we draw our own.
             window.titlebarSeparatorStyle = .none
         }
     }
