@@ -1,4 +1,5 @@
 import BallastCore
+import CoreGraphics
 import CryptoKit
 import Foundation
 import ImageIO
@@ -129,7 +130,35 @@ actor ThumbnailPipeline {
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return nil
         }
-        return CGImageBox(image: image)
+        return CGImageBox(image: flattenedIfTransparent(image))
+    }
+
+    /// Sources with alpha (transparent PNGs) are flattened onto white at decode
+    /// time. The JPEG disk cache cannot store alpha and composites on white
+    /// when written — without this, the same photo renders differently
+    /// depending on cache tier: composited over the grid background on a fresh
+    /// decode, over white after a disk-cache round trip.
+    nonisolated private static func flattenedIfTransparent(_ image: CGImage) -> CGImage {
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return image
+        default:
+            break
+        }
+        let space = image.colorSpace.flatMap { $0.model == .rgb ? $0 : nil }
+            ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let white = CGColor(colorSpace: space, components: [1, 1, 1, 1]),
+              let context = CGContext(
+                data: nil, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              )
+        else { return image }
+        let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        context.setFillColor(white)
+        context.fill(rect)
+        context.draw(image, in: rect)
+        return context.makeImage() ?? image
     }
 
     nonisolated private static func decodeCacheFile(_ url: URL) async -> CGImageBox? {
