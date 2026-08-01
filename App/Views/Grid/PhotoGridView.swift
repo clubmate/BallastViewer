@@ -49,6 +49,17 @@ struct PhotoGridView: NSViewRepresentable {
                 scrollView?.scrollerStyle = .overlay
             }
         }
+        // One-pass size changes (panel toggle, window resize) must recompute
+        // the cell size — without this the layout keeps the old itemSize and
+        // just rewraps the rows (see GridFlowLayout.prepare).
+        scrollView.postsFrameChangedNotifications = true
+        context.coordinator.frameObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: scrollView, queue: .main
+        ) { [weak collectionView] _ in
+            MainActor.assumeIsolated {
+                collectionView?.collectionViewLayout?.invalidateLayout()
+            }
+        }
         return scrollView
     }
 
@@ -74,12 +85,16 @@ struct PhotoGridView: NSViewRepresentable {
         private let viewModel: CenterViewModel
         weak var collectionView: NSCollectionView?
         // nonisolated(unsafe): only written once on the main actor; deinit
-        // (nonisolated) must be able to unregister it.
+        // (nonisolated) must be able to unregister them.
         nonisolated(unsafe) var scrollerStyleObserver: NSObjectProtocol?
+        nonisolated(unsafe) var frameObserver: NSObjectProtocol?
 
         deinit {
             if let scrollerStyleObserver {
                 NotificationCenter.default.removeObserver(scrollerStyleObserver)
+            }
+            if let frameObserver {
+                NotificationCenter.default.removeObserver(frameObserver)
             }
         }
 
@@ -219,7 +234,13 @@ final class GridFlowLayout: NSCollectionViewFlowLayout {
     var spacing: CGFloat = 12
 
     override func prepare() {
-        if let width = collectionView?.bounds.width {
+        // The viewport (clip view) width, NOT the collection view's own bounds:
+        // when the pane resizes in one layout pass (panel toggle, window
+        // resize), the document view's width lags a pass behind and prepare()
+        // would compute stale cell sizes — the flow layout then rewraps rows
+        // with the old itemSize and justifies the leftovers into uneven gaps.
+        if let width = collectionView?.enclosingScrollView?.contentView.bounds.width
+            ?? collectionView?.bounds.width {
             // Floor the cell size: computing it to EXACTLY fill the width sits
             // on a floating-point knife edge where the flow layout sometimes
             // wraps a row early and justifies the leftovers into huge gaps —
