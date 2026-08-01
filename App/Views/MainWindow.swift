@@ -28,6 +28,9 @@ struct MainWindow: View {
     @FocusState private var searchFocused: Bool
     /// Closed on accept/submit even though text is still present (spec §11.3).
     @State private var showSearchSuggestions = false
+    /// Live pane widths, used to place the divider covers (see libraryContent).
+    @State private var sidebarWidth: CGFloat = 0
+    @State private var inspectorWidth: CGFloat = 0
 
     var body: some View {
         Group {
@@ -126,14 +129,41 @@ struct MainWindow: View {
             if center.showLeftPanel {
                 SidebarView(sidebar: sidebar, center: center)
                     .frame(minWidth: 200, maxWidth: 300, maxHeight: .infinity)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
+                        sidebarWidth = $0
+                    }
             }
             centerPane
                 .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
             if center.showRightPanel {
                 InspectorView()
                     .frame(minWidth: 250, maxWidth: 350, maxHeight: .infinity)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
+                        inspectorWidth = $0
+                    }
             }
         }
+        // HSplitView's 1 pt divider line is unstylable, renders black, and
+        // clips pane overlays — so the covers live on the split view itself,
+        // placed via the measured pane widths. Hit testing passes through;
+        // drag resizing keeps working.
+        .overlay(alignment: .leading) {
+            if center.showLeftPanel {
+                dividerCover.offset(x: sidebarWidth)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if center.showRightPanel {
+                dividerCover.offset(x: -inspectorWidth)
+            }
+        }
+    }
+
+    private var dividerCover: some View {
+        Rectangle()
+            .fill(.bar)
+            .frame(width: 1)
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder
