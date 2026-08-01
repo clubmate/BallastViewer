@@ -3,6 +3,18 @@ import BallastCore
 import SwiftUI
 
 /// Three-pane layout per spec §9.1: sidebar 200–300, center min 400, inspector 250–350.
+/// Shared metrics + surface convention for the three chrome panels (sidebar,
+/// inspector, bottom bar): all use the `.bar` material composited on the bare
+/// window backdrop, and their bottom rows share one height so the sidebar and
+/// inspector footers align with the bottom bar. Plain window/control background
+/// colors are #1E1E1E in dark mode — identical to the default grid background
+/// and therefore useless for separating chrome from content.
+enum PanelMetrics {
+    static let barHeight: CGFloat = 42
+    /// Footer row height inside panels that put a 1 pt Divider above it.
+    static let footerHeight: CGFloat = barHeight - 1
+}
+
 struct MainWindow: View {
     @Environment(LibraryController.self) private var controller
     @Environment(CenterViewModel.self) private var center
@@ -128,16 +140,19 @@ struct MainWindow: View {
     private var centerPane: some View {
         VStack(spacing: 0) {
             centerContent
+                // The appearance color backs the CONTENT only — the bar below
+                // must composite its material on the plain window backdrop,
+                // exactly like the side panels, or the tones diverge.
+                .background(
+                    Color(hex: appearance.backgroundHex)
+                        ?? Color(hex: AppearanceStore.defaultBackgroundHex)!
+                )
             if center.showBottomPanel {
                 bottomBar
                     // The search dropdown overlays upward across the content.
                     .zIndex(1)
             }
         }
-        .background(
-            Color(hex: appearance.backgroundHex)
-                ?? Color(hex: AppearanceStore.defaultBackgroundHex)!
-        )
     }
 
     @ViewBuilder
@@ -238,10 +253,9 @@ struct MainWindow: View {
                 }
             }
         }
-        .padding(8)
-        // Same surface as the side panels: those show the window's vibrancy
-        // material, NOT windowBackgroundColor — which in dark mode is #1E1E1E,
-        // identical to the default grid background and thus invisible.
+        .padding(.horizontal, 8)
+        .frame(height: PanelMetrics.barHeight)
+        // Same surface as the side panels (see PanelMetrics).
         .background(.bar)
     }
 

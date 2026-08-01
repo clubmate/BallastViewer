@@ -17,7 +17,7 @@ struct InspectorView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     title
@@ -28,8 +28,10 @@ struct InspectorView: View {
                 }
                 .padding(10)
             }
+            Divider()
             footer
         }
+        .background(.bar)
     }
 
     // MARK: Title (spec §9.8 item 1)
@@ -273,6 +275,6 @@ struct InspectorView: View {
         }
         .disabled(selectedIds.isEmpty)
         .padding(.horizontal, 10)
-        .padding(.bottom, 10)
+        .frame(height: PanelMetrics.footerHeight)
     }
 }
