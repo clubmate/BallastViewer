@@ -4,9 +4,9 @@ import SwiftUI
 
 /// Centre pane in single mode (spec §9.4): the anchor photo scaled to fit,
 /// centred; spinner while decoding, warning triangle on failure, "No Photo
-/// Selected" without an anchor. Deliberate deviation from the original's
-/// full-resolution decode: the largest thumbnail bucket (2048 px) is plenty
-/// for display and keeps RAW navigation fast (spec §17.5, plan step 6).
+/// Selected" without an anchor. Displays the original file at full resolution
+/// (U15) — the user's libraries hold modest-sized images, so a display-bucket
+/// thumbnail tier is unnecessary.
 struct SingleView: View {
     let photo: GridPhoto?
     let pipeline: ThumbnailPipeline
@@ -25,9 +25,7 @@ struct SingleView: View {
                 content(for: photo)
                     .task(id: photo.path) {
                         state = .loading
-                        let box = await pipeline.thumbnail(
-                            forPath: photo.path, longEdge: ThumbnailBuckets.largest
-                        )
+                        let box = await pipeline.originalImage(forPath: photo.path)
                         guard !Task.isCancelled else { return }
                         state = box.map { .loaded($0.image) } ?? .failed
                     }

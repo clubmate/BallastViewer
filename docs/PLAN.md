@@ -31,6 +31,7 @@ Rebuild of BALLASTVIEW per `docs/BALLASTVIEW-SPEC.md`. One step per Claude Code 
 | U12 | MIDI: hot-plug (C10), length-based parser (C9), output device picker, distinct sync alert wording. |
 | U13 | Menu stays "Library"; library shown by filename with extension consistently. |
 | U14 | Library menu is a pure switcher (all known libraries, checkmark on the open one, ⇧⌘L Manage Libraries…). ALL management lives in Settings ▸ Libraries: a select field picks the library to manage (never opens it), its folders listed below with add/remove — imports work into closed libraries via a short-lived pool — plus New / Add Existing (validated, not opened) / Delete (red, confirmed, to Trash). Known-libraries list is unbounded (replaces the 10-entry recents); the fixed ⇧⌘N/⇧⌘O/⇧⌘I shortcuts are gone. Day-to-day import stays via drag & drop and the sidebar button. |
+| U15 | Single view decodes the ORIGINAL file (memory-cached, no disk cache) instead of a 2048 px thumbnail; the 2048 bucket is gone entirely (buckets are now 256/768, grid-only). User-driven: libraries hold modest-sized images, no RAW. |
 
 ## Steps
 

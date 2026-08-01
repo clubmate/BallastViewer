@@ -60,6 +60,29 @@ actor ThumbnailPipeline {
         return await cachedThumbnail(key: key, path: path, longEdge: longEdge)
     }
 
+    /// Full-size decode for the single view (U15): no downscale, no disk cache
+    /// (the original is already on disk; a JPEG re-encode would only add loss).
+    /// Memory-cached so flipping back and forth between photos stays instant.
+    nonisolated func originalImage(forPath path: String) async -> CGImageBox? {
+        let modificationTime = Self.modificationTime(atPath: path)
+        let key = "\(path)|\(Int(modificationTime))|original"
+        return await cachedOriginal(key: key, path: path)
+    }
+
+    private func cachedOriginal(key: String, path: String) async -> CGImageBox? {
+        if let hit = memory.object(forKey: key as NSString) {
+            counters.memoryHits += 1
+            return CGImageBox(image: hit)
+        }
+        await acquireSlot()
+        defer { releaseSlot() }
+        if Task.isCancelled { return nil }
+        guard let decoded = await Self.decodeFull(path: path) else { return nil }
+        counters.decodes += 1
+        store(decoded, forKey: key)
+        return decoded
+    }
+
     private func cachedThumbnail(key: String, path: String, longEdge: Int) async -> CGImageBox? {
         if let hit = memory.object(forKey: key as NSString) {
             counters.memoryHits += 1
@@ -159,6 +182,19 @@ actor ThumbnailPipeline {
         context.fill(rect)
         context.draw(image, in: rect)
         return context.makeImage() ?? image
+    }
+
+    nonisolated private static func decodeFull(path: String) async -> CGImageBox? {
+        let url = URL(fileURLWithPath: path)
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
+              let image = CGImageSourceCreateImageAtIndex(
+                source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+              )
+        else { return nil }
+        // Q5: CGImageSourceCreateImageAtIndex never applies the EXIF transform —
+        // unrotated by construction, matching the grid decode.
+        return CGImageBox(image: flattenedIfTransparent(image))
     }
 
     nonisolated private static func decodeCacheFile(_ url: URL) async -> CGImageBox? {

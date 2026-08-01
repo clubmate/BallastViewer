@@ -77,7 +77,7 @@ import Testing
         #expect(ThumbnailBuckets.bucket(forPixelSize: 100) == 256)
         #expect(ThumbnailBuckets.bucket(forPixelSize: 256) == 256)
         #expect(ThumbnailBuckets.bucket(forPixelSize: 257) == 768)
-        #expect(ThumbnailBuckets.bucket(forPixelSize: 2000) == 2048)
-        #expect(ThumbnailBuckets.bucket(forPixelSize: 9999) == 2048)
+        #expect(ThumbnailBuckets.bucket(forPixelSize: 768) == 768)
+        #expect(ThumbnailBuckets.bucket(forPixelSize: 9999) == 768)
     }
 }
