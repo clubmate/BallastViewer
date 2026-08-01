@@ -28,9 +28,22 @@ struct MainWindow: View {
     @FocusState private var searchFocused: Bool
     /// Closed on accept/submit even though text is still present (spec §11.3).
     @State private var showSearchSuggestions = false
-    /// Live pane widths, used to place the divider covers (see libraryContent).
-    @State private var sidebarWidth: CGFloat = 0
-    @State private var inspectorWidth: CGFloat = 0
+    /// Panel widths, owned by us (not a split view — see libraryContent) so
+    /// hide/show round-trips and relaunches keep the exact width. Persisted
+    /// on drag end.
+    @State private var sidebarWidth: CGFloat = Self.storedPanelWidth(
+        "sidebarPanelWidth", fallback: 300
+    )
+    @State private var inspectorWidth: CGFloat = Self.storedPanelWidth(
+        "inspectorPanelWidth", fallback: 350
+    )
+    /// Width of the pane being dragged, captured at drag start.
+    @State private var paneDragBase: CGFloat?
+
+    private static func storedPanelWidth(_ key: String, fallback: CGFloat) -> CGFloat {
+        let stored = UserDefaults.standard.double(forKey: key)
+        return stored > 0 ? stored : fallback
+    }
 
     var body: some View {
         Group {
@@ -124,46 +137,61 @@ struct MainWindow: View {
         return true
     }
 
+    /// Hand-rolled three-pane layout. HSplitView was dropped deliberately: its
+    /// divider renders an unstylable black line, and it re-adds a hidden pane
+    /// at its ideal width (ignoring `idealWidth`), so every panel toggle
+    /// resized the grid. Here the widths are plain state.
     private var libraryContent: some View {
-        HSplitView {
+        HStack(spacing: 0) {
             if center.showLeftPanel {
                 SidebarView(sidebar: sidebar, center: center)
-                    .frame(minWidth: 200, maxWidth: 300, maxHeight: .infinity)
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
-                        sidebarWidth = $0
-                    }
+                    .frame(width: sidebarWidth)
+                paneDivider { delta in
+                    if paneDragBase == nil { paneDragBase = sidebarWidth }
+                    sidebarWidth = min(300, max(200, paneDragBase! + delta))
+                } commit: {
+                    UserDefaults.standard.set(Double(sidebarWidth), forKey: "sidebarPanelWidth")
+                }
             }
             centerPane
                 .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
             if center.showRightPanel {
+                paneDivider { delta in
+                    if paneDragBase == nil { paneDragBase = inspectorWidth }
+                    inspectorWidth = min(350, max(250, paneDragBase! - delta))
+                } commit: {
+                    UserDefaults.standard.set(Double(inspectorWidth), forKey: "inspectorPanelWidth")
+                }
                 InspectorView()
-                    .frame(minWidth: 250, maxWidth: 350, maxHeight: .infinity)
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
-                        inspectorWidth = $0
-                    }
-            }
-        }
-        // HSplitView's 1 pt divider line is unstylable, renders black, and
-        // clips pane overlays — so the covers live on the split view itself,
-        // placed via the measured pane widths. Hit testing passes through;
-        // drag resizing keeps working.
-        .overlay(alignment: .leading) {
-            if center.showLeftPanel {
-                dividerCover.offset(x: sidebarWidth)
-            }
-        }
-        .overlay(alignment: .trailing) {
-            if center.showRightPanel {
-                dividerCover.offset(x: -inspectorWidth)
+                    .frame(width: inspectorWidth)
             }
         }
     }
 
-    private var dividerCover: some View {
+    /// A 1 pt divider in the panel material with a wider invisible grab area.
+    /// `resize` receives the cumulative drag delta; `commit` runs on drag end.
+    private func paneDivider(
+        resize: @escaping (CGFloat) -> Void, commit: @escaping () -> Void
+    ) -> some View {
         Rectangle()
             .fill(.bar)
             .frame(width: 1)
-            .allowsHitTesting(false)
+            .overlay {
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture(coordinateSpace: .global)
+                            .onChanged { resize($0.translation.width) }
+                            .onEnded { _ in
+                                paneDragBase = nil
+                                commit()
+                            }
+                    )
+            }
     }
 
     @ViewBuilder
