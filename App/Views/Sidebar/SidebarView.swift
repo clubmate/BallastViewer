@@ -118,6 +118,9 @@ struct SidebarView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
+                // Optically centred under the count badges in the rows below —
+                // flush-right the glyph sat visibly right of the badge pills.
+                .padding(.trailing, 4)
                 .help("New Smart Collection")
             }
         }

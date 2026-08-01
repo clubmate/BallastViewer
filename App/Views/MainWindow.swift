@@ -314,13 +314,14 @@ struct MainWindow: View {
 
                 Spacer()
 
+                // No step: — a stepped macOS slider draws tick marks; the
+                // binding rounds to whole columns anyway.
                 Slider(
                     value: Binding(
                         get: { Double(center.columnCount) },
                         set: { center.columnCount = Int($0.rounded()) }
                     ),
-                    in: 1...10,
-                    step: 1
+                    in: 1...10
                 )
                 .frame(minWidth: 80, idealWidth: 150, maxWidth: 150)
                 Picker("Sort", selection: $center.sortOption) {
@@ -386,6 +387,10 @@ struct MainWindow: View {
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(.separator, lineWidth: 1)
         )
         // 200 pt per spec §9.6, but compressible — at the 400 pt minimum
         // centre width the bar must never push the mode picker out.
