@@ -46,7 +46,12 @@ struct MainWindow: View {
     }
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            // Our own always-on titlebar separator: AppKit's .automatic one
+            // appears and disappears with layout state, so it is pinned off
+            // and this Divider (same style as the panel footer lines) marks
+            // the titlebar edge deterministically.
+            Divider()
             if controller.isLibraryOpen {
                 libraryContent
             } else {
