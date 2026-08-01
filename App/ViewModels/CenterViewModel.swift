@@ -3,16 +3,11 @@ import BallastCore
 import Observation
 
 /// Lightweight value the grid renders — decoupled from PhotoRecord so the
-/// view layer never touches DB types directly. Carries the badge facts (U6);
-/// their visibility is a view-layer concern.
+/// view layer never touches DB types directly.
 struct GridPhoto: Identifiable, Hashable, Sendable {
     let id: Int64
     let path: String
     let orientation: Int
-    let rating: Int
-    /// Keyword badge dot colors (hex): one per effective group in group order,
-    /// grey last for ad-hoc keywords (mirrors the Q18 chip order), capped at 5.
-    let badgeColors: [String]
 }
 
 enum ViewMode: Equatable {
@@ -47,10 +42,6 @@ final class CenterViewModel {
     }
     var showBottomPanel = true {
         didSet { UserDefaults.standard.set(showBottomPanel, forKey: "showBottomPanel") }
-    }
-    /// Grid badges (U6): rating pips + keyword group dots, default on.
-    var showBadges = true {
-        didSet { UserDefaults.standard.set(showBadges, forKey: "showGridBadges") }
     }
 
     /// Filtered + sorted photos, in display order. Maintained incrementally.
@@ -124,7 +115,6 @@ final class CenterViewModel {
         showLeftPanel = defaults.object(forKey: "showLeftPanel") as? Bool ?? true
         showRightPanel = defaults.object(forKey: "showRightPanel") as? Bool ?? true
         showBottomPanel = defaults.object(forKey: "showBottomPanel") as? Bool ?? true
-        showBadges = defaults.object(forKey: "showGridBadges") as? Bool ?? true
         controller.addCatalogObserver { [weak self] event in
             self?.handle(event)
         }
@@ -241,32 +231,7 @@ final class CenterViewModel {
 
     private func makeGridPhoto(_ photo: PhotoRecord) -> GridPhoto? {
         guard let id = photo.id else { return nil }
-        return GridPhoto(
-            id: id, path: photo.path, orientation: photo.orientation,
-            rating: photo.rating, badgeColors: badgeColors(forPhotoId: id)
-        )
-    }
-
-    /// U6 keyword dots: the photo's effective groups in group order, grey last
-    /// for ad-hoc keywords — the same priority the chips use (Q18).
-    private func badgeColors(forPhotoId id: Int64) -> [String] {
-        guard let snapshot = controller.snapshot,
-              let keywordIds = snapshot.keywordIdsByPhoto[id], !keywordIds.isEmpty
-        else { return [] }
-        var groupIds: Set<Int64> = []
-        var hasAdHoc = false
-        for keywordId in keywordIds {
-            if let groupId = snapshot.keywordTree.effectiveGroupId(of: keywordId) {
-                groupIds.insert(groupId)
-            } else {
-                hasAdHoc = true
-            }
-        }
-        var colors = snapshot.keywordGroups
-            .filter { $0.id.map(groupIds.contains) ?? false }
-            .map(\.color)
-        if hasAdHoc { colors.append("#8E8E93FF") }
-        return Array(colors.prefix(5))
+        return GridPhoto(id: id, path: photo.path, orientation: photo.orientation)
     }
 
     /// Q1: a filter change relocates the anchor via the neighbour rule instead

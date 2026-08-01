@@ -22,7 +22,7 @@ Rebuild of BALLASTVIEW per `docs/BALLASTVIEW-SPEC.md`. One step per Claude Code 
 | U3 | Batch semantics win (C12): rating/rotation/keyword toggles apply to the whole selection from every source; anchor drives display/LEDs only. |
 | U4 | Mixed-rating multi-selection shows a "mixed" indicator, not 0 stars. |
 | U5 | Search field visible in both view modes, searches keywords AND filenames (fixes C6). *(The floating "active filter" chip was removed post-step-12 on user request.)* |
-| U6 | Grid badges (group-color keyword dots only — rating pips removed post-step-12 on user request), toggleable via View menu, default on. |
+| U6 | ~~Grid badges~~ *(removed entirely post-step-12 on user request: first the rating pips, then the keyword dots and the View-menu toggle; thumbnails are now unadorned).* |
 | U7 | Confirmations for all destructive actions with affected counts (fixes C14). |
 | U8 | Undo (NSUndoManager) for photo mutations incl. batches, and folder removal. |
 | U9 | Sort options: Filename (real filename), Path (original behavior), Capture Date (new — EXIF DateTimeOriginal in the model), Date Added, Random (Q2 intact). |

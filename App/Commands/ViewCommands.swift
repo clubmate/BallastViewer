@@ -15,12 +15,6 @@ struct ViewCommands: Commands {
             toggle(shown: center.showLeftPanel, name: "Left Panel", action: .toggleLeftPanel)
             toggle(shown: center.showRightPanel, name: "Right Panel", action: .toggleRightPanel)
             toggle(shown: center.showBottomPanel, name: "Bottom Panel", action: .toggleBottomPanel)
-            Divider()
-            // U6: grid badges, default on. Not one of the nineteen actions —
-            // a plain menu toggle without a recordable shortcut.
-            Button(center.showBadges ? "Hide Badges" : "Show Badges") {
-                center.showBadges.toggle()
-            }
         }
     }
 

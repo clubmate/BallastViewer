@@ -1,10 +1,9 @@
 import AppKit
 import BallastCore
 
-/// One reusable grid item: pixels plus the U6 keyword-dot badges, transparent while
-/// loading (spec §9.3), 3 pt accent border with radius 4 when selected. The
-/// bitmap is decoded unrotated and transformed at the layer level (Q5), so
-/// rotation never re-decodes.
+/// One reusable grid item: transparent while loading (spec §9.3), 3 pt accent
+/// border with radius 4 when selected. The bitmap is decoded unrotated and
+/// transformed at the layer level (Q5), so rotation never re-decodes.
 final class GridViewItem: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("GridViewItem")
 
@@ -20,7 +19,6 @@ final class GridViewItem: NSCollectionViewItem {
         photo: GridPhoto,
         bucket: Int,
         isSelected: Bool,
-        showBadges: Bool,
         pipeline: ThumbnailPipeline,
         onClick: @escaping (Int64, NSEvent.ModifierFlags, Int) -> Void
     ) {
@@ -28,7 +26,6 @@ final class GridViewItem: NSCollectionViewItem {
         itemView.onClick = { modifiers, clickCount in onClick(photo.id, modifiers, clickCount) }
         itemView.setOrientation(photo.orientation)
         itemView.setImage(nil)
-        itemView.setBadges(colors: photo.badgeColors, visible: showBadges)
         setSelected(isSelected)
 
         loadTask?.cancel()
@@ -44,16 +41,10 @@ final class GridViewItem: NSCollectionViewItem {
     }
 
     /// Value-only refresh for an already-configured item — rotation updates the
-    /// layer transform without touching the cached bitmap (Q5), keyword
-    /// changes redraw the badges.
-    func update(photo: GridPhoto, showBadges: Bool) {
+    /// layer transform without touching the cached bitmap (Q5).
+    func update(photo: GridPhoto) {
         guard photo.id == photoId else { return }
         itemView.setOrientation(photo.orientation)
-        itemView.setBadges(colors: photo.badgeColors, visible: showBadges)
-    }
-
-    func setBadgesVisible(_ visible: Bool) {
-        itemView.setBadgesVisible(visible)
     }
 
     override func prepareForReuse() {
@@ -66,16 +57,13 @@ final class GridViewItem: NSCollectionViewItem {
 /// Layer-backed image view: CALayer.contents display is essentially free.
 /// Fill-crop is TOP-aligned (Q22) by selecting the square `contentsRect` of
 /// the source bitmap that, after the orientation transform, shows the top of
-/// the displayed image. Badges are sibling layers, unaffected by the rotation
-/// transform.
+/// the displayed image.
 final class GridItemView: NSView {
     var onClick: ((NSEvent.ModifierFlags, Int) -> Void)?
 
     private let imageLayer = CALayer()
     private var transform = OrientationTransform.forEXIF(1)
     private var imageSize = CGSize.zero
-    private var dotLayers: [CALayer] = []
-    private var badgesVisible = true
 
     init() {
         super.init(frame: .zero)
@@ -113,60 +101,6 @@ final class GridItemView: NSView {
         }
     }
 
-    // MARK: Badges (U6: group-color keyword dots bottom-right)
-
-    func setBadges(colors: [String], visible: Bool) {
-        withoutAnimation {
-            badgesVisible = visible
-            dotLayers.forEach { $0.removeFromSuperlayer() }
-            dotLayers = colors.map { hex in
-                Self.badgeLayer(color: HexColor.parse(hex).map(Self.nsColor) ?? .systemGray)
-            }
-            for badge in dotLayers {
-                badge.isHidden = !visible
-                layer?.addSublayer(badge)
-            }
-            layoutBadges()
-        }
-    }
-
-    func setBadgesVisible(_ visible: Bool) {
-        withoutAnimation {
-            badgesVisible = visible
-            for badge in dotLayers {
-                badge.isHidden = !visible
-            }
-        }
-    }
-
-    private static func badgeLayer(color: NSColor) -> CALayer {
-        let badge = CALayer()
-        badge.backgroundColor = color.cgColor
-        badge.borderColor = NSColor.black.withAlphaComponent(0.55).cgColor
-        badge.borderWidth = 0.5
-        return badge
-    }
-
-    private static func nsColor(_ hex: HexColor) -> NSColor {
-        NSColor(
-            srgbRed: CGFloat(hex.red) / 255, green: CGFloat(hex.green) / 255,
-            blue: CGFloat(hex.blue) / 255, alpha: CGFloat(hex.alpha) / 255
-        )
-    }
-
-    private func layoutBadges() {
-        let size: CGFloat = 6
-        let spacing: CGFloat = 3
-        let inset: CGFloat = 5
-        for (index, dot) in dotLayers.enumerated() {
-            dot.frame = CGRect(
-                x: bounds.width - inset - size - CGFloat(index) * (size + spacing), y: inset,
-                width: size, height: size
-            )
-            dot.cornerRadius = size / 2
-        }
-    }
-
     // MARK: Layout
 
     override func layout() {
@@ -174,7 +108,6 @@ final class GridItemView: NSView {
         withoutAnimation {
             imageLayer.frame = bounds
             applyTransform()
-            layoutBadges()
         }
     }
 

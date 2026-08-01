@@ -65,7 +65,6 @@ struct PhotoGridView: NSViewRepresentable {
             columnCount: viewModel.columnCount,
             spacing: spacing,
             selection: viewModel.selection,
-            showBadges: viewModel.showBadges,
             pipeline: pipeline
         )
     }
@@ -88,7 +87,6 @@ struct PhotoGridView: NSViewRepresentable {
         private var orderedIds: [Int64] = []
         private var indexById: [Int64: Int] = [:]
         private var selection = SelectionModel()
-        private var showBadges = true
         private var pipeline: ThumbnailPipeline?
 
         init(viewModel: CenterViewModel) {
@@ -100,18 +98,9 @@ struct PhotoGridView: NSViewRepresentable {
             columnCount: Int,
             spacing: Double,
             selection newSelection: SelectionModel,
-            showBadges newShowBadges: Bool,
             pipeline: ThumbnailPipeline
         ) {
             self.pipeline = pipeline
-            if newShowBadges != showBadges {
-                showBadges = newShowBadges
-                if let collectionView {
-                    for case let item as GridViewItem in collectionView.visibleItems() {
-                        item.setBadgesVisible(newShowBadges)
-                    }
-                }
-            }
 
             // Fast path first: comparing ids is a cheap Int64 sweep, while a
             // full GridPhoto array compare walks 50k strings per keystroke —
@@ -126,7 +115,7 @@ struct PhotoGridView: NSViewRepresentable {
                     for case let item as GridViewItem in collectionView.visibleItems() {
                         if let index = indexById[item.photoId],
                            photos[index] != previous[index] {
-                            item.update(photo: photos[index], showBadges: showBadges)
+                            item.update(photo: photos[index])
                         }
                     }
                 }
@@ -214,7 +203,6 @@ struct PhotoGridView: NSViewRepresentable {
                 photo: photo,
                 bucket: bucket,
                 isSelected: selection.isSelected(photo.id),
-                showBadges: showBadges,
                 pipeline: pipeline
             ) { [weak self] id, modifiers, clickCount in
                 self?.viewModel.handleClick(on: id, modifiers: modifiers, clickCount: clickCount)
