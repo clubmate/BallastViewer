@@ -189,8 +189,9 @@ struct MainWindow: View {
     }
 
     /// Bottom bar per spec §9.6 — mode switch in both modes; search, slider and
-    /// sort in grid mode only (single mode shows just the switch; the search
-    /// filter itself stays active across the mode change).
+    /// sort in grid mode only. The search filter stays active across the mode
+    /// change, so single mode names it (with the position among the matches) —
+    /// otherwise the filter would invisibly truncate the list (C6).
     private var bottomBar: some View {
         @Bindable var center = center
         return HStack {
@@ -225,6 +226,16 @@ struct MainWindow: View {
                 .fixedSize()
             } else {
                 Spacer()
+                if !center.searchText.isEmpty {
+                    Text(
+                        "Active search: \(center.searchText) "
+                            + "(\(center.anchorPosition.map { String($0 + 1) } ?? "–")/\(center.visiblePhotos.count))"
+                    )
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                }
             }
         }
         .padding(8)
