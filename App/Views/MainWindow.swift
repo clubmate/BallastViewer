@@ -239,9 +239,10 @@ struct MainWindow: View {
             }
         }
         .padding(8)
-        // Same background as the side panels (which show the plain window
-        // background), so the bar reads as chrome, not as part of the grid.
-        .background(Color(nsColor: .windowBackgroundColor))
+        // Same surface as the side panels: those show the window's vibrancy
+        // material, NOT windowBackgroundColor — which in dark mode is #1E1E1E,
+        // identical to the default grid background and thus invisible.
+        .background(.bar)
     }
 
     // MARK: Search (spec §11.3, C6/U5, Q21 via the focused-text-field pass-through)
