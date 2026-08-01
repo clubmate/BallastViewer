@@ -209,6 +209,16 @@ struct MainWindow: View {
     /// otherwise the filter would invisibly truncate the list (C6).
     private var bottomBar: some View {
         @Bindable var center = center
+        return VStack(spacing: 0) {
+            Divider()
+            bottomBarContent
+        }
+        // Same surface as the side panels (see PanelMetrics).
+        .background(.bar)
+    }
+
+    private var bottomBarContent: some View {
+        @Bindable var center = center
         return HStack {
             Picker("View Mode", selection: $center.viewMode) {
                 Image(systemName: "square.grid.2x2").tag(ViewMode.grid)
@@ -254,9 +264,7 @@ struct MainWindow: View {
             }
         }
         .padding(.horizontal, 8)
-        .frame(height: PanelMetrics.barHeight)
-        // Same surface as the side panels (see PanelMetrics).
-        .background(.bar)
+        .frame(height: PanelMetrics.footerHeight)
     }
 
     // MARK: Search (spec §11.3, C6/U5, Q21 via the focused-text-field pass-through)
@@ -266,33 +274,41 @@ struct MainWindow: View {
         return KeywordAutocomplete.suggestions(for: center.searchText, tree: tree)
     }
 
+    /// Same visual recipe as the inspector's Add Keyword field: a plain text
+    /// field in a controlBackgroundColor rounded rect — a bordered field is
+    /// invisible against the bar material.
     private var searchField: some View {
         @Bindable var center = center
-        return TextField("Search", text: $center.searchText)
-            .textFieldStyle(.roundedBorder)
-            // 200 pt per spec §9.6, but compressible — at the 400 pt minimum
-            // centre width the bar must never push the mode picker out.
-            .frame(minWidth: 80, idealWidth: 200, maxWidth: 200)
-            .focused($searchFocused)
-            .onChange(of: center.searchText) {
-                showSearchSuggestions = true
-            }
-            .onSubmit {
-                showSearchSuggestions = false
-            }
-            .overlay(alignment: .trailing) {
-                if !center.searchText.isEmpty {
-                    Button {
-                        center.searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .padding(.trailing, 4)
+        return HStack(spacing: 4) {
+            TextField("Search", text: $center.searchText)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .onChange(of: center.searchText) {
+                    showSearchSuggestions = true
                 }
+                .onSubmit {
+                    showSearchSuggestions = false
+                }
+            if !center.searchText.isEmpty {
+                Button {
+                    center.searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
-            .overlay(alignment: .topLeading) {
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        // 200 pt per spec §9.6, but compressible — at the 400 pt minimum
+        // centre width the bar must never push the mode picker out.
+        .frame(minWidth: 80, idealWidth: 200, maxWidth: 200)
+        .overlay(alignment: .topLeading) {
                 let suggestions = searchSuggestions
                 if searchFocused && showSearchSuggestions && !suggestions.isEmpty {
                     searchSuggestionList(suggestions)

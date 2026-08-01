@@ -264,14 +264,6 @@ struct InspectorView: View {
             }
             .buttonStyle(.borderless)
             .help("Reveal in Finder")
-
-            ShareLink(items: selectedIds.compactMap { id in
-                controller.photo(withId: id).map { URL(fileURLWithPath: $0.path) }
-            }) {
-                Image(systemName: "square.and.arrow.up")
-            }
-            .buttonStyle(.borderless)
-            .help("Share")
         }
         .disabled(selectedIds.isEmpty)
         .padding(.horizontal, 10)
