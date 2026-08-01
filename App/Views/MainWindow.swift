@@ -433,6 +433,9 @@ struct MainWindow: View {
         private static func configureTitlebar(_ window: NSWindow) {
             window.titlebarAppearsTransparent = true
             window.styleMask.insert(.fullSizeContentView)
+            // .automatic draws a hairline under the titlebar at launch that
+            // vanishes after layout changes — pin it off for a stable look.
+            window.titlebarSeparatorStyle = .none
         }
     }
 }
