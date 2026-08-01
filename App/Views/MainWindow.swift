@@ -188,8 +188,9 @@ struct MainWindow: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Bottom bar per spec §9.6 — mode switch and search in BOTH modes (C6/U5);
-    /// slider + sort in grid mode; position indicator in single mode.
+    /// Bottom bar per spec §9.6 — mode switch in both modes; search, slider and
+    /// sort in grid mode only (single mode shows just the switch; the search
+    /// filter itself stays active across the mode change).
     private var bottomBar: some View {
         @Bindable var center = center
         return HStack {
@@ -201,12 +202,11 @@ struct MainWindow: View {
             .labelsHidden()
             .fixedSize()
 
-            searchField
+            if center.viewMode == .grid {
+                searchField
 
-            Spacer()
+                Spacer()
 
-            switch center.viewMode {
-            case .grid:
                 Slider(
                     value: Binding(
                         get: { Double(center.columnCount) },
@@ -223,10 +223,8 @@ struct MainWindow: View {
                 }
                 .labelsHidden()
                 .fixedSize()
-            case .single:
-                Text("\(center.anchorPosition.map { String($0 + 1) } ?? "–") / \(center.visiblePhotos.count)")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+            } else {
+                Spacer()
             }
         }
         .padding(8)
