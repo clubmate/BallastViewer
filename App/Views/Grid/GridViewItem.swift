@@ -1,7 +1,7 @@
 import AppKit
 import BallastCore
 
-/// One reusable grid item: pixels plus the U6 badges, transparent while
+/// One reusable grid item: pixels plus the U6 keyword-dot badges, transparent while
 /// loading (spec §9.3), 3 pt accent border with radius 4 when selected. The
 /// bitmap is decoded unrotated and transformed at the layer level (Q5), so
 /// rotation never re-decodes.
@@ -28,7 +28,7 @@ final class GridViewItem: NSCollectionViewItem {
         itemView.onClick = { modifiers, clickCount in onClick(photo.id, modifiers, clickCount) }
         itemView.setOrientation(photo.orientation)
         itemView.setImage(nil)
-        itemView.setBadges(rating: photo.rating, colors: photo.badgeColors, visible: showBadges)
+        itemView.setBadges(colors: photo.badgeColors, visible: showBadges)
         setSelected(isSelected)
 
         loadTask?.cancel()
@@ -44,12 +44,12 @@ final class GridViewItem: NSCollectionViewItem {
     }
 
     /// Value-only refresh for an already-configured item — rotation updates the
-    /// layer transform without touching the cached bitmap (Q5), rating/keyword
+    /// layer transform without touching the cached bitmap (Q5), keyword
     /// changes redraw the badges.
     func update(photo: GridPhoto, showBadges: Bool) {
         guard photo.id == photoId else { return }
         itemView.setOrientation(photo.orientation)
-        itemView.setBadges(rating: photo.rating, colors: photo.badgeColors, visible: showBadges)
+        itemView.setBadges(colors: photo.badgeColors, visible: showBadges)
     }
 
     func setBadgesVisible(_ visible: Bool) {
@@ -74,7 +74,6 @@ final class GridItemView: NSView {
     private let imageLayer = CALayer()
     private var transform = OrientationTransform.forEXIF(1)
     private var imageSize = CGSize.zero
-    private var ratingLayers: [CALayer] = []
     private var dotLayers: [CALayer] = []
     private var badgesVisible = true
 
@@ -114,18 +113,16 @@ final class GridItemView: NSView {
         }
     }
 
-    // MARK: Badges (U6: rating pips bottom-left, keyword dots bottom-right)
+    // MARK: Badges (U6: group-color keyword dots bottom-right)
 
-    func setBadges(rating: Int, colors: [String], visible: Bool) {
+    func setBadges(colors: [String], visible: Bool) {
         withoutAnimation {
             badgesVisible = visible
-            ratingLayers.forEach { $0.removeFromSuperlayer() }
             dotLayers.forEach { $0.removeFromSuperlayer() }
-            ratingLayers = (0..<rating).map { _ in Self.badgeLayer(color: .white) }
             dotLayers = colors.map { hex in
                 Self.badgeLayer(color: HexColor.parse(hex).map(Self.nsColor) ?? .systemGray)
             }
-            for badge in ratingLayers + dotLayers {
+            for badge in dotLayers {
                 badge.isHidden = !visible
                 layer?.addSublayer(badge)
             }
@@ -136,7 +133,7 @@ final class GridItemView: NSView {
     func setBadgesVisible(_ visible: Bool) {
         withoutAnimation {
             badgesVisible = visible
-            for badge in ratingLayers + dotLayers {
+            for badge in dotLayers {
                 badge.isHidden = !visible
             }
         }
@@ -161,13 +158,6 @@ final class GridItemView: NSView {
         let size: CGFloat = 6
         let spacing: CGFloat = 3
         let inset: CGFloat = 5
-        for (index, pip) in ratingLayers.enumerated() {
-            pip.frame = CGRect(
-                x: inset + CGFloat(index) * (size + spacing), y: inset,
-                width: size, height: size
-            )
-            pip.cornerRadius = size / 2
-        }
         for (index, dot) in dotLayers.enumerated() {
             dot.frame = CGRect(
                 x: bounds.width - inset - size - CGFloat(index) * (size + spacing), y: inset,

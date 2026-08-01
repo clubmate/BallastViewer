@@ -21,8 +21,8 @@ Rebuild of BALLASTVIEW per `docs/BALLASTVIEW-SPEC.md`. One step per Claude Code 
 | U2 | Import is recursive by default with an "Include subfolders" toggle (fixes C1); drag & drop import; progress + summary ("312 added, 40 skipped"). |
 | U3 | Batch semantics win (C12): rating/rotation/keyword toggles apply to the whole selection from every source; anchor drives display/LEDs only. |
 | U4 | Mixed-rating multi-selection shows a "mixed" indicator, not 0 stars. |
-| U5 | Search field visible in both view modes, active filter shown as dismissible chip, searches keywords AND filenames (fixes C6). |
-| U6 | Grid badges (rating pips + group-color keyword dots), toggleable via View menu, default on. |
+| U5 | Search field visible in both view modes, searches keywords AND filenames (fixes C6). *(The floating "active filter" chip was removed post-step-12 on user request.)* |
+| U6 | Grid badges (group-color keyword dots only — rating pips removed post-step-12 on user request), toggleable via View menu, default on. |
 | U7 | Confirmations for all destructive actions with affected counts (fixes C14). |
 | U8 | Undo (NSUndoManager) for photo mutations incl. batches, and folder removal. |
 | U9 | Sort options: Filename (real filename), Path (original behavior), Capture Date (new — EXIF DateTimeOriginal in the model), Date Added, Random (Q2 intact). |

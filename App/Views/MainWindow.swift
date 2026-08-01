@@ -128,15 +128,6 @@ struct MainWindow: View {
     private var centerPane: some View {
         VStack(spacing: 0) {
             centerContent
-                .overlay(alignment: .topTrailing) {
-                    // U5: the active filter as a dismissible chip, floating
-                    // above the content so it is visible in both modes even when the
-                    // bottom bar is hidden or cramped (C6).
-                    if !center.searchText.isEmpty {
-                        searchChip
-                            .padding(10)
-                    }
-                }
             if center.showBottomPanel {
                 bottomBar
                     // The search dropdown overlays upward across the content.
@@ -314,28 +305,5 @@ struct MainWindow: View {
                 }
             }
         }
-    }
-
-    /// U5: the active filter as a dismissible chip — visible in both modes, so
-    /// a stale search can never invisibly truncate the list (C6).
-    private var searchChip: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "magnifyingglass")
-                .font(.caption)
-            Text(center.searchText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Button {
-                center.searchText = ""
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-        }
-        .font(.callout)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Color.accentColor.opacity(0.25), in: Capsule())
     }
 }
