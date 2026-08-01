@@ -31,7 +31,6 @@ struct InspectorView: View {
             Divider()
             footer
         }
-        .background(.bar)
     }
 
     // MARK: Title (spec §9.8 item 1)

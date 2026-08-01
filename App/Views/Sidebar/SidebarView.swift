@@ -62,7 +62,6 @@ struct SidebarView: View {
             .padding(.horizontal, 8)
             .frame(height: PanelMetrics.footerHeight)
         }
-        .background(.bar)
         .sidebarPrompts(sidebar: sidebar, center: center, controller: controller)
     }
 

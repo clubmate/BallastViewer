@@ -54,6 +54,13 @@ struct MainWindow: View {
             }
         }
         .frame(minWidth: 800, minHeight: 600)
+        // THE chrome surface: one .bar material for the whole window backdrop,
+        // extending under the transparent titlebar (backgrounds ignore the
+        // safe area). Panels, bars and dividers stay transparent and show this
+        // through — a second material layer on top would shift the tone, and
+        // the AppKit titlebar would otherwise tint differently over the dark
+        // grid than over the panels.
+        .background(.bar)
         .navigationTitle(controller.libraryURL?.lastPathComponent ?? "ballastviewer")
         .background(MainWindowRegistrar())
         .onAppear {
@@ -173,8 +180,7 @@ struct MainWindow: View {
     private func paneDivider(
         resize: @escaping (CGFloat) -> Void, commit: @escaping () -> Void
     ) -> some View {
-        Rectangle()
-            .fill(.bar)
+        Color.clear
             .frame(width: 1)
             .overlay {
                 Color.clear
@@ -198,12 +204,13 @@ struct MainWindow: View {
     private var centerPane: some View {
         VStack(spacing: 0) {
             centerContent
-                // The appearance color backs the CONTENT only — the bar below
-                // must composite its material on the plain window backdrop,
-                // exactly like the side panels, or the tones diverge.
+                // The appearance color backs the CONTENT only — not the bar
+                // below, and not the titlebar above (ignoresSafeAreaEdges: []);
+                // both belong to the window-wide .bar material.
                 .background(
                     Color(hex: appearance.backgroundHex)
-                        ?? Color(hex: AppearanceStore.defaultBackgroundHex)!
+                        ?? Color(hex: AppearanceStore.defaultBackgroundHex)!,
+                    ignoresSafeAreaEdges: []
                 )
             if center.showBottomPanel {
                 bottomBar
@@ -271,8 +278,6 @@ struct MainWindow: View {
             Divider()
             bottomBarContent
         }
-        // Same surface as the side panels (see PanelMetrics).
-        .background(.bar)
     }
 
     private var bottomBarContent: some View {
@@ -326,6 +331,7 @@ struct MainWindow: View {
     }
 
     // MARK: Search (spec §11.3, C6/U5, Q21 via the focused-text-field pass-through)
+
 
     private var searchSuggestions: [String] {
         guard let tree = controller.snapshot?.keywordTree else { return [] }
@@ -406,6 +412,7 @@ struct MainWindow: View {
             let view = NSView()
             DispatchQueue.main.async { [weak view] in
                 ShortcutMonitor.mainWindow = view?.window
+                view?.window.map(Self.configureTitlebar)
             }
             return view
         }
@@ -414,8 +421,18 @@ struct MainWindow: View {
             if let window = view.window, ShortcutMonitor.mainWindow !== window {
                 DispatchQueue.main.async {
                     ShortcutMonitor.mainWindow = window
+                    Self.configureTitlebar(window)
                 }
             }
+        }
+
+        /// The AppKit titlebar blends with the content region below it, so its
+        /// tone shifted whenever the layout under it changed (panel toggles).
+        /// Transparent titlebar + full-size content lets the root .bar
+        /// material own that area instead — one deterministic surface.
+        private static func configureTitlebar(_ window: NSWindow) {
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
         }
     }
 }
