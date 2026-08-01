@@ -24,6 +24,7 @@ struct MainWindow: View {
     /// are undoable via the standard Edit menu (U8) while text fields keep
     /// their own undo through the responder chain.
     @Environment(\.undoManager) private var windowUndoManager
+    @Environment(\.displayScale) private var displayScale
 
     @FocusState private var searchFocused: Bool
     /// Closed on accept/submit even though text is still present (spec §11.3).
@@ -45,11 +46,12 @@ struct MainWindow: View {
         return stored > 0 ? stored : fallback
     }
 
-    /// AppKit's titlebar-separator tone: black in dark mode, softened in light.
+    /// Titlebar-separator tone: soft black over the dark chrome, fainter in
+    /// light mode.
     private static let titlebarSeparatorColor = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? .black
-            : NSColor.black.withAlphaComponent(0.2)
+            ? NSColor.black.withAlphaComponent(0.5)
+            : NSColor.black.withAlphaComponent(0.15)
     })
 
     var body: some View {
@@ -60,7 +62,9 @@ struct MainWindow: View {
             // state, .line draws nothing at all), so this line is ours.
             Rectangle()
                 .fill(Self.titlebarSeparatorColor)
-                .frame(height: 1)
+                // One DEVICE pixel — a 1 pt line is two pixels on Retina and
+                // reads as too thick.
+                .frame(height: 1 / displayScale)
             if controller.isLibraryOpen {
                 libraryContent
             } else {
