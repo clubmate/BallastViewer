@@ -239,7 +239,9 @@ struct MainWindow: View {
             }
         }
         .padding(8)
-        .background(Color(nsColor: .controlBackgroundColor))
+        // Same background as the side panels (which show the plain window
+        // background), so the bar reads as chrome, not as part of the grid.
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     // MARK: Search (spec §11.3, C6/U5, Q21 via the focused-text-field pass-through)
@@ -262,6 +264,18 @@ struct MainWindow: View {
             }
             .onSubmit {
                 showSearchSuggestions = false
+            }
+            .overlay(alignment: .trailing) {
+                if !center.searchText.isEmpty {
+                    Button {
+                        center.searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 4)
+                }
             }
             .overlay(alignment: .topLeading) {
                 let suggestions = searchSuggestions
