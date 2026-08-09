@@ -61,7 +61,11 @@ actor ThumbnailPipeline {
         // every scroll-back a disk round trip.
         let physical = Int(clamping: ProcessInfo.processInfo.physicalMemory)
         memory.totalCostLimit = min(max(300 * 1024 * 1024, physical / 8), 2 * 1024 * 1024 * 1024)
-        originalsMemory.countLimit = 3
+        // Sized for the real-world profile (preview scans ≤2K, ~10–16 MB
+        // decoded): a dozen originals keep multi-photo back-and-forth
+        // stepping entirely in memory, while the cost limit still bounds the
+        // pathological large-image case.
+        originalsMemory.countLimit = 12
         originalsMemory.totalCostLimit = 768 * 1024 * 1024
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cacheDirectory = caches
