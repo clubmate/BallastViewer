@@ -53,4 +53,16 @@ public struct KeyMap: Equatable, Sendable {
     public mutating func removeBinding(for chord: KeyChord) {
         bindings[chord.keyString] = nil
     }
+
+    /// Rewrites keyword bindings after a vocabulary rename (see
+    /// `ActionCommand.renamingKeywordPath`) so bindings follow the keyword
+    /// instead of going stale.
+    public mutating func renameKeywordPath(from oldPath: String, to newPath: String) {
+        for (key, actionString) in bindings {
+            guard let command = ActionCommand(actionString: actionString),
+                  let updated = command.renamingKeywordPath(from: oldPath, to: newPath)
+            else { continue }
+            bindings[key] = updated.actionString
+        }
+    }
 }

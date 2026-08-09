@@ -34,6 +34,10 @@ struct BallastviewerApp: App {
         _midiService = State(initialValue: MidiService(
             midiMap: midiMap, appearance: appearance, dispatcher: dispatcher, center: center
         ))
+        controller.keywordPathRenamed = { oldPath, newPath in
+            keyMap.renameKeywordPath(from: oldPath, to: newPath)
+            midiMap.renameKeywordPath(from: oldPath, to: newPath)
+        }
         AppDelegate.controller = controller
     }
 

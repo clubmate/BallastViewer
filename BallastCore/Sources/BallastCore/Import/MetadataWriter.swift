@@ -55,6 +55,10 @@ public enum MetadataWriter {
             for: .itemReplacementDirectory, in: .userDomainMask,
             appropriateFor: url, create: true
         )
+        // The replacement directory is ours to clean up — `replaceItemAt` only
+        // consumes the file inside it; without this every save leaks an empty
+        // "(A Document Being Saved By …)" directory.
+        defer { try? FileManager.default.removeItem(at: tempDir) }
         let tempURL = tempDir
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(url.pathExtension)
@@ -73,18 +77,12 @@ public enum MetadataWriter {
         guard CGImageDestinationCopyImageSource(
             destination, source, options as CFDictionary, &copyError
         ) else {
-            try? FileManager.default.removeItem(at: tempURL)
             let reason = (copyError?.takeRetainedValue()).map(String.init(describing:))
                 ?? "unknown error"
             throw MetadataWriteError.writeFailed(reason)
         }
 
-        do {
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
-        } catch {
-            try? FileManager.default.removeItem(at: tempURL)
-            throw error
-        }
+        _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
     }
 }
 

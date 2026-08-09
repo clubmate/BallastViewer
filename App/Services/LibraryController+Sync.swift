@@ -94,7 +94,7 @@ extension LibraryController {
             }
         }
 
-        applyMetadataValues(changes, actionName: "Load Metadata")
+        await applyMetadataValues(changes, actionName: "Load Metadata")
 
         var message = "Loaded metadata from \(changes.count) file\(changes.count == 1 ? "" : "s")."
         let inSync = jobs.count - changes.count - unreadable.count
@@ -107,10 +107,18 @@ extension LibraryController {
     /// transaction and registers the inverse as a single undo step. Keywords
     /// resolve through find-or-create node chains — the vocabulary only ever
     /// grows, never shrinks (fixes D2).
+    ///
+    /// The transaction runs on the write pipeline (ordered against everything
+    /// else, off the MainActor — thousands of changed photos must not freeze
+    /// the UI). `isSyncing` is raised for the duration so the modal progress
+    /// overlay blocks new mutations until memory mirrors the commit.
     func applyMetadataValues(
         _ changes: [(photoId: Int64, values: PhotoFileMetadata)], actionName: String
-    ) {
-        guard !changes.isEmpty, let snapshot else { return }
+    ) async {
+        guard !changes.isEmpty, snapshot != nil, let pipeline = writePipeline else { return }
+        let wasSyncing = isSyncing
+        isSyncing = true
+        defer { isSyncing = wasSyncing }
 
         // Inverse state before touching anything — same shape, same applier.
         let before: [(photoId: Int64, values: PhotoFileMetadata)] = changes.compactMap { change in
@@ -123,30 +131,37 @@ extension LibraryController {
             }
         }
 
-        struct TxResult {
+        struct TxResult: Sendable {
             var keywordRecords: [KeywordRecord]
             var idsByPhoto: [Int64: Set<Int64>]
         }
-        guard let result: TxResult = writeSync({ db in
-            var idsByPhoto: [Int64: Set<Int64>] = [:]
-            for change in changes {
-                try PhotoDAO.setRatings([(change.photoId, change.values.rating)], in: db)
-                try PhotoDAO.setOrientations([(change.photoId, change.values.orientation)], in: db)
-                var keywordIds: Set<Int64> = []
-                for keywordPath in change.values.keywords {
-                    let components = keywordPath.components(separatedBy: KeywordTree.separator)
-                    keywordIds.insert(try KeywordDAO.ensurePath(components, groupId: nil, in: db))
+        let result: TxResult
+        do {
+            result = try await pipeline.submitAndWait { db in
+                var idsByPhoto: [Int64: Set<Int64>] = [:]
+                for change in changes {
+                    try PhotoDAO.setRatings([(change.photoId, change.values.rating)], in: db)
+                    try PhotoDAO.setOrientations([(change.photoId, change.values.orientation)], in: db)
+                    var keywordIds: Set<Int64> = []
+                    for keywordPath in change.values.keywords {
+                        let components = keywordPath.components(separatedBy: KeywordTree.separator)
+                        keywordIds.insert(try KeywordDAO.ensurePath(components, groupId: nil, in: db))
+                    }
+                    try PhotoDAO.setKeywords(Array(keywordIds), forPhotoId: change.photoId, in: db)
+                    idsByPhoto[change.photoId] = keywordIds
                 }
-                try PhotoDAO.setKeywords(Array(keywordIds), forPhotoId: change.photoId, in: db)
-                idsByPhoto[change.photoId] = keywordIds
+                return TxResult(keywordRecords: try KeywordDAO.fetchAll(db), idsByPhoto: idsByPhoto)
             }
-            return TxResult(keywordRecords: try KeywordDAO.fetchAll(db), idsByPhoto: idsByPhoto)
-        }) else { return }
+        } catch {
+            errorMessage = "Could not save changes to the library.\n\(error.localizedDescription)"
+            return
+        }
 
+        let changesById = Dictionary(changes.map { ($0.photoId, $0.values) }) { first, _ in first }
         _ = mutatePhotos(ids: changes.map(\.photoId)) { photo in
-            guard let change = changes.first(where: { $0.photoId == photo.id }) else { return }
-            photo.rating = change.values.rating
-            photo.orientation = change.values.orientation
+            guard let values = photo.id.flatMap({ changesById[$0] }) else { return }
+            photo.rating = values.rating
+            photo.orientation = values.orientation
         }
         mutateSnapshot { snapshot in
             snapshot.keywordTree = KeywordTree(records: result.keywordRecords)
@@ -155,7 +170,9 @@ extension LibraryController {
             }
         }
         invalidateFacts(forPhotoIds: changes.map(\.photoId))
-        registerUndo(actionName) { $0.applyMetadataValues(before, actionName: actionName) }
+        registerUndo(actionName) { controller in
+            Task { await controller.applyMetadataValues(before, actionName: actionName) }
+        }
         emitCatalogEvent(.photosUpdated(changes.map(\.photoId)))
     }
 

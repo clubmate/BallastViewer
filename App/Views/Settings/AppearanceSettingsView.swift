@@ -14,7 +14,7 @@ struct AppearanceSettingsView: View {
                     Slider(value: $appearance.gridSpacing, in: 0...50, step: 1) {
                         Text("Spacing between images")
                     }
-                    Text("\(Int(appearance.gridSpacing)) px")
+                    Text("\(Int(appearance.gridSpacing)) pt")
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)

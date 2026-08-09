@@ -134,17 +134,31 @@ struct CollectionEditorSheet: View {
                 }
             }
             .labelsHidden()
-        case .captureDate:
+        case .captureDate, .dateRange:
+            // Both compare dates — a raw Unix-timestamp text field would
+            // silently produce a never-matching rule.
             DatePicker(
                 "",
                 selection: dateBinding(rule.value),
                 displayedComponents: .date
             )
             .labelsHidden()
-        case .keyword, .filename, .keywordCount, .dateRange, .importBatch:
+        case .keywordCount:
+            // Digits only: a non-numeric count would silently never match.
+            TextField("Count", text: numericBinding(rule.value))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 60)
+        case .keyword, .filename, .importBatch:
             TextField("Value", text: rule.value)
                 .textFieldStyle(.roundedBorder)
         }
+    }
+
+    private func numericBinding(_ value: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { value.wrappedValue },
+            set: { value.wrappedValue = String($0.filter(\.isNumber)) }
+        )
     }
 
     /// U10: unlike the original, "Unrated" (0) is expressible directly —

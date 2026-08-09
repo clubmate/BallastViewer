@@ -29,6 +29,9 @@ struct MainWindow: View {
     @FocusState private var searchFocused: Bool
     /// Closed on accept/submit even though text is still present (spec §11.3).
     @State private var showSearchSuggestions = false
+    /// Set when the search text changes programmatically (accepted suggestion)
+    /// so the text-change observer keeps the dropdown closed.
+    @State private var suppressNextSuggestionOpen = false
     /// Panel widths, owned by us (not a split view — see libraryContent) so
     /// hide/show round-trips and relaunches keep the exact width. Persisted
     /// on drag end.
@@ -291,8 +294,7 @@ struct MainWindow: View {
     /// change, so single mode names it (with the position among the matches) —
     /// otherwise the filter would invisibly truncate the list (C6).
     private var bottomBar: some View {
-        @Bindable var center = center
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             Divider()
             bottomBarContent
         }
@@ -367,7 +369,13 @@ struct MainWindow: View {
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
                 .onChange(of: center.searchText) {
-                    showSearchSuggestions = true
+                    // A programmatic change (accepted suggestion) must not
+                    // reopen the dropdown — "closed on accept" (spec §11.3).
+                    if suppressNextSuggestionOpen {
+                        suppressNextSuggestionOpen = false
+                    } else {
+                        showSearchSuggestions = true
+                    }
                 }
                 .onSubmit {
                     showSearchSuggestions = false
@@ -396,9 +404,13 @@ struct MainWindow: View {
         // centre width the bar must never push the mode picker out.
         .frame(minWidth: 80, idealWidth: 200, maxWidth: 200)
         .overlay(alignment: .topLeading) {
-                let suggestions = searchSuggestions
-                if searchFocused && showSearchSuggestions && !suggestions.isEmpty {
-                    searchSuggestionList(suggestions)
+                // Visibility first — the suggestion computation walks every
+                // keyword path and must not run on unrelated body passes.
+                if searchFocused && showSearchSuggestions {
+                    let suggestions = searchSuggestions
+                    if !suggestions.isEmpty {
+                        searchSuggestionList(suggestions)
+                    }
                 }
             }
     }
@@ -417,6 +429,7 @@ struct MainWindow: View {
                         .frame(height: 28)
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            suppressNextSuggestionOpen = true
                             center.searchText = path
                             showSearchSuggestions = false
                         }

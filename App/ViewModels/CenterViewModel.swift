@@ -306,7 +306,9 @@ final class CenterViewModel {
     }
 
     /// Photos that (re-)entered the filter: sorted insertion for the stable
-    /// options, shuffled append for Random (Q2).
+    /// options, position-stable insertion for Random (Q2) — a re-entering
+    /// photo returns to its place in the standing shuffle, exactly where the
+    /// next full rebuild would put it (appending would make it jump there).
     private func insert(_ records: [PhotoRecord]) {
         if sortOption == .random {
             var rng = SystemRandomNumberGenerator()
@@ -319,7 +321,8 @@ final class CenterViewModel {
                 (position[$0.id ?? -1] ?? .max) < (position[$1.id ?? -1] ?? .max)
             }) {
                 guard let gridPhoto = makeGridPhoto(record) else { continue }
-                visiblePhotos.append(gridPhoto)
+                let index = randomInsertionIndex(for: gridPhoto.id, position: position)
+                visiblePhotos.insert(gridPhoto, at: index)
                 visibleIdSet.insert(gridPhoto.id)
             }
         } else {
@@ -329,6 +332,23 @@ final class CenterViewModel {
                 visibleIdSet.insert(gridPhoto.id)
             }
         }
+    }
+
+    /// Binary search over the visible list, which in Random mode is ordered by
+    /// the standing shuffle's positions.
+    private func randomInsertionIndex(for id: Int64, position: [Int64: Int]) -> Int {
+        let target = position[id] ?? .max
+        var low = 0
+        var high = visiblePhotos.count
+        while low < high {
+            let mid = (low + high) / 2
+            if (position[visiblePhotos[mid].id] ?? .max) < target {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
     }
 
     private func insertionIndex(for record: PhotoRecord) -> Int {

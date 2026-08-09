@@ -22,10 +22,16 @@ final class GridViewItem: NSCollectionViewItem {
         pipeline: ThumbnailPipeline,
         onClick: @escaping (Int64, NSEvent.ModifierFlags, Int) -> Void
     ) {
+        // Keep the current bitmap when re-configuring for the same photo
+        // (reloadData after a membership change): the async cache lookup means
+        // clearing here would flash every visible cell transparent.
+        let isSamePhoto = photoId == photo.id
         photoId = photo.id
         itemView.onClick = { modifiers, clickCount in onClick(photo.id, modifiers, clickCount) }
         itemView.setOrientation(photo.orientation)
-        itemView.setImage(nil)
+        if !isSamePhoto {
+            itemView.setImage(nil)
+        }
         setSelected(isSelected)
 
         loadTask?.cancel()

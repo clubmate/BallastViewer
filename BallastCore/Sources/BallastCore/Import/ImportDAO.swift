@@ -72,6 +72,8 @@ public enum ImportDAO {
             try photo.insert(db)
             for keywordPath in item.metadata.keywords {
                 let components = keywordPath.components(separatedBy: KeywordTree.separator)
+                    .map(KeywordDAO.normalize).filter { !$0.isEmpty }
+                guard !components.isEmpty else { continue }
                 let keywordId = try KeywordDAO.ensurePath(components, groupId: nil, in: db)
                 try PhotoDAO.assignKeyword(keywordId, toPhotoIds: [photo.id!], in: db)
             }

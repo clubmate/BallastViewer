@@ -1,5 +1,6 @@
 import AppKit
 import BallastCore
+import GRDB
 import Observation
 import UniformTypeIdentifiers
 
@@ -69,6 +70,11 @@ final class LibraryController {
     /// WritePipeline for why unstructured Tasks are not enough. Internal so
     /// the mutation extensions can submit.
     var writePipeline: WritePipeline?
+
+    /// Called with (old derived path, new derived path) after a keyword rename
+    /// — wired by BallastviewerApp so key/MIDI keyword bindings (stored as
+    /// path strings) follow the rename instead of going stale.
+    var keywordPathRenamed: (@MainActor (String, String) -> Void)?
 
     /// Derived query facts per photo (resolved keyword paths + effective group
     /// ids). Building these walks the keyword tree and joins strings — cached
@@ -283,18 +289,15 @@ final class LibraryController {
 
     private func releaseCurrent() {
         if let pipeline = writePipeline {
-            // Drain pending writes, then close — closing under a pending write
-            // would surface spurious errors. The captured pool keeps the
-            // connection alive until the drain completes.
-            let pool = library?.pool
+            // Drain pending writes BEFORE closing, synchronously: reopening the
+            // same library must never load a snapshot that queued writes then
+            // silently overtake. The queue holds only single-row updates, so
+            // the barrier is bounded and normally instant.
             writePipeline = nil
-            Task {
-                await pipeline.shutdown()
-                try? pool?.close()
-            }
-        } else {
-            try? library?.pool.close()
+            pipeline.flushSync()
+            Task { await pipeline.shutdown() }
         }
+        try? library?.pool.close()
         invalidateAllFacts()
         if let url = accessedURL {
             url.stopAccessingSecurityScopedResource()
@@ -310,30 +313,59 @@ final class LibraryController {
     /// Resolves and starts every folder's security-scoped bookmark. Folders
     /// added this session are implicitly accessible via their panel/drop URLs;
     /// this is what restores access after a relaunch.
+    ///
+    /// Failures are surfaced, not swallowed: a folder whose bookmark no longer
+    /// resolves (moved, renamed, volume gone) would otherwise fail diffusely
+    /// later — thumbnails blank, metadata write-back erroring per file. Stale
+    /// bookmarks are refreshed in place so they keep resolving.
     private func startFolderAccess(for folders: [FolderRecord]) {
+        var inaccessible: [String] = []
         for folder in folders {
             guard let data = folder.bookmark else { continue }
             var isStale = false
             guard let url = try? URL(
                 resolvingBookmarkData: data, options: .withSecurityScope,
                 relativeTo: nil, bookmarkDataIsStale: &isStale
-            ), url.startAccessingSecurityScopedResource() else { continue }
+            ), url.startAccessingSecurityScopedResource() else {
+                inaccessible.append((folder.path as NSString).lastPathComponent)
+                continue
+            }
             accessedFolderURLs.append(url)
+            if isStale, let folderId = folder.id,
+               let fresh = try? url.bookmarkData(
+                   options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil
+               )
+            {
+                persist { db in
+                    try FolderRecord.filter(key: folderId)
+                        .updateAll(db, Column("bookmark").set(to: fresh))
+                }
+            }
+        }
+        if !inaccessible.isEmpty {
+            errorMessage = "No access to \(inaccessible.count) photo folder\(inaccessible.count == 1 ? "" : "s") (moved or renamed?):\n"
+                + inaccessible.prefix(8).map { "• " + $0 }.joined(separator: "\n")
+                + "\n\nRe-add the folder\(inaccessible.count == 1 ? "" : "s") to restore thumbnails and metadata sync."
         }
     }
 
     /// Reloads the in-memory snapshot after bulk changes (import, folder
     /// removal). Single-photo mutations go through `mutatePhotos` + a
     /// `.photosUpdated` event instead — never through a full reload.
-    func refreshSnapshot() {
+    ///
+    /// Pending write-through jobs are drained first — the DB read replaces the
+    /// in-memory authority, so it must not miss a commit that is still queued
+    /// (a rating pressed just before an import finishing would visibly revert).
+    func refreshSnapshot() async {
         guard let library else {
             snapshot = nil
             rebuildPhotoIndex()
             emitCatalogEvent(.catalogReplaced)
             return
         }
+        await writePipeline?.flush()
         do {
-            snapshot = try library.pool.read { try LibrarySnapshot.load($0) }
+            snapshot = try await library.pool.read { try LibrarySnapshot.load($0) }
             invalidateAllFacts()
             rebuildPhotoIndex()
             emitCatalogEvent(.catalogReplaced)

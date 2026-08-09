@@ -80,11 +80,13 @@ public enum MetadataReader {
         return result
     }
 
-    /// Uppercase, trim, de-duplicate, sort — the normalisation the whole app's
-    /// uppercase-centricity stems from (spec §6.1, Q15).
+    /// Uppercase, trim, NFC, de-duplicate, sort — the normalisation the whole
+    /// app's uppercase-centricity stems from (spec §6.1, Q15). Delegates the
+    /// per-string rule to `KeywordDAO.normalize` so files and typed input agree
+    /// byte-for-byte (decomposed umlauts from XMP would otherwise duplicate).
     public static func normalizeKeywords(_ raw: [String]) -> [String] {
         let cleaned = raw
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
+            .map { KeywordDAO.normalize($0) }
             .filter { !$0.isEmpty }
         return Array(Set(cleaned)).sorted()
     }

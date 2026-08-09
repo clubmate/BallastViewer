@@ -9,7 +9,7 @@ public enum SearchFilter {
     public static func matches(filename: String, keywordPaths: [String], query: String) -> Bool {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return true }
-        if filename.range(of: needle, options: .caseInsensitive) != nil { return true }
-        return keywordPaths.contains { $0.range(of: needle, options: .caseInsensitive) != nil }
+        if CaseInsensitiveMatch.contains(filename, needle) { return true }
+        return keywordPaths.contains { CaseInsensitiveMatch.contains($0, needle) }
     }
 }

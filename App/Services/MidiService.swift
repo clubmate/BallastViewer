@@ -20,6 +20,9 @@ final class MidiService {
     var captureHandler: (@MainActor (MidiAddress) -> Void)?
     /// Output destinations for the Appearance picker.
     private(set) var destinationNames: [String] = []
+    /// Resolved endpoints, refreshed on hot-plug — `send` must not enumerate
+    /// and re-resolve display names per LED update.
+    @ObservationIgnored private var destinations: [(endpoint: MIDIEndpointRef, name: String)] = []
 
     @ObservationIgnored private var client = MIDIClientRef()
     @ObservationIgnored private var inputPort = MIDIPortRef()
@@ -111,9 +114,12 @@ final class MidiService {
     }
 
     private func refreshDestinations() {
-        destinationNames = (0..<MIDIGetNumberOfDestinations()).compactMap { index in
-            Self.displayName(of: MIDIGetDestination(index))
+        destinations = (0..<MIDIGetNumberOfDestinations()).compactMap { index in
+            let endpoint = MIDIGetDestination(index)
+            guard endpoint != 0, let name = Self.displayName(of: endpoint) else { return nil }
+            return (endpoint, name)
         }
+        destinationNames = destinations.map(\.name)
     }
 
     nonisolated private static func displayName(of endpoint: MIDIEndpointRef) -> String? {
@@ -238,10 +244,9 @@ final class MidiService {
             &packetList, MemoryLayout<MIDIPacketList>.size, packet, 0, data.count, data
         )
         let selected = appearance.midiOutputDestination
-        for index in 0..<MIDIGetNumberOfDestinations() {
-            let destination = MIDIGetDestination(index)
-            if !selected.isEmpty, Self.displayName(of: destination) != selected { continue }
-            MIDISend(outputPort, destination, &packetList)
+        for destination in destinations {
+            if !selected.isEmpty, destination.name != selected { continue }
+            MIDISend(outputPort, destination.endpoint, &packetList)
         }
     }
 }

@@ -84,11 +84,11 @@ enum TestHooks {
         // opening it into the UI.
         if let name = env["BV_TEST_MANAGE"], let path = env["BV_TEST_MANAGE_FOLDER"] {
             let target = testURL(named: name)
-            let before = controller.folders(inLibraryAt: target).count
+            let before = await controller.folders(inLibraryAt: target).count
             await controller.importFolders(
                 [URL(fileURLWithPath: path, isDirectory: true)], recursive: true, into: target
             )
-            let after = controller.folders(inLibraryAt: target)
+            let after = await controller.folders(inLibraryAt: target)
             print(
                 "BVMANAGE target=\(target.lastPathComponent)",
                 "foldersBefore=\(before) after=\(after.count)",

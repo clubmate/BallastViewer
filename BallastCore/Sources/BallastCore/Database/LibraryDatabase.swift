@@ -31,10 +31,17 @@ public struct LibraryDatabase: Sendable {
             throw LibraryDatabaseError.alreadyExists(url)
         }
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        let pool = try makePool(in: url)
-        try LibrarySchema.migrator.migrate(pool)
-        try pool.write { try LibrarySchema.seed($0) }
-        return LibraryDatabase(packageURL: url, pool: pool)
+        do {
+            let pool = try makePool(in: url)
+            try LibrarySchema.migrator.migrate(pool)
+            try pool.write { try LibrarySchema.seed($0) }
+            return LibraryDatabase(packageURL: url, pool: pool)
+        } catch {
+            // A half-created package would make every retry fail with
+            // `alreadyExists`; remove what we just created before rethrowing.
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
     }
 
     /// Opens an existing library package and migrates it forward if needed.

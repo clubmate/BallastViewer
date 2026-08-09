@@ -84,4 +84,18 @@ public enum ActionCommand: Hashable, Sendable {
         case .keyword(let keyword): "keyword:\(keyword)"
         }
     }
+
+    /// The command after the keyword node at `oldPath` was renamed so its
+    /// derived path is `newPath` — covers the node itself and its whole
+    /// subtree (descendant paths share the prefix). Nil when unaffected.
+    /// Without this, a binding would go dark after a rename and the next
+    /// press would re-create the old path as a fresh ad-hoc keyword.
+    public func renamingKeywordPath(from oldPath: String, to newPath: String) -> ActionCommand? {
+        guard case .keyword(let path) = self else { return nil }
+        if path == oldPath { return .keyword(newPath) }
+        if path.hasPrefix(oldPath + KeywordTree.separator) {
+            return .keyword(newPath + path.dropFirst(oldPath.count))
+        }
+        return nil
+    }
 }

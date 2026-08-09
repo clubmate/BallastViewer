@@ -20,14 +20,26 @@ public enum PhotoDAO {
         try PhotoRecord.fetchAll(db)
     }
 
+    /// SQLite binds one variable per id; a "Select All" over a big library can
+    /// exceed SQLITE_MAX_VARIABLE_NUMBER, so every id list is chunked.
+    static let idChunkSize = 500
+
     public static func setRating(_ rating: Int, forPhotoIds ids: [Int64], in db: Database) throws {
-        try PhotoRecord.filter(keys: ids)
-            .updateAll(db, Column("rating").set(to: rating))
+        for chunk in stride(from: 0, to: ids.count, by: idChunkSize)
+            .map({ ids[$0..<min($0 + idChunkSize, ids.count)] })
+        {
+            try PhotoRecord.filter(keys: chunk)
+                .updateAll(db, Column("rating").set(to: rating))
+        }
     }
 
     public static func setOrientation(_ orientation: Int, forPhotoIds ids: [Int64], in db: Database) throws {
-        try PhotoRecord.filter(keys: ids)
-            .updateAll(db, Column("orientation").set(to: orientation))
+        for chunk in stride(from: 0, to: ids.count, by: idChunkSize)
+            .map({ ids[$0..<min($0 + idChunkSize, ids.count)] })
+        {
+            try PhotoRecord.filter(keys: chunk)
+                .updateAll(db, Column("orientation").set(to: orientation))
+        }
     }
 
     /// Per-photo values (ratingUp/ratingDown produce different results across a
@@ -56,9 +68,13 @@ public enum PhotoDAO {
     }
 
     public static func removeKeyword(_ keywordId: Int64, fromPhotoIds ids: [Int64], in db: Database) throws {
-        try PhotoKeywordRecord
-            .filter(Column("keywordId") == keywordId && ids.contains(Column("photoId")))
-            .deleteAll(db)
+        for chunk in stride(from: 0, to: ids.count, by: idChunkSize)
+            .map({ ids[$0..<min($0 + idChunkSize, ids.count)] })
+        {
+            try PhotoKeywordRecord
+                .filter(Column("keywordId") == keywordId && chunk.contains(Column("photoId")))
+                .deleteAll(db)
+        }
     }
 
     /// Replaces a photo's entire assignment set — metadata Load, where the

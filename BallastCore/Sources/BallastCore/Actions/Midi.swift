@@ -58,6 +58,18 @@ public struct MidiMap: Equatable, Sendable {
     public mutating func removeBinding(for address: MidiAddress) {
         bindings[address.noteString] = nil
     }
+
+    /// Rewrites keyword bindings after a vocabulary rename (see
+    /// `ActionCommand.renamingKeywordPath`) so bindings follow the keyword
+    /// instead of going stale.
+    public mutating func renameKeywordPath(from oldPath: String, to newPath: String) {
+        for (key, actionString) in bindings {
+            guard let command = ActionCommand(actionString: actionString),
+                  let updated = command.renamingKeywordPath(from: oldPath, to: newPath)
+            else { continue }
+            bindings[key] = updated.actionString
+        }
+    }
 }
 
 /// A note event after velocity folding: Note On with velocity 0 is a Note Off

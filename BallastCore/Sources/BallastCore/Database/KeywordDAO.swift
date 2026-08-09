@@ -2,9 +2,14 @@ import Foundation
 import GRDB
 
 public enum KeywordDAO {
-    /// Normalises a keyword component to the storage invariant: trimmed, UPPERCASE.
+    /// Normalises a keyword component to the storage invariant: trimmed,
+    /// UPPERCASE, NFC. The precomposition matters because SQLite compares
+    /// bytes: a decomposed "MÜNCHEN" from an XMP file would otherwise create a
+    /// visually identical duplicate row next to a typed, precomposed one.
     public static func normalize(_ name: String) -> String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .precomposedStringWithCanonicalMapping
     }
 
     /// Finds or creates the node chain for the given path components and returns
@@ -16,11 +21,13 @@ public enum KeywordDAO {
         groupId: Int64?,
         in db: Database
     ) throws -> Int64 {
-        precondition(!components.isEmpty, "ensurePath needs at least one component")
+        // Malformed input like "A >  > B" must not create a node with an empty
+        // name mid-path (KeywordResolver filters the same way).
+        let names = components.map(normalize).filter { !$0.isEmpty }
+        precondition(!names.isEmpty, "ensurePath needs at least one non-empty component")
         var parentId: Int64? = nil
         var currentId: Int64 = 0
-        for rawName in components {
-            let name = normalize(rawName)
+        for name in names {
             let parentFilter: SQLExpression =
                 parentId == nil ? Column("parentId") == nil : Column("parentId") == parentId
             if let existing = try KeywordRecord
@@ -66,7 +73,7 @@ public enum KeywordDAO {
     @discardableResult
     public static func createGroup(name: String, color: String, in db: Database) throws -> KeywordGroupRecord {
         let maxOrder = try Int.fetchOne(db, sql: "SELECT MAX(sortOrder) FROM keywordGroup") ?? -1
-        var record = KeywordGroupRecord(name: name, color: color, sortOrder: maxOrder + 1)
+        var record = KeywordGroupRecord(name: normalize(name), color: color, sortOrder: maxOrder + 1)
         try record.insert(db)
         return record
     }

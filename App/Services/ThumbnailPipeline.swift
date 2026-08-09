@@ -24,9 +24,21 @@ struct CGImageBox: @unchecked Sendable, Equatable {
 actor ThumbnailPipeline {
     private let cacheDirectory: URL
     private let memory = NSCache<NSString, CGImage>()
+    /// Full-size decodes get their own tiny cache: one 60-MP original costs
+    /// ~240 MB — sharing the thumbnail cache would evict every grid thumbnail
+    /// after two, three photos in the single view.
+    private let originalsMemory = NSCache<NSString, CGImage>()
     private let maxConcurrentDecodes = 8
     private var activeDecodes = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var slotWaiters: [(id: UUID, continuation: CheckedContinuation<Void, any Error>)] = []
+
+    /// One decode per key, however many cells/views ask for it. Requesters
+    /// attach as continuations; the last one to cancel cancels the decode.
+    private final class InFlightDecode {
+        var continuations: [UUID: CheckedContinuation<CGImageBox?, Never>] = [:]
+        var task: Task<Void, Never>?
+    }
+    private var inFlight: [String: InFlightDecode] = [:]
 
     struct Stats: Sendable {
         var memoryHits = 0
@@ -37,6 +49,7 @@ actor ThumbnailPipeline {
 
     init(libraryUUID: String) {
         memory.totalCostLimit = 300 * 1024 * 1024
+        originalsMemory.countLimit = 3
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cacheDirectory = caches
             .appendingPathComponent("Thumbnails", isDirectory: true)
@@ -70,16 +83,23 @@ actor ThumbnailPipeline {
     }
 
     private func cachedOriginal(key: String, path: String) async -> CGImageBox? {
-        if let hit = memory.object(forKey: key as NSString) {
+        if let hit = originalsMemory.object(forKey: key as NSString) {
             counters.memoryHits += 1
             return CGImageBox(image: hit)
         }
-        await acquireSlot()
+        return await coalescedDecode(key: key) { [weak self] in
+            guard let self else { return nil }
+            return await self.performOriginalDecode(key: key, path: path)
+        }
+    }
+
+    private func performOriginalDecode(key: String, path: String) async -> CGImageBox? {
+        do { try await acquireSlot() } catch { return nil }
         defer { releaseSlot() }
         if Task.isCancelled { return nil }
         guard let decoded = await Self.decodeFull(path: path) else { return nil }
         counters.decodes += 1
-        store(decoded, forKey: key)
+        originalsMemory.setObject(decoded.image, forKey: key as NSString)
         return decoded
     }
 
@@ -88,8 +108,14 @@ actor ThumbnailPipeline {
             counters.memoryHits += 1
             return CGImageBox(image: hit)
         }
+        return await coalescedDecode(key: key) { [weak self] in
+            guard let self else { return nil }
+            return await self.performThumbnailDecode(key: key, path: path, longEdge: longEdge)
+        }
+    }
 
-        await acquireSlot()
+    private func performThumbnailDecode(key: String, path: String, longEdge: Int) async -> CGImageBox? {
+        do { try await acquireSlot() } catch { return nil }
         defer { releaseSlot() }
         if Task.isCancelled { return nil }
 
@@ -118,21 +144,86 @@ actor ThumbnailPipeline {
         )
     }
 
+    // MARK: In-flight coalescing
+
+    /// Joins an already-running decode for `key` or starts one. Two grid cells
+    /// (or cell + single-view prefetch) asking for the same image never decode
+    /// twice; a requester that scrolls away detaches, and when the last one
+    /// detaches the decode itself is cancelled.
+    private func coalescedDecode(
+        key: String, _ work: @escaping @Sendable () async -> CGImageBox?
+    ) async -> CGImageBox? {
+        let requestId = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if let entry = inFlight[key] {
+                    entry.continuations[requestId] = continuation
+                    return
+                }
+                let entry = InFlightDecode()
+                entry.continuations[requestId] = continuation
+                inFlight[key] = entry
+                entry.task = Task {
+                    let value = await work()
+                    self.finishDecode(key: key, entry: entry, value: value)
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelRequest(key: key, requestId: requestId) }
+        }
+    }
+
+    private func finishDecode(key: String, entry: InFlightDecode, value: CGImageBox?) {
+        if inFlight[key] === entry { inFlight[key] = nil }
+        for continuation in entry.continuations.values {
+            continuation.resume(returning: value)
+        }
+        entry.continuations = [:]
+    }
+
+    private func cancelRequest(key: String, requestId: UUID) {
+        guard let entry = inFlight[key],
+              let continuation = entry.continuations.removeValue(forKey: requestId)
+        else { return }
+        continuation.resume(returning: nil)
+        if entry.continuations.isEmpty {
+            inFlight[key] = nil
+            entry.task?.cancel()
+        }
+    }
+
     // MARK: Bounded decode slots
 
-    private func acquireSlot() async {
+    /// Throws `CancellationError` when the requesting decode is cancelled while
+    /// queued — a scrolled-away cell must not keep occupying the FIFO and delay
+    /// live requests.
+    private func acquireSlot() async throws {
+        try Task.checkCancellation()
         if activeDecodes < maxConcurrentDecodes {
             activeDecodes += 1
             return
         }
-        await withCheckedContinuation { waiters.append($0) }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                slotWaiters.append((id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelSlotWaiter(id) }
+        }
+    }
+
+    private func cancelSlotWaiter(_ id: UUID) {
+        guard let index = slotWaiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = slotWaiters.remove(at: index)
+        waiter.continuation.resume(throwing: CancellationError())
     }
 
     private func releaseSlot() {
-        if waiters.isEmpty {
+        if slotWaiters.isEmpty {
             activeDecodes -= 1
         } else {
-            waiters.removeFirst().resume()
+            slotWaiters.removeFirst().continuation.resume(returning: ())
         }
     }
 

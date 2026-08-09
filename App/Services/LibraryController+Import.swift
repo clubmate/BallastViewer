@@ -33,6 +33,9 @@ extension LibraryController {
     /// behind its security scope — managing never requires switching.
     func importFolders(_ urls: [URL], recursive: Bool, into targetURL: URL?) async {
         guard let targetURL else { return }
+        // Reentrancy guard: a drop during a running import must not start a
+        // second, interleaved `runImport` on the same pool.
+        guard !isImporting else { return }
         isImporting = true
         defer { isImporting = false }
 
@@ -40,7 +43,7 @@ extension LibraryController {
         var skipped = 0
         if targetURL.path == libraryURL?.path, let library {
             (added, skipped) = await runImport(urls, recursive: recursive, pool: library.pool)
-            refreshSnapshot()
+            await refreshSnapshot()
         } else {
             let didStartAccess = targetURL.startAccessingSecurityScopedResource()
             defer { if didStartAccess { targetURL.stopAccessingSecurityScopedResource() } }
@@ -126,31 +129,39 @@ extension LibraryController {
 
     // MARK: Managing arbitrary libraries (Settings ▸ Libraries, U14)
 
-    /// Runs a read/write against any known library: the open one uses the live
-    /// pool, others a short-lived pool behind the library's security scope.
-    private func withManagedPool<T>(at url: URL, _ body: (DatabasePool) throws -> T) -> T? {
-        if url.path == libraryURL?.path, let pool = library?.pool {
-            return try? body(pool)
-        }
-        let didStartAccess = url.startAccessingSecurityScopedResource()
-        defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
-        guard let database = try? LibraryDatabase.open(at: url) else { return nil }
-        defer { try? database.pool.close() }
-        return try? body(database.pool)
+    /// Runs work against a CLOSED library's short-lived pool behind its
+    /// security scope — off the MainActor: opening a pool and reading are disk
+    /// I/O, and a library on a slow or detached network volume must not freeze
+    /// the Settings window.
+    nonisolated private static func withClosedLibraryPool<T: Sendable>(
+        at url: URL, _ body: @escaping @Sendable (DatabasePool) throws -> T
+    ) async -> T? {
+        await Task.detached(priority: .userInitiated) {
+            let didStartAccess = url.startAccessingSecurityScopedResource()
+            defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
+            guard let database = try? LibraryDatabase.open(at: url) else { return nil as T? }
+            defer { try? database.pool.close() }
+            return try? body(database.pool)
+        }.value
     }
 
     /// Folder list of any known library, without opening it into the UI.
-    func folders(inLibraryAt url: URL) -> [FolderRecord] {
+    func folders(inLibraryAt url: URL) async -> [FolderRecord] {
         if url.path == libraryURL?.path { return snapshot?.folders ?? [] }
-        return withManagedPool(at: url) { pool in
+        return await Self.withClosedLibraryPool(at: url) { pool in
             try pool.read { try FolderRecord.fetchAll($0) }
         } ?? []
     }
 
     /// Photo count for the U7 removal confirmation, any library.
-    func folderPhotoCount(_ folder: FolderRecord, inLibraryAt url: URL) -> Int {
+    func folderPhotoCount(_ folder: FolderRecord, inLibraryAt url: URL) async -> Int {
         guard let folderId = folder.id else { return 0 }
-        return withManagedPool(at: url) { pool in
+        if url.path == libraryURL?.path, let library {
+            return (try? await library.pool.read { db in
+                try ImportDAO.photoCount(inFolder: folderId, db)
+            }) ?? 0
+        }
+        return await Self.withClosedLibraryPool(at: url) { pool in
             try pool.read { try ImportDAO.photoCount(inFolder: folderId, $0) }
         } ?? 0
     }
@@ -163,7 +174,7 @@ extension LibraryController {
             return
         }
         guard let folderId = folder.id else { return }
-        _ = withManagedPool(at: url) { pool in
+        _ = await Self.withClosedLibraryPool(at: url) { pool in
             try pool.write { try ImportDAO.removeFolder(folderId, in: $0) }
         }
     }
@@ -221,10 +232,14 @@ extension LibraryController {
             let removed = try await library.pool.write { db in
                 try ImportDAO.removeFolder(folderId, in: db)
             }
-            registerUndo("Remove Folder") {
-                $0.reinsertFolder(folder, photos: captured.photos, pairs: captured.pairs)
+            registerUndo("Remove Folder") { controller in
+                Task {
+                    await controller.reinsertFolder(
+                        folder, photos: captured.photos, pairs: captured.pairs
+                    )
+                }
             }
-            refreshSnapshot()
+            await refreshSnapshot()
             infoMessage = "Removed the folder and \(removed) photo\(removed == 1 ? "" : "s") from the catalog. Files on disk are untouched."
         } catch {
             errorMessage = "Could not remove the folder.\n\(error.localizedDescription)"
@@ -232,28 +247,35 @@ extension LibraryController {
     }
 
     /// Undo of a folder removal: restores the captured rows verbatim (original
-    /// ids included, so batches and assignments stay consistent).
+    /// ids included, so batches and assignments stay consistent). Potentially
+    /// thousands of rows — the write runs on the pipeline (ordered, off the
+    /// MainActor), never as a synchronous transaction.
     private func reinsertFolder(
         _ folder: FolderRecord,
         photos: [PhotoRecord],
         pairs: [(photoId: Int64, keywordId: Int64)]
-    ) {
-        let written: Void? = writeSync { db in
-            var folderRecord = folder
-            try folderRecord.insert(db)
-            for photo in photos {
-                var record = photo
-                try record.insert(db)
+    ) async {
+        guard let pipeline = writePipeline else { return }
+        do {
+            try await pipeline.submitAndWait { db in
+                var folderRecord = folder
+                try folderRecord.insert(db)
+                for photo in photos {
+                    var record = photo
+                    try record.insert(db)
+                }
+                for pair in pairs {
+                    try PhotoKeywordRecord(photoId: pair.photoId, keywordId: pair.keywordId)
+                        .insert(db, onConflict: .ignore)
+                }
             }
-            for pair in pairs {
-                try PhotoKeywordRecord(photoId: pair.photoId, keywordId: pair.keywordId)
-                    .insert(db, onConflict: .ignore)
-            }
+        } catch {
+            errorMessage = "Could not restore the folder.\n\(error.localizedDescription)"
+            return
         }
-        guard written != nil else { return }
         registerUndo("Remove Folder") { controller in
             Task { await controller.removeFolder(folder) }
         }
-        refreshSnapshot()
+        await refreshSnapshot()
     }
 }

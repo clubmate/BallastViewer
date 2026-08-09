@@ -11,10 +11,14 @@ struct SingleView: View {
     let photo: GridPhoto?
     let pipeline: ThumbnailPipeline
 
+    /// Results carry the path they were loaded for: when stepping quickly, the
+    /// body renders for the NEW photo while the state still holds the OLD
+    /// decode — matching on path prevents that frame from flashing the old
+    /// image under the new photo's orientation.
     private enum LoadState {
         case loading
-        case loaded(CGImage)
-        case failed
+        case loaded(CGImage, path: String)
+        case failed(path: String)
     }
 
     @State private var state: LoadState = .loading
@@ -27,7 +31,8 @@ struct SingleView: View {
                         state = .loading
                         let box = await pipeline.originalImage(forPath: photo.path)
                         guard !Task.isCancelled else { return }
-                        state = box.map { .loaded($0.image) } ?? .failed
+                        state = box.map { .loaded($0.image, path: photo.path) }
+                            ?? .failed(path: photo.path)
                     }
             } else {
                 Text("No Photo Selected")
@@ -41,16 +46,16 @@ struct SingleView: View {
     @ViewBuilder
     private func content(for photo: GridPhoto) -> some View {
         switch state {
-        case .loading:
-            ProgressView()
-        case .failed:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.largeTitle)
-                .foregroundStyle(.red)
-        case .loaded(let image):
+        case .loaded(let image, let path) where path == photo.path:
             // Decoded unrotated; the stored orientation is applied at the
             // layer level so the rotate action is instant (Q5).
             SingleImageSurface(image: image, orientation: photo.orientation)
+        case .failed(let path) where path == photo.path:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.largeTitle)
+                .foregroundStyle(.red)
+        default:
+            ProgressView()
         }
     }
 }

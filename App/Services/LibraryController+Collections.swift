@@ -150,21 +150,21 @@ extension LibraryController {
         return Set(ids)
     }
 
+    /// Meta writes ride the write pipeline: ordered against every other write,
+    /// drained on quit, and never racing a pool that is closing.
     private func persistMeta() {
-        guard let library, let meta = snapshot?.meta else { return }
-        Task {
-            do {
-                try await library.pool.write { db in try meta.update(db) }
-            } catch {
-                errorMessage = "Could not save library state.\n\(error.localizedDescription)"
-            }
-        }
+        guard let meta = snapshot?.meta else { return }
+        persist { db in try meta.update(db) }
     }
 
     /// Synchronous write for rare structural edits; failures surface as the
-    /// app-wide alert and the memory mirror is left untouched.
+    /// app-wide alert and the memory mirror is left untouched. Flushes the
+    /// write pipeline first so this commit can never overtake a queued
+    /// write-through job (e.g. a keyword-subtree delete overtaking the insert
+    /// of an assignment to that very keyword).
     func writeSync<T>(_ body: (Database) throws -> T) -> T? {
         guard let library else { return nil }
+        writePipeline?.flushSync()
         do {
             return try library.pool.write(body)
         } catch {

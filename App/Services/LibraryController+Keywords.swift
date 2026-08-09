@@ -123,6 +123,7 @@ extension LibraryController {
             errorMessage = "A keyword named “\(name)” already exists here."
             return
         }
+        let oldPath = snapshot.keywordTree.path(of: id)
         guard let records: [KeywordRecord] = writeSync({ db in
             try KeywordDAO.rename(id, to: name, in: db)
             return try KeywordDAO.fetchAll(db)
@@ -130,6 +131,9 @@ extension LibraryController {
         let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
         mutateSnapshot { $0.keywordTree = KeywordTree(records: records) }
         invalidateAllFacts()
+        if let newPath = self.snapshot?.keywordTree.path(of: id), newPath != oldPath {
+            keywordPathRenamed?(oldPath, newPath)
+        }
         emitCatalogEvent(.photosUpdated(carriers))
     }
 

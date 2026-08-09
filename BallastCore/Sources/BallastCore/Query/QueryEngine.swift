@@ -92,31 +92,29 @@ public enum QueryEngine {
     }
 
     /// `contains`/`equals` = *any* keyword matches; the negatives are the
-    /// exact logical negations (*no* keyword matches). Case-insensitive.
+    /// exact logical negations (*no* keyword matches). Case-insensitive via
+    /// the same folding as the search filter.
     private static func keywordSetRule(_ paths: [String], _ op: RuleOperator, _ value: String) -> Bool {
-        let needle = value.lowercased()
         switch op {
         case .contains:
-            return paths.contains { $0.lowercased().contains(needle) }
+            return paths.contains { CaseInsensitiveMatch.contains($0, value) }
         case .equals:
-            return paths.contains { $0.lowercased() == needle }
+            return paths.contains { CaseInsensitiveMatch.equals($0, value) }
         case .doesNotContain:
-            return !paths.contains { $0.lowercased().contains(needle) }
+            return !paths.contains { CaseInsensitiveMatch.contains($0, value) }
         case .doesNotEqual:
-            return !paths.contains { $0.lowercased() == needle }
+            return !paths.contains { CaseInsensitiveMatch.equals($0, value) }
         case .greaterThan, .lessThan:
             return false
         }
     }
 
     private static func stringRule(_ subject: String, _ op: RuleOperator, _ value: String) -> Bool {
-        let haystack = subject.lowercased()
-        let needle = value.lowercased()
         switch op {
-        case .contains: return haystack.contains(needle)
-        case .equals: return haystack == needle
-        case .doesNotContain: return !haystack.contains(needle)
-        case .doesNotEqual: return haystack != needle
+        case .contains: return CaseInsensitiveMatch.contains(subject, value)
+        case .equals: return CaseInsensitiveMatch.equals(subject, value)
+        case .doesNotContain: return !CaseInsensitiveMatch.contains(subject, value)
+        case .doesNotEqual: return !CaseInsensitiveMatch.equals(subject, value)
         case .greaterThan, .lessThan: return false
         }
     }

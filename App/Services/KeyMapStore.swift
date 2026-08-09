@@ -35,6 +35,12 @@ final class KeyMapStore {
         save()
     }
 
+    /// Follows a vocabulary rename so keyword bindings stay live.
+    func renameKeywordPath(from oldPath: String, to newPath: String) {
+        map.renameKeywordPath(from: oldPath, to: newPath)
+        save()
+    }
+
     private func save() {
         UserDefaults.standard.set(map.bindings, forKey: Self.defaultsKey)
     }

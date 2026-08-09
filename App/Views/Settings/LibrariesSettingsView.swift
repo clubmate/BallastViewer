@@ -138,10 +138,12 @@ struct LibrariesSettingsView: View {
                             .truncationMode(.middle)
                         Spacer()
                         Button {
-                            pendingFolderRemoval = FolderRemoval(
-                                folder: folder,
-                                photoCount: controller.folderPhotoCount(folder, inLibraryAt: url)
-                            )
+                            Task {
+                                pendingFolderRemoval = FolderRemoval(
+                                    folder: folder,
+                                    photoCount: await controller.folderPhotoCount(folder, inLibraryAt: url)
+                                )
+                            }
                         } label: {
                             Image(systemName: "minus.circle")
                         }
@@ -155,6 +157,16 @@ struct LibrariesSettingsView: View {
     }
 
     private func reloadFolders() {
-        managedFolders = selectedURL.map { controller.folders(inLibraryAt: $0) } ?? []
+        guard let url = selectedURL else {
+            managedFolders = []
+            return
+        }
+        Task {
+            let folders = await controller.folders(inLibraryAt: url)
+            // The selection may have moved on while the closed library loaded.
+            if url.path == selectedPath {
+                managedFolders = folders
+            }
+        }
     }
 }

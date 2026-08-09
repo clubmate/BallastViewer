@@ -46,8 +46,11 @@ public struct KeywordTree: Sendable {
 
     public func pathComponents(of id: Int64) -> [String] {
         var components: [String] = []
+        var visited: Set<Int64> = []
         var current = nodesById[id]
-        while let record = current {
+        // The schema cannot express a parentId cycle through the UI, but a
+        // corrupt or hand-edited DB can — guard against an endless walk.
+        while let record = current, let recordId = record.id, visited.insert(recordId).inserted {
             components.append(record.name)
             current = record.parentId.flatMap { nodesById[$0] }
         }
@@ -102,8 +105,9 @@ public struct KeywordTree: Sendable {
     /// group rules and chip colours use, so nested keywords under a grouped
     /// root behave as group members (C2).
     public func effectiveGroupId(of id: Int64) -> Int64? {
+        var visited: Set<Int64> = []
         var current = nodesById[id]
-        while let record = current {
+        while let record = current, let recordId = record.id, visited.insert(recordId).inserted {
             if let groupId = record.groupId { return groupId }
             current = record.parentId.flatMap { nodesById[$0] }
         }

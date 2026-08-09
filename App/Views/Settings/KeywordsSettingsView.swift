@@ -32,7 +32,9 @@ struct KeywordsSettingsView: View {
         Group {
             if let snapshot = controller.snapshot {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
+                    // Lazy: a large vocabulary must not lay out every row on
+                    // each snapshot change.
+                    LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(snapshot.keywordGroups) { group in
                             groupSection(group, tree: snapshot.keywordTree)
                         }
@@ -61,6 +63,11 @@ struct KeywordsSettingsView: View {
             )
         ) {
             TextField("Name", text: $renameText)
+                .onChange(of: renameText) { _, newValue in
+                    // Q15: keywords are uppercase while typing, everywhere.
+                    let upper = newValue.uppercased()
+                    if upper != newValue { renameText = upper }
+                }
             Button("Rename") {
                 if let id = renameKeywordId {
                     controller.renameKeyword(id, to: renameText)
@@ -208,27 +215,44 @@ struct KeywordsSettingsView: View {
             )
 
             if !collapsed {
-                keywordRows(ids: topLevel, depth: 1, tree: tree)
+                // The visible subtree is unrolled into a flat list up front —
+                // no AnyView-wrapped recursion, and ForEach keeps structural
+                // identity per row.
+                ForEach(visibleRows(startingAt: topLevel, tree: tree), id: \.id) { row in
+                    keywordRow(row.id, depth: row.depth, hasChildren: row.hasChildren, tree: tree)
+                }
             }
         }
     }
 
     // MARK: Keyword rows (outline)
 
-    @ViewBuilder
-    private func keywordRows(ids: [Int64], depth: Int, tree: KeywordTree) -> some View {
-        ForEach(ids, id: \.self) { id in
-            AnyView(keywordRow(id, depth: depth, tree: tree))
+    private struct KeywordRowInfo: Hashable {
+        let id: Int64
+        let depth: Int
+        let hasChildren: Bool
+    }
+
+    /// Depth-first flattening of the group's visible (non-collapsed) subtree.
+    private func visibleRows(startingAt ids: [Int64], tree: KeywordTree) -> [KeywordRowInfo] {
+        var rows: [KeywordRowInfo] = []
+        var stack: [(id: Int64, depth: Int)] = ids.reversed().map { ($0, 1) }
+        while let next = stack.popLast() {
+            let children = tree.children(of: next.id)
+            rows.append(KeywordRowInfo(id: next.id, depth: next.depth, hasChildren: !children.isEmpty))
+            if !children.isEmpty, !collapsedKeywords.contains(next.id) {
+                stack.append(contentsOf: children.reversed().map { ($0, next.depth + 1) })
+            }
         }
+        return rows
     }
 
     @ViewBuilder
-    private func keywordRow(_ id: Int64, depth: Int, tree: KeywordTree) -> some View {
-        let children = tree.children(of: id)
+    private func keywordRow(_ id: Int64, depth: Int, hasChildren: Bool, tree: KeywordTree) -> some View {
         let collapsed = collapsedKeywords.contains(id)
 
         HStack(spacing: 6) {
-            if children.isEmpty {
+            if !hasChildren {
                 Image(systemName: "chevron.right")
                     .font(.caption2)
                     .opacity(0)
@@ -258,10 +282,6 @@ struct KeywordsSettingsView: View {
                 addKeyword(parentId: id, groupId: nil, base: "NEW SUB-KEYWORD")
             }
             Button("Delete", role: .destructive) { pendingKeywordDeletion = id }
-        }
-
-        if !collapsed && !children.isEmpty {
-            keywordRows(ids: children, depth: depth + 1, tree: tree)
         }
     }
 
