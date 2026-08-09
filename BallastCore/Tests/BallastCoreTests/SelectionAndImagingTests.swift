@@ -76,7 +76,9 @@ import Testing
     @Test func picksSmallestCoveringBucket() {
         #expect(ThumbnailBuckets.bucket(forPixelSize: 100) == 256)
         #expect(ThumbnailBuckets.bucket(forPixelSize: 256) == 256)
-        #expect(ThumbnailBuckets.bucket(forPixelSize: 257) == 768)
+        #expect(ThumbnailBuckets.bucket(forPixelSize: 257) == 512)
+        #expect(ThumbnailBuckets.bucket(forPixelSize: 512) == 512)
+        #expect(ThumbnailBuckets.bucket(forPixelSize: 513) == 768)
         #expect(ThumbnailBuckets.bucket(forPixelSize: 768) == 768)
         #expect(ThumbnailBuckets.bucket(forPixelSize: 9999) == 768)
     }

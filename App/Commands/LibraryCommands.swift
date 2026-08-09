@@ -21,7 +21,7 @@ struct LibraryCommands: Commands {
                     isOn: Binding(
                         get: { url.path == controller.libraryURL?.path },
                         set: { selected in
-                            if selected { controller.openLibrary(at: url) }
+                            if selected { Task { await controller.openLibrary(at: url) } }
                         }
                     )
                 )

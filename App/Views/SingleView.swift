@@ -9,15 +9,19 @@ import SwiftUI
 /// thumbnail tier is unnecessary.
 struct SingleView: View {
     let photo: GridPhoto?
+    /// Display-order neighbours of `photo` (previous/next) — prefetched after
+    /// the anchor is shown, so stepping hits the originals cache instead of
+    /// paying a cold full decode with a spinner per step.
+    var neighbors: [GridPhoto] = []
     let pipeline: ThumbnailPipeline
 
-    /// Results carry the path they were loaded for: when stepping quickly, the
-    /// body renders for the NEW photo while the state still holds the OLD
-    /// decode — matching on path prevents that frame from flashing the old
-    /// image under the new photo's orientation.
+    /// Results carry the path AND orientation they were loaded for: when
+    /// stepping quickly, the body renders for the NEW photo while the state
+    /// still holds the OLD decode — the old image stays visible (with its own
+    /// orientation, never the new photo's) until the new decode lands.
     private enum LoadState {
         case loading
-        case loaded(CGImage, path: String)
+        case loaded(CGImage, path: String, orientation: Int)
         case failed(path: String)
     }
 
@@ -28,11 +32,22 @@ struct SingleView: View {
             if let photo {
                 content(for: photo)
                     .task(id: photo.path) {
-                        state = .loading
-                        let box = await pipeline.originalImage(forPath: photo.path)
-                        guard !Task.isCancelled else { return }
-                        state = box.map { .loaded($0.image, path: photo.path) }
-                            ?? .failed(path: photo.path)
+                        if let hit = pipeline.cachedOriginal(forPath: photo.path) {
+                            state = .loaded(hit.image, path: photo.path, orientation: photo.orientation)
+                        } else {
+                            let box = await pipeline.originalImage(forPath: photo.path)
+                            guard !Task.isCancelled else { return }
+                            state = box.map {
+                                .loaded($0.image, path: photo.path, orientation: photo.orientation)
+                            } ?? .failed(path: photo.path)
+                        }
+                        // Fire-and-forget neighbour warm-up; the pipeline's
+                        // coalescing dedups against a real request when the
+                        // user steps onto one of them meanwhile.
+                        for neighbor in neighbors where neighbor.path != photo.path {
+                            let path = neighbor.path
+                            Task { _ = await pipeline.originalImage(forPath: path) }
+                        }
                     }
             } else {
                 Text("No Photo Selected")
@@ -46,10 +61,14 @@ struct SingleView: View {
     @ViewBuilder
     private func content(for photo: GridPhoto) -> some View {
         switch state {
-        case .loaded(let image, let path) where path == photo.path:
+        case .loaded(let image, let path, _) where path == photo.path:
             // Decoded unrotated; the stored orientation is applied at the
             // layer level so the rotate action is instant (Q5).
             SingleImageSurface(image: image, orientation: photo.orientation)
+        case .loaded(let image, _, let orientation):
+            // Stale: the previous photo bridges the gap while the new decode
+            // runs — with ITS orientation, so nothing flashes mis-rotated.
+            SingleImageSurface(image: image, orientation: orientation)
         case .failed(let path) where path == photo.path:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.largeTitle)

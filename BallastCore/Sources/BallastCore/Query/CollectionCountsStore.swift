@@ -27,6 +27,8 @@ public struct CollectionCountsStore: Equatable, Sendable {
     public init() {}
 
     /// Full recompute — library open, import, folder removal, rule edits.
+    /// Rules are compiled ONCE here; the per-photo loop then runs allocation-
+    /// and parse-free (the difference between one and many seconds at 50k).
     public mutating func rebuild(
         photos: [PhotoRecord],
         collections: [SmartCollectionRecord],
@@ -40,13 +42,10 @@ public struct CollectionCountsStore: Equatable, Sendable {
         counts.collections = Dictionary(
             uniqueKeysWithValues: collections.compactMap { $0.id.map { ($0, 0) } }
         )
+        let compiled = Self.compile(collections, rulesByCollection)
         for photo in photos {
             let membership = membership(
-                of: photo,
-                collections: collections,
-                rulesByCollection: rulesByCollection,
-                lastImportBatchId: lastImportBatchId,
-                facts: facts
+                of: photo, compiled: compiled, lastImportBatchId: lastImportBatchId, facts: facts
             )
             add(membership, photoId: photo.id ?? -1)
         }
@@ -61,14 +60,11 @@ public struct CollectionCountsStore: Equatable, Sendable {
         lastImportBatchId: Int64?,
         facts: (PhotoRecord) -> PhotoQueryFacts
     ) {
+        let compiled = Self.compile(collections, rulesByCollection)
         for photo in changedPhotos {
             guard let photoId = photo.id else { continue }
             let new = membership(
-                of: photo,
-                collections: collections,
-                rulesByCollection: rulesByCollection,
-                lastImportBatchId: lastImportBatchId,
-                facts: facts
+                of: photo, compiled: compiled, lastImportBatchId: lastImportBatchId, facts: facts
             )
             if let old = membershipByPhoto[photoId] {
                 guard old != new else { continue }
@@ -78,25 +74,27 @@ public struct CollectionCountsStore: Equatable, Sendable {
         }
     }
 
+    private static func compile(
+        _ collections: [SmartCollectionRecord],
+        _ rulesByCollection: [Int64: [CollectionRuleRecord]]
+    ) -> [(id: Int64, rules: CompiledRules)] {
+        collections.compactMap { collection in
+            collection.id.map {
+                ($0, CompiledRules(rulesByCollection[$0] ?? [], matchAll: collection.matchAll))
+            }
+        }
+    }
+
     private func membership(
         of photo: PhotoRecord,
-        collections: [SmartCollectionRecord],
-        rulesByCollection: [Int64: [CollectionRuleRecord]],
+        compiled: [(id: Int64, rules: CompiledRules)],
         lastImportBatchId: Int64?,
         facts: (PhotoRecord) -> PhotoQueryFacts
     ) -> Membership {
         let photoFacts = facts(photo)
         var matched: Set<Int64> = []
-        for collection in collections {
-            guard let collectionId = collection.id else { continue }
-            if QueryEngine.matches(
-                photo,
-                facts: photoFacts,
-                rules: rulesByCollection[collectionId] ?? [],
-                matchAll: collection.matchAll
-            ) {
-                matched.insert(collectionId)
-            }
+        for collection in compiled where collection.rules.matches(photo, facts: photoFacts) {
+            matched.insert(collection.id)
         }
         return Membership(
             rating: photo.rating,

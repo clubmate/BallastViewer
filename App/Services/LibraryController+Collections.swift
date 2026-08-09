@@ -12,8 +12,9 @@ extension LibraryController {
         guard let created: SmartGroupRecord = writeSync({ db in
             try CollectionDAO.createGroup(name: name, in: db)
         }) else { return }
+        // A new group is empty — no membership changed anywhere.
         mutateSnapshot { $0.smartGroups.append(created) }
-        emitCatalogEvent(.collectionsChanged)
+        emitCatalogEvent(.collectionListChanged)
     }
 
     func renameSmartGroup(_ id: Int64, to name: String) {
@@ -24,7 +25,7 @@ extension LibraryController {
                 snapshot.smartGroups[index].name = name
             }
         }
-        emitCatalogEvent(.collectionsChanged)
+        emitCatalogEvent(.collectionListChanged)
     }
 
     /// Deletes the group with its collections and rules (FK cascade). The U7
@@ -51,7 +52,7 @@ extension LibraryController {
             }
             snapshot.smartGroups.sort { $0.sortOrder < $1.sortOrder }
         }
-        emitCatalogEvent(.collectionsChanged)
+        emitCatalogEvent(.collectionListChanged)
     }
 
     // MARK: Collections
@@ -91,7 +92,7 @@ extension LibraryController {
             }
             snapshot.collections.sort { ($0.groupId, $0.sortOrder) < ($1.groupId, $1.sortOrder) }
         }
-        emitCatalogEvent(.collectionsChanged)
+        emitCatalogEvent(.collectionListChanged)
     }
 
     /// The editor sheet saves its copy wholesale: name, match mode and the

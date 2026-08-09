@@ -45,10 +45,10 @@ enum TestHooks {
         if let name = env["BV_TEST_CREATE"] {
             let url = testURL(named: name)
             try? FileManager.default.removeItem(at: url)
-            controller.createLibrary(at: url)
+            await controller.createLibrary(at: url)
         }
         if let name = env["BV_TEST_OPEN"] {
-            controller.openLibrary(at: testURL(named: name))
+            await controller.openLibrary(at: testURL(named: name))
         }
         if let path = env["BV_TEST_IMPORT"] {
             let folderURL = URL(fileURLWithPath: path, isDirectory: true)
@@ -192,7 +192,7 @@ enum TestHooks {
         try? await Task.sleep(for: .seconds(1))
         if let url = controller.libraryURL {
             controller.closeLibrary()
-            controller.openLibrary(at: url)
+            await controller.openLibrary(at: url)
         }
         let photos = controller.snapshot?.photos ?? []
         print(
@@ -284,7 +284,7 @@ enum TestHooks {
         try? await Task.sleep(for: .seconds(1))
         if let url = controller.libraryURL {
             controller.closeLibrary()
-            controller.openLibrary(at: url)
+            await controller.openLibrary(at: url)
         }
         let restoredFirst = controller.snapshot?.photos.compactMap(\.id)
             .first(where: { controller.snapshot?.keywordIdsByPhoto[$0]?.isEmpty == false })

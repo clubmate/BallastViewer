@@ -21,10 +21,22 @@ public enum KeywordDAO {
         groupId: Int64?,
         in db: Database
     ) throws -> Int64 {
+        try ensurePathCollectingCreated(components, groupId: groupId, in: db).leafId
+    }
+
+    /// Like `ensurePath`, but reports the records it actually inserted — the
+    /// caller can then derive the new in-memory tree without re-fetching the
+    /// whole keyword table.
+    public static func ensurePathCollectingCreated(
+        _ components: [String],
+        groupId: Int64?,
+        in db: Database
+    ) throws -> (leafId: Int64, created: [KeywordRecord]) {
         // Malformed input like "A >  > B" must not create a node with an empty
         // name mid-path (KeywordResolver filters the same way).
         let names = components.map(normalize).filter { !$0.isEmpty }
         precondition(!names.isEmpty, "ensurePath needs at least one non-empty component")
+        var created: [KeywordRecord] = []
         var parentId: Int64? = nil
         var currentId: Int64 = 0
         for name in names {
@@ -39,11 +51,12 @@ public enum KeywordDAO {
             } else {
                 var record = KeywordRecord(parentId: parentId, groupId: groupId, name: name)
                 try record.insert(db)
+                created.append(record)
                 currentId = record.id!
             }
             parentId = currentId
         }
-        return currentId
+        return (currentId, created)
     }
 
     /// One UPDATE — every photo carrying this keyword (or a descendant) reflects

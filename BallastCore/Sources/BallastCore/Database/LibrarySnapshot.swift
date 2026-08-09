@@ -24,9 +24,11 @@ public struct LibrarySnapshot: Sendable {
         guard let keywordIds = keywordIdsByPhoto[id], !keywordIds.isEmpty else {
             return PhotoQueryFacts()
         }
+        let ids = Array(keywordIds)
         return PhotoQueryFacts(
-            keywordPaths: keywordIds.map { keywordTree.path(of: $0) },
-            keywordGroupIds: Set(keywordIds.compactMap { keywordTree.effectiveGroupId(of: $0) })
+            keywordPaths: ids.map { keywordTree.path(of: $0) },
+            keywordGroupIds: Set(ids.compactMap { keywordTree.effectiveGroupId(of: $0) }),
+            foldedKeywordPaths: ids.map { keywordTree.foldedPath(of: $0) }
         )
     }
 

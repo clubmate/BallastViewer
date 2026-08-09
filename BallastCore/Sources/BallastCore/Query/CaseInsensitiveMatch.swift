@@ -12,4 +12,12 @@ public enum CaseInsensitiveMatch {
     public static func equals(_ a: String, _ b: String) -> Bool {
         a.caseInsensitiveCompare(b) == .orderedSame
     }
+
+    /// The one canonical case fold. Two folded strings compare with plain
+    /// `==`/`contains` and agree with the ICU-based functions above — hot
+    /// paths fold once (keyword paths at tree construction, rule values at
+    /// compile time) instead of running ICU per comparison.
+    public static func fold(_ string: String) -> String {
+        string.folding(options: .caseInsensitive, locale: nil)
+    }
 }

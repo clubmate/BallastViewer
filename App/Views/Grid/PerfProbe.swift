@@ -77,7 +77,7 @@ enum PerfProbe {
             searchMs.append(ms(elapsed))
         }
 
-        let stats = await pipeline.stats()
+        let stats = pipeline.stats()
         print("BVPERF photos=\(photos.count)")
         print("BVPERF select ms median=\(median(selectMs)) max=\(selectMs.max() ?? 0)")
         print("BVPERF jump ms median=\(median(jumpMs)) max=\(jumpMs.max() ?? 0)")

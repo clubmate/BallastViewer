@@ -42,8 +42,26 @@ extension LibraryController {
         var added = 0
         var skipped = 0
         if targetURL.path == libraryURL?.path, let library {
-            (added, skipped) = await runImport(urls, recursive: recursive, pool: library.pool)
-            await refreshSnapshot()
+            var registered: [FolderRecord] = []
+            (added, skipped) = await runImport(
+                urls, recursive: recursive, pool: library.pool, registeredFolders: &registered
+            )
+            if added > 0 {
+                await refreshSnapshot()
+            } else {
+                // Nothing imported (rescan): a full 50k snapshot reload is
+                // waste; just mirror the folder registrations (bookmark /
+                // recursive updates, possibly a new empty folder).
+                mutateSnapshot { snapshot in
+                    for folder in registered {
+                        if let index = snapshot.folders.firstIndex(where: { $0.id == folder.id }) {
+                            snapshot.folders[index] = folder
+                        } else {
+                            snapshot.folders.append(folder)
+                        }
+                    }
+                }
+            }
         } else {
             let didStartAccess = targetURL.startAccessingSecurityScopedResource()
             defer { if didStartAccess { targetURL.stopAccessingSecurityScopedResource() } }
@@ -51,7 +69,10 @@ extension LibraryController {
                 errorMessage = "Could not open “\(targetURL.lastPathComponent)” for import."
                 return
             }
-            (added, skipped) = await runImport(urls, recursive: recursive, pool: database.pool)
+            var registered: [FolderRecord] = []
+            (added, skipped) = await runImport(
+                urls, recursive: recursive, pool: database.pool, registeredFolders: &registered
+            )
             try? database.pool.close()
         }
 
@@ -64,7 +85,8 @@ extension LibraryController {
     /// to 12 concurrent file reads, spec §2.4 fix) → one write transaction.
     /// Summary is reported per U2 ("312 added, 40 skipped").
     private func runImport(
-        _ urls: [URL], recursive: Bool, pool: DatabasePool
+        _ urls: [URL], recursive: Bool, pool: DatabasePool,
+        registeredFolders: inout [FolderRecord]
     ) async -> (added: Int, skipped: Int) {
         var added = 0
         var skipped = 0
@@ -81,10 +103,12 @@ extension LibraryController {
                         path: folderPath, bookmark: bookmark, recursive: recursive, in: db
                     )
                 }
+                registeredFolders.append(folder)
                 let files = await Task.detached(priority: .userInitiated) {
                     FolderScanner.scan(url, recursive: recursive)
                 }.value
-                // Skip metadata reads for files already in the catalog.
+                // Skip metadata reads for files already in the catalog; the
+                // same set feeds importPhotos, which no longer re-reads it.
                 let existing = try await pool.read { db in
                     Set(try String.fetchAll(db, sql: "SELECT path FROM photo"))
                 }
@@ -93,7 +117,9 @@ extension LibraryController {
 
                 let items = await Self.readMetadata(for: newFiles, maxConcurrent: 12)
                 let result = try await pool.write { db in
-                    try ImportDAO.importPhotos(items, folderId: folder.id!, in: db)
+                    try ImportDAO.importPhotos(
+                        items, folderId: folder.id!, existingPaths: existing, in: db
+                    )
                 }
                 added += result.added
                 skipped += result.skipped
@@ -224,9 +250,12 @@ extension LibraryController {
             let captured: (photos: [PhotoRecord], pairs: [(photoId: Int64, keywordId: Int64)]) =
                 try await library.pool.read { db in
                     let photos = try PhotoRecord.filter(Column("folderId") == folderId).fetchAll(db)
-                    let ids = Set(photos.compactMap(\.id))
-                    let pairs = try PhotoDAO.fetchKeywordAssignments(db)
-                        .filter { ids.contains($0.photoId) }
+                    // Restricted in SQL: the full join table can hold
+                    // hundreds of thousands of pairs for other folders.
+                    let sql = "SELECT photoId, keywordId FROM photoKeyword"
+                        + " WHERE photoId IN (SELECT id FROM photo WHERE folderId = ?)"
+                    let pairs = try Row.fetchAll(db, sql: sql, arguments: [folderId])
+                        .map { (photoId: $0["photoId"] as Int64, keywordId: $0["keywordId"] as Int64) }
                     return (photos, pairs)
                 }
             let removed = try await library.pool.write { db in
@@ -256,6 +285,12 @@ extension LibraryController {
         pairs: [(photoId: Int64, keywordId: Int64)]
     ) async {
         guard let pipeline = writePipeline else { return }
+        // The bulk transaction sits in the write lane: raise the modal shield
+        // so a structural edit right after the undo cannot flushSync-block the
+        // main thread behind thousands of INSERTs.
+        let wasSyncing = isSyncing
+        isSyncing = true
+        defer { isSyncing = wasSyncing }
         do {
             try await pipeline.submitAndWait { db in
                 var folderRecord = folder

@@ -13,39 +13,36 @@ struct InspectorView: View {
     @FocusState private var keywordFieldFocused: Bool
 
     var body: some View {
-        // Materialised ONCE per body pass and handed down — every section
-        // needs the selection, and rebuilding the array (plus the O(selection)
-        // aggregates below) per section would multiply the cost of a
-        // Select-All on a big library.
-        let selectedIds = Array(center.selection.selectedIds)
+        // The inspector renders from `selectionSummary` — the aggregates
+        // (title, shared rating, chip intersection) are computed once per
+        // relevant change in CenterViewModel, not per body pass. Actions
+        // materialise the id list lazily at click time.
+        let summary = center.selectionSummary
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    title(selectedIds)
-                    ratingStars(selectedIds)
-                    keywordEntry(selectedIds)
+                    title(summary)
+                    ratingStars(summary)
+                    keywordEntry(hasSelection: summary.count > 0)
                         .zIndex(1)
-                    chipList(selectedIds)
+                    chipList(summary)
                 }
                 .padding(10)
             }
             Divider()
-            footer(selectedIds)
+            footer(hasSelection: summary.count > 0)
         }
+    }
+
+    /// The whole selection, materialised at ACTION time only.
+    private var selectedIds: [Int64] {
+        Array(center.selection.selectedIds)
     }
 
     // MARK: Title (spec §9.8 item 1)
 
-    private func title(_ selectedIds: [Int64]) -> some View {
-        let text: String
-        switch selectedIds.count {
-        case 0: text = "No Selection"
-        case 1:
-            text = center.selection.anchorId
-                .flatMap { controller.photo(withId: $0)?.filename } ?? "1 Photo Selected"
-        case let n: text = "\(n) Photos Selected"
-        }
-        return Text(text)
+    private func title(_ summary: CenterViewModel.SelectionSummary) -> some View {
+        Text(summary.title)
             .font(.title)
             .textSelection(.enabled)
             .lineLimit(2)
@@ -53,15 +50,9 @@ struct InspectorView: View {
 
     // MARK: Rating (Q12, U3, U4)
 
-    /// The shared rating, or nil when the selection disagrees (mixed).
-    private func sharedRating(_ selectedIds: [Int64]) -> Int? {
-        let ratings = Set(selectedIds.compactMap { controller.photo(withId: $0)?.rating })
-        return ratings.count == 1 ? ratings.first : nil
-    }
-
-    private func ratingStars(_ selectedIds: [Int64]) -> some View {
-        let current = sharedRating(selectedIds)
-        let isMixed = current == nil && !selectedIds.isEmpty
+    private func ratingStars(_ summary: CenterViewModel.SelectionSummary) -> some View {
+        let current = summary.sharedRating
+        let isMixed = summary.isMixed
         return HStack(spacing: 6) {
             ForEach(1...5, id: \.self) { star in
                 let filled = star <= (current ?? 0)
@@ -69,10 +60,11 @@ struct InspectorView: View {
                     .font(.title2)
                     .foregroundStyle(filled ? Color.yellow : Color.secondary)
                     .onTapGesture {
-                        guard !selectedIds.isEmpty else { return }
+                        let ids = selectedIds
+                        guard !ids.isEmpty else { return }
                         // Q12: tapping the current rating is the mouse route to 0.
                         let value = star == current ? 0 : star
-                        controller.updateRatings(ids: selectedIds) { _ in value }
+                        controller.updateRatings(ids: ids) { _ in value }
                     }
             }
             if isMixed {
@@ -94,8 +86,10 @@ struct InspectorView: View {
         return KeywordAutocomplete.suggestions(for: keywordInput, tree: tree)
     }
 
-    private func keywordEntry(_ selectedIds: [Int64]) -> some View {
-        let suggestions = self.suggestions
+    private func keywordEntry(hasSelection: Bool) -> some View {
+        // Focus-guarded: leftover text in an unfocused field must not filter
+        // the whole vocabulary on every unrelated body pass.
+        let suggestions = keywordFieldFocused ? self.suggestions : []
         return HStack(spacing: 6) {
             TextField("Add Keyword", text: $keywordInput)
                 .textFieldStyle(.plain)
@@ -118,11 +112,11 @@ struct InspectorView: View {
                     return .handled
                 }
                 .onKeyPress(.return) {
-                    commit(highlight.index.map { suggestions[$0] }, selectedIds: selectedIds)
+                    commit(highlight.index.map { suggestions[$0] })
                     return .handled
                 }
             Button {
-                commit(nil, selectedIds: selectedIds)
+                commit(nil)
             } label: {
                 Image(systemName: "plus")
             }
@@ -141,13 +135,13 @@ struct InspectorView: View {
         .overlay(alignment: .topLeading) {
             // Dropdown overlays below the field (spec §9.8: offset 45).
             if keywordFieldFocused && !suggestions.isEmpty {
-                suggestionList(suggestions, selectedIds: selectedIds)
+                suggestionList(suggestions)
                     .offset(y: 45)
             }
         }
     }
 
-    private func suggestionList(_ suggestions: [String], selectedIds: [Int64]) -> some View {
+    private func suggestionList(_ suggestions: [String]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
@@ -162,7 +156,7 @@ struct InspectorView: View {
                                     ? Color.accentColor.opacity(0.3) : Color.clear
                             )
                             .contentShape(Rectangle())
-                            .onTapGesture { commit(path, selectedIds: selectedIds) }
+                            .onTapGesture { commit(path) }
                             .id(index)
                     }
                 }
@@ -180,31 +174,21 @@ struct InspectorView: View {
 
     /// Accepts the highlighted suggestion when given, otherwise the raw text
     /// (spec §9.8 Return semantics). Assigns to the whole selection (U3).
-    private func commit(_ suggestion: String?, selectedIds: [Int64]) {
+    private func commit(_ suggestion: String?) {
         let text = suggestion ?? keywordInput
-        guard !text.trimmingCharacters(in: .whitespaces).isEmpty, !selectedIds.isEmpty else { return }
-        controller.assignKeyword(text: text, toPhotoIds: selectedIds)
+        let ids = selectedIds
+        guard !text.trimmingCharacters(in: .whitespaces).isEmpty, !ids.isEmpty else { return }
+        controller.assignKeyword(text: text, toPhotoIds: ids)
         keywordInput = ""
         highlight.reset()
     }
 
     // MARK: Chips (Q14 intersection, Q18 order)
 
-    private func chips(_ selectedIds: [Int64]) -> [KeywordChip] {
-        guard let snapshot = controller.snapshot else { return [] }
-        let common = KeywordChipBuilder.commonKeywordIds(
-            photoIds: selectedIds, keywordIdsByPhoto: snapshot.keywordIdsByPhoto
-        )
-        return KeywordChipBuilder.chips(
-            forKeywordIds: common, tree: snapshot.keywordTree, groups: snapshot.keywordGroups
-        )
-    }
-
     @ViewBuilder
-    private func chipList(_ selectedIds: [Int64]) -> some View {
-        let chips = self.chips(selectedIds)
-        if chips.isEmpty {
-            if !selectedIds.isEmpty {
+    private func chipList(_ summary: CenterViewModel.SelectionSummary) -> some View {
+        if summary.chips.isEmpty {
+            if summary.count > 0 {
                 Text("No keywords assigned")
                     .font(.caption)
                     .italic()
@@ -212,14 +196,14 @@ struct InspectorView: View {
             }
         } else {
             VStack(spacing: 6) {
-                ForEach(chips) { chip in
-                    chipRow(chip, selectedIds: selectedIds)
+                ForEach(summary.chips) { chip in
+                    chipRow(chip)
                 }
             }
         }
     }
 
-    private func chipRow(_ chip: KeywordChip, selectedIds: [Int64]) -> some View {
+    private func chipRow(_ chip: KeywordChip) -> some View {
         // Ungrouped keywords render grey (spec §8.5).
         let color = chip.colorHex.flatMap(Color.init(hex:)) ?? Color.gray
         return HStack {
@@ -248,7 +232,7 @@ struct InspectorView: View {
 
     // MARK: Footer (Reveal in Finder + Share)
 
-    private func footer(_ selectedIds: [Int64]) -> some View {
+    private func footer(hasSelection: Bool) -> some View {
         HStack(spacing: 12) {
             Spacer()
             Button {
@@ -265,7 +249,7 @@ struct InspectorView: View {
             .buttonStyle(.borderless)
             .help("Reveal in Finder")
         }
-        .disabled(selectedIds.isEmpty)
+        .disabled(!hasSelection)
         .padding(.horizontal, 10)
         .frame(height: PanelMetrics.footerHeight)
     }

@@ -62,6 +62,9 @@ extension LibraryController {
             }
         }
 
+        // The written files changed on disk — their cached mtimes are stale.
+        if written > 0 { thumbnails?.invalidateModificationTimes() }
+
         let inSync = jobs.count - written - unreadable.count - failures.count
         var message = "Saved metadata into \(written) file\(written == 1 ? "" : "s")."
         if inSync > 0 { message += " \(inSync) already in sync." }

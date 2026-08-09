@@ -155,6 +155,24 @@ public enum LEDStateComputer {
         }
     }
 
+    /// Bindings parsed out of their string form once — LED updates fire per
+    /// anchor change and should not re-parse every binding each time.
+    public static func parseBindings(_ map: MidiMap) -> [(address: MidiAddress, command: ActionCommand)] {
+        map.bindings.compactMap { noteString, actionString in
+            guard let address = MidiAddress(noteString: noteString),
+                  let command = ActionCommand(actionString: actionString)
+            else { return nil }
+            return (address, command)
+        }
+    }
+
+    /// All bound addresses that must currently be lit, from pre-parsed bindings.
+    public static func litAddresses(
+        parsed: [(address: MidiAddress, command: ActionCommand)], state: ControlSurfaceState
+    ) -> Set<MidiAddress> {
+        Set(parsed.compactMap { isLit($0.command, state: state) ? $0.address : nil })
+    }
+
     /// All bound addresses that must currently be lit.
     public static func litAddresses(map: MidiMap, state: ControlSurfaceState) -> Set<MidiAddress> {
         Set(map.bindings.compactMap { noteString, actionString in

@@ -46,6 +46,9 @@ final class SidebarViewModel {
     }
 
     @ObservationIgnored private var store = CollectionCountsStore()
+    /// Rules grouped per collection, cached — recomputing the grouping on
+    /// every photosUpdated event was pure per-event overhead.
+    @ObservationIgnored private var cachedRulesByCollection: [Int64: [CollectionRuleRecord]] = [:]
 
     init(controller: LibraryController) {
         self.controller = controller
@@ -83,38 +86,47 @@ final class SidebarViewModel {
                 collapsedGroups = controller.storedCollapsedGroups
             }
             rebuildCounts()
+        case .collectionListChanged:
+            // Cosmetic (rename/reorder/empty group): membership is untouched,
+            // so no O(photos × collections) sweep. The sidebar rows refresh
+            // via snapshot observation on their own.
+            break
         case .photosUpdated(let ids):
             guard let snapshot = controller.snapshot else { return }
             // Delta only — O(changed × collections), the acceptance criterion.
             store.update(
                 changedPhotos: ids.compactMap { controller.photo(withId: $0) },
                 collections: snapshot.collections,
-                rulesByCollection: snapshot.rulesByCollection,
+                rulesByCollection: cachedRulesByCollection,
                 lastImportBatchId: snapshot.meta.lastImportBatchId,
                 facts: { [controller] photo in
                     photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
                 }
             )
-            counts = store.counts
+            // Equality guard: a rotation changes no count, and an unguarded
+            // assignment would invalidate the sidebar per key repeat.
+            if counts != store.counts { counts = store.counts }
         }
     }
 
     private func rebuildCounts() {
         guard let snapshot = controller.snapshot else {
             store = CollectionCountsStore()
+            cachedRulesByCollection = [:]
             counts = SidebarCounts()
             return
         }
+        cachedRulesByCollection = snapshot.rulesByCollection
         store.rebuild(
             photos: snapshot.photos,
             collections: snapshot.collections,
-            rulesByCollection: snapshot.rulesByCollection,
+            rulesByCollection: cachedRulesByCollection,
             lastImportBatchId: snapshot.meta.lastImportBatchId,
             facts: { [controller] photo in
                 photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
             }
         )
-        counts = store.counts
+        if counts != store.counts { counts = store.counts }
     }
 
     // MARK: Editing

@@ -4,6 +4,7 @@ import CryptoKit
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import os
 
 /// CGImage is immutable and thread-safe; the wrapper carries it across
 /// isolation boundaries under strict concurrency.
@@ -23,11 +24,19 @@ struct CGImageBox: @unchecked Sendable, Equatable {
 ///   (SwiftUI `.task(id:)` cancels when cells scroll away).
 actor ThumbnailPipeline {
     private let cacheDirectory: URL
-    private let memory = NSCache<NSString, CGImage>()
+    /// NSCache is thread-safe; `nonisolated(unsafe)` lets the synchronous
+    /// hit paths below read it without an actor hop.
+    nonisolated(unsafe) private let memory = NSCache<NSString, CGImage>()
     /// Full-size decodes get their own tiny cache: one 60-MP original costs
     /// ~240 MB — sharing the thumbnail cache would evict every grid thumbnail
     /// after two, three photos in the single view.
-    private let originalsMemory = NSCache<NSString, CGImage>()
+    nonisolated(unsafe) private let originalsMemory = NSCache<NSString, CGImage>()
+    /// mtime per path, cached for the session: the cache key needs it, and a
+    /// per-request `stat` made even 100%-memory-hits pay a syscall (a real
+    /// I/O round trip on network volumes). The app itself only rewrites files
+    /// in the metadata save — which calls `invalidateModificationTimes()`.
+    private let modificationTimes = OSAllocatedUnfairLock<[String: TimeInterval]>(initialState: [:])
+    private let counterLock = OSAllocatedUnfairLock<Stats>(initialState: Stats())
     private let maxConcurrentDecodes = 8
     private var activeDecodes = 0
     private var slotWaiters: [(id: UUID, continuation: CheckedContinuation<Void, any Error>)] = []
@@ -45,30 +54,64 @@ actor ThumbnailPipeline {
         var diskHits = 0
         var decodes = 0
     }
-    private var counters = Stats()
 
     init(libraryUUID: String) {
-        memory.totalCostLimit = 300 * 1024 * 1024
+        // Scale the thumbnail cache with the machine instead of a flat 300 MB:
+        // a 768 bitmap costs ~2.3 MB, and holding only two screenfuls made
+        // every scroll-back a disk round trip.
+        let physical = Int(clamping: ProcessInfo.processInfo.physicalMemory)
+        memory.totalCostLimit = min(max(300 * 1024 * 1024, physical / 8), 2 * 1024 * 1024 * 1024)
         originalsMemory.countLimit = 3
+        originalsMemory.totalCostLimit = 768 * 1024 * 1024
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cacheDirectory = caches
             .appendingPathComponent("Thumbnails", isDirectory: true)
             .appendingPathComponent(libraryUUID, isDirectory: true)
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         // The disk cache has no other eviction: stale entries (changed mtime)
-        // and closed-forever libraries would grow it without bound.
+        // and closed-forever libraries would grow it without bound. Delayed so
+        // the ~100k directory stats don't compete with the first visible
+        // thumbnails for disk bandwidth right at library open.
         Task.detached(priority: .utility) { [cacheDirectory] in
+            try? await Task.sleep(for: .seconds(30))
             Self.pruneDiskCache(at: cacheDirectory, budgetBytes: 2 * 1024 * 1024 * 1024)
         }
     }
 
-    func stats() -> Stats { counters }
+    nonisolated func stats() -> Stats { counterLock.withLock { $0 } }
+
+    /// Wipes the session mtime cache — after the metadata save rewrites files
+    /// on disk, their cache keys must re-stat.
+    nonisolated func invalidateModificationTimes() {
+        modificationTimes.withLock { $0.removeAll() }
+    }
+
+    /// Synchronous, hop-free memory lookup. Returns nil when the image is not
+    /// in memory OR the path was never stat'ed this session — callers fall
+    /// back to the async path then. This is what lets a scrolling grid cell
+    /// show a cached thumbnail in the same frame it is configured.
+    nonisolated func cachedThumbnail(forPath path: String, longEdge: Int) -> CGImageBox? {
+        guard let mtime = modificationTimes.withLock({ $0[path] }) else { return nil }
+        let key = "\(path)|\(Int(mtime))|\(longEdge)" as NSString
+        guard let hit = memory.object(forKey: key) else { return nil }
+        counterLock.withLock { $0.memoryHits += 1 }
+        return CGImageBox(image: hit)
+    }
+
+    /// Synchronous peek for the single view — same contract as above.
+    nonisolated func cachedOriginal(forPath path: String) -> CGImageBox? {
+        guard let mtime = modificationTimes.withLock({ $0[path] }) else { return nil }
+        let key = "\(path)|\(Int(mtime))|original" as NSString
+        guard let hit = originalsMemory.object(forKey: key) else { return nil }
+        counterLock.withLock { $0.memoryHits += 1 }
+        return CGImageBox(image: hit)
+    }
 
     /// Nonisolated on purpose: the mtime stat is disk I/O — inside the actor it
     /// would serialise every thumbnail request (including pure memory hits)
     /// behind a syscall.
     nonisolated func thumbnail(forPath path: String, longEdge: Int) async -> CGImageBox? {
-        let modificationTime = Self.modificationTime(atPath: path)
+        let modificationTime = resolvedModificationTime(atPath: path)
         let key = "\(path)|\(Int(modificationTime))|\(longEdge)"
         return await cachedThumbnail(key: key, path: path, longEdge: longEdge)
     }
@@ -77,14 +120,22 @@ actor ThumbnailPipeline {
     /// (the original is already on disk; a JPEG re-encode would only add loss).
     /// Memory-cached so flipping back and forth between photos stays instant.
     nonisolated func originalImage(forPath path: String) async -> CGImageBox? {
-        let modificationTime = Self.modificationTime(atPath: path)
+        let modificationTime = resolvedModificationTime(atPath: path)
         let key = "\(path)|\(Int(modificationTime))|original"
         return await cachedOriginal(key: key, path: path)
     }
 
+    /// Session-cached mtime; stats at most once per path per session.
+    nonisolated private func resolvedModificationTime(atPath path: String) -> TimeInterval {
+        if let cached = modificationTimes.withLock({ $0[path] }) { return cached }
+        let fresh = Self.modificationTime(atPath: path)
+        modificationTimes.withLock { $0[path] = fresh }
+        return fresh
+    }
+
     private func cachedOriginal(key: String, path: String) async -> CGImageBox? {
         if let hit = originalsMemory.object(forKey: key as NSString) {
-            counters.memoryHits += 1
+            counterLock.withLock { $0.memoryHits += 1 }
             return CGImageBox(image: hit)
         }
         return await coalescedDecode(key: key) { [weak self] in
@@ -98,14 +149,18 @@ actor ThumbnailPipeline {
         defer { releaseSlot() }
         if Task.isCancelled { return nil }
         guard let decoded = await Self.decodeFull(path: path) else { return nil }
-        counters.decodes += 1
-        originalsMemory.setObject(decoded.image, forKey: key as NSString)
+        counterLock.withLock { $0.decodes += 1 }
+        originalsMemory.setObject(
+            decoded.image,
+            forKey: key as NSString,
+            cost: decoded.image.bytesPerRow * decoded.image.height
+        )
         return decoded
     }
 
     private func cachedThumbnail(key: String, path: String, longEdge: Int) async -> CGImageBox? {
         if let hit = memory.object(forKey: key as NSString) {
-            counters.memoryHits += 1
+            counterLock.withLock { $0.memoryHits += 1 }
             return CGImageBox(image: hit)
         }
         return await coalescedDecode(key: key) { [weak self] in
@@ -121,7 +176,7 @@ actor ThumbnailPipeline {
 
         let cacheFile = cacheDirectory.appendingPathComponent(Self.hash(key) + ".jpg")
         if let cached = await Self.decodeCacheFile(cacheFile) {
-            counters.diskHits += 1
+            counterLock.withLock { $0.diskHits += 1 }
             store(cached, forKey: key)
             return cached
         }
@@ -130,9 +185,14 @@ actor ThumbnailPipeline {
         guard let decoded = await Self.decodeOriginal(path: path, longEdge: longEdge) else {
             return nil
         }
-        counters.decodes += 1
+        counterLock.withLock { $0.decodes += 1 }
         store(decoded, forKey: key)
-        await Self.writeCacheFile(decoded, to: cacheFile)
+        // Off the display path AND off the decode slot: the cell must not
+        // wait on JPEG encode + disk write, and the write must not occupy one
+        // of the bounded decode slots.
+        Task.detached(priority: .utility) {
+            await Self.writeCacheFile(decoded, to: cacheFile)
+        }
         return decoded
     }
 
@@ -297,9 +357,12 @@ actor ThumbnailPipeline {
         return CGImageBox(image: image)
     }
 
+    /// Plain `stat` — `attributesOfItem` builds the full attribute dictionary
+    /// including owner-name lookups, several times the cost.
     nonisolated private static func modificationTime(atPath path: String) -> TimeInterval {
-        ((try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date)?
-            .timeIntervalSince1970) ?? 0
+        var status = stat()
+        guard stat(path, &status) == 0 else { return 0 }
+        return TimeInterval(status.st_mtimespec.tv_sec)
     }
 
     /// Oldest-first prune to a byte budget. Access times are not tracked

@@ -253,7 +253,11 @@ struct MainWindow: View {
                         spacing: appearance.gridSpacing
                     )
                 case .single:
-                    SingleView(photo: center.anchorPhoto, pipeline: pipeline)
+                    SingleView(
+                        photo: center.anchorPhoto,
+                        neighbors: center.anchorNeighbors,
+                        pipeline: pipeline
+                    )
                 }
             }
             .task(id: photos.count) {

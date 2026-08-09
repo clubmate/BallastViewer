@@ -83,12 +83,13 @@ extension LibraryController {
         case .existing(let id):
             return id
         case .create(let components):
-            guard let result: (id: Int64, records: [KeywordRecord]) = writeSync({ db in
-                let id = try KeywordDAO.ensurePath(components, groupId: nil, in: db)
-                return (id, try KeywordDAO.fetchAll(db))
+            guard let result: (leafId: Int64, created: [KeywordRecord]) = writeSync({ db in
+                try KeywordDAO.ensurePathCollectingCreated(components, groupId: nil, in: db)
             }) else { return nil }
-            mutateSnapshot { $0.keywordTree = KeywordTree(records: result.records) }
-            return result.id
+            // Delta rebuild from memory — no re-fetch of the whole keyword
+            // table on the assign-while-culling hot path.
+            mutateSnapshot { $0.keywordTree = $0.keywordTree.inserting(contentsOf: result.created) }
+            return result.leafId
         }
     }
 
@@ -102,14 +103,14 @@ extension LibraryController {
         let name = uniqueSiblingName(
             base: KeywordDAO.normalize(baseName), parentId: parentId, tree: snapshot.keywordTree
         )
-        guard let result: (id: Int64, records: [KeywordRecord]) = writeSync({ db in
+        guard let created: KeywordRecord = writeSync({ db in
             var record = KeywordRecord(parentId: parentId, groupId: groupId, name: name)
             try record.insert(db)
-            return (record.id!, try KeywordDAO.fetchAll(db))
+            return record
         }) else { return nil }
-        mutateSnapshot { $0.keywordTree = KeywordTree(records: result.records) }
+        mutateSnapshot { $0.keywordTree = $0.keywordTree.inserting(created) }
         // No photo carries a brand-new node — no event needed.
-        return result.id
+        return created.id
     }
 
     /// One UPDATE; every chip/count derived from the subtree's paths follows (C4).
@@ -124,13 +125,13 @@ extension LibraryController {
             return
         }
         let oldPath = snapshot.keywordTree.path(of: id)
-        guard let records: [KeywordRecord] = writeSync({ db in
-            try KeywordDAO.rename(id, to: name, in: db)
-            return try KeywordDAO.fetchAll(db)
-        }) else { return }
+        guard writeSync({ db in try KeywordDAO.rename(id, to: name, in: db) }) != nil
+        else { return }
         let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
-        mutateSnapshot { $0.keywordTree = KeywordTree(records: records) }
-        invalidateAllFacts()
+        mutateSnapshot { $0.keywordTree = $0.keywordTree.renaming(id, to: name) }
+        // Only the carriers' facts changed — wiping the whole cache would make
+        // the next rebuild re-derive 50k photos.
+        invalidateFacts(forPhotoIds: carriers)
         if let newPath = self.snapshot?.keywordTree.path(of: id), newPath != oldPath {
             keywordPathRenamed?(oldPath, newPath)
         }
@@ -148,17 +149,15 @@ extension LibraryController {
         guard snapshot != nil else { return }
         let removedIds = subtreeIds(of: id)
         let carriers = photoIdsCarrying(keywordIds: removedIds)
-        guard let records: [KeywordRecord] = writeSync({ db in
-            try KeywordDAO.deleteSubtree(id, in: db)
-            return try KeywordDAO.fetchAll(db)
-        }) else { return }
+        guard writeSync({ db in try KeywordDAO.deleteSubtree(id, in: db) }) != nil
+        else { return }
         mutateSnapshot { snapshot in
-            snapshot.keywordTree = KeywordTree(records: records)
+            snapshot.keywordTree = snapshot.keywordTree.deletingSubtree(id)
             for photoId in carriers {
                 snapshot.keywordIdsByPhoto[photoId]?.subtract(removedIds)
             }
         }
-        invalidateAllFacts()
+        invalidateFacts(forPhotoIds: carriers)
         emitCatalogEvent(.photosUpdated(carriers))
     }
 
@@ -216,15 +215,14 @@ extension LibraryController {
             snapshot.keywordTree.effectiveGroupId(of: $0) == id
         })
         let carriers = photoIdsCarrying(keywordIds: memberIds)
-        guard let records: [KeywordRecord] = writeSync({ db in
-            try KeywordDAO.deleteGroup(id, in: db)
-            return try KeywordDAO.fetchAll(db)
-        }) else { return }
+        guard writeSync({ db in try KeywordDAO.deleteGroup(id, in: db) }) != nil
+        else { return }
         mutateSnapshot { snapshot in
             snapshot.keywordGroups.removeAll { $0.id == id }
-            snapshot.keywordTree = KeywordTree(records: records)
+            // Mirrors the FK setNull cascade without a re-fetch.
+            snapshot.keywordTree = snapshot.keywordTree.removingGroup(id)
         }
-        invalidateAllFacts()
+        invalidateFacts(forPhotoIds: carriers)
         emitCatalogEvent(.photosUpdated(carriers))
     }
 

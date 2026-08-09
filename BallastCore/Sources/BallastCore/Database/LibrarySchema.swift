@@ -118,6 +118,13 @@ public enum LibrarySchema {
             try db.create(index: "photo_importBatchId", on: "photo", columns: ["importBatchId"])
         }
 
+        migrator.registerMigration("v3-drop-rating-index") { db in
+            // No query ever filters on rating in SQL (rating filters run
+            // in-memory by design), but every rating write — the hottest write
+            // path — maintained this B-tree.
+            try db.drop(index: "photo_rating")
+        }
+
         return migrator
     }
 

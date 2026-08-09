@@ -22,19 +22,26 @@ final class GridViewItem: NSCollectionViewItem {
         pipeline: ThumbnailPipeline,
         onClick: @escaping (Int64, NSEvent.ModifierFlags, Int) -> Void
     ) {
-        // Keep the current bitmap when re-configuring for the same photo
-        // (reloadData after a membership change): the async cache lookup means
-        // clearing here would flash every visible cell transparent.
         let isSamePhoto = photoId == photo.id
         photoId = photo.id
         itemView.onClick = { modifiers, clickCount in onClick(photo.id, modifiers, clickCount) }
         itemView.setOrientation(photo.orientation)
+        setSelected(isSelected)
+        loadTask?.cancel()
+
+        // Synchronous memory hit: the cached bitmap lands in the SAME frame
+        // the cell is configured — no transparent flash, no actor hop.
+        if let hit = pipeline.cachedThumbnail(forPath: photo.path, longEdge: bucket) {
+            itemView.setImage(hit.image)
+            loadTask = nil
+            return
+        }
+        // Keep the current bitmap when re-configuring for the same photo
+        // (reloadData after a membership change): the async cache lookup means
+        // clearing here would flash every visible cell transparent.
         if !isSamePhoto {
             itemView.setImage(nil)
         }
-        setSelected(isSelected)
-
-        loadTask?.cancel()
         loadTask = Task { [weak self] in
             let box = await pipeline.thumbnail(forPath: photo.path, longEdge: bucket)
             guard !Task.isCancelled, let self, self.photoId == photo.id else { return }

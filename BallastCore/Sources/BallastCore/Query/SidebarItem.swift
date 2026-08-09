@@ -67,4 +67,28 @@ public enum SidebarFilter {
             )
         }
     }
+
+    /// Hot-path variant: the caller compiled each collection's rules once
+    /// (`CompiledRules`) instead of re-parsing them for every photo. A missing
+    /// entry means "unknown collection" → matches nothing, like above.
+    public static func matches(
+        _ photo: PhotoRecord,
+        facts: @autoclosure () -> PhotoQueryFacts,
+        item: SidebarItem,
+        compiledCollections: [Int64: CompiledRules],
+        lastImportBatchId: Int64?
+    ) -> Bool {
+        switch item {
+        case .allPhotos:
+            return true
+        case .lastImport:
+            guard let batchId = lastImportBatchId else { return false }
+            return photo.importBatchId == batchId
+        case .rating(let stars):
+            return photo.rating == stars
+        case .collection(let id):
+            guard let compiled = compiledCollections[id] else { return false }
+            return compiled.matches(photo, facts: facts())
+        }
+    }
 }

@@ -24,6 +24,7 @@ struct PhotoGridView: NSViewRepresentable {
         let collectionView = NSCollectionView()
         collectionView.collectionViewLayout = GridFlowLayout()
         collectionView.dataSource = context.coordinator
+        collectionView.prefetchDataSource = context.coordinator
         collectionView.isSelectable = false  // clicks are handled by the item views
         collectionView.backgroundColors = [.clear]
         collectionView.register(GridViewItem.self, forItemWithIdentifier: GridViewItem.identifier)
@@ -51,13 +52,19 @@ struct PhotoGridView: NSViewRepresentable {
         }
         // One-pass size changes (panel toggle, window resize) must recompute
         // the cell size — without this the layout keeps the old itemSize and
-        // just rewraps the rows (see GridFlowLayout.prepare).
+        // just rewraps the rows (see GridFlowLayout.prepare). Width-guarded:
+        // a full flow re-prepare is O(photos), and height-only frame changes
+        // (bottom bar toggle) must not pay it.
         scrollView.postsFrameChangedNotifications = true
         context.coordinator.frameObserver = NotificationCenter.default.addObserver(
             forName: NSView.frameDidChangeNotification, object: scrollView, queue: .main
-        ) { [weak collectionView] _ in
+        ) { [weak collectionView, weak scrollView] _ in
             MainActor.assumeIsolated {
-                collectionView?.collectionViewLayout?.invalidateLayout()
+                guard let collectionView, let scrollView,
+                      let layout = collectionView.collectionViewLayout as? GridFlowLayout,
+                      layout.lastLayoutWidth != scrollView.contentView.bounds.width
+                else { return }
+                layout.invalidateLayout()
             }
         }
         return scrollView
@@ -81,7 +88,7 @@ struct PhotoGridView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSCollectionViewDataSource {
+    final class Coordinator: NSObject, NSCollectionViewDataSource, NSCollectionViewPrefetching {
         private let viewModel: CenterViewModel
         weak var collectionView: NSCollectionView?
         // nonisolated(unsafe): only written once on the main actor; deinit
@@ -153,6 +160,9 @@ struct PhotoGridView: NSViewRepresentable {
             let previousSelection = selection
             selection = newSelection
             if needsReload {
+                // Membership changed: queued prefetches point at stale index
+                // paths — drop them, the new visible set re-requests.
+                cancelAllPrefetches()
                 collectionView?.reloadData()
             } else if previousSelection != newSelection {
                 refreshVisibleSelection()
@@ -193,6 +203,46 @@ struct PhotoGridView: NSViewRepresentable {
             collectionView.scrollToItems(at: [indexPath], scrollPosition: .nearestHorizontalEdge)
         }
 
+        // MARK: Prefetching
+
+        /// Thumbnail requests for cells just outside the viewport, so fast
+        /// scrolling hits memory instead of showing empty cells until the
+        /// disk/decode round trip lands. Cancellation feeds the pipeline's
+        /// refcounted in-flight bookkeeping.
+        private var prefetchTasks: [IndexPath: Task<Void, Never>] = [:]
+
+        private func cancelAllPrefetches() {
+            for task in prefetchTasks.values { task.cancel() }
+            prefetchTasks = [:]
+        }
+
+        private func currentBucket(_ collectionView: NSCollectionView) -> Int {
+            let cellPoints = (collectionView.collectionViewLayout as? GridFlowLayout)?
+                .itemSize.width ?? 128
+            let scale = collectionView.window?.backingScaleFactor ?? 2
+            return ThumbnailBuckets.bucket(forPixelSize: Int(cellPoints * scale))
+        }
+
+        func collectionView(_ collectionView: NSCollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+            guard let pipeline else { return }
+            let bucket = currentBucket(collectionView)
+            for indexPath in indexPaths where photos.indices.contains(indexPath.item) {
+                let path = photos[indexPath.item].path
+                guard pipeline.cachedThumbnail(forPath: path, longEdge: bucket) == nil else { continue }
+                prefetchTasks[indexPath] = Task {
+                    _ = await pipeline.thumbnail(forPath: path, longEdge: bucket)
+                }
+            }
+        }
+
+        func collectionView(
+            _ collectionView: NSCollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]
+        ) {
+            for indexPath in indexPaths {
+                prefetchTasks.removeValue(forKey: indexPath)?.cancel()
+            }
+        }
+
         // MARK: NSCollectionViewDataSource
 
         func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -209,10 +259,7 @@ struct PhotoGridView: NSViewRepresentable {
             let photo = photos[indexPath.item]
             guard let pipeline else { return item }
 
-            let cellPoints = (collectionView.collectionViewLayout as? GridFlowLayout)?
-                .itemSize.width ?? 128
-            let scale = collectionView.window?.backingScaleFactor ?? 2
-            let bucket = ThumbnailBuckets.bucket(forPixelSize: Int(cellPoints * scale))
+            let bucket = currentBucket(collectionView)
 
             item.configure(
                 photo: photo,
@@ -232,6 +279,9 @@ struct PhotoGridView: NSViewRepresentable {
 final class GridFlowLayout: NSCollectionViewFlowLayout {
     var columnCount = 5
     var spacing: CGFloat = 12
+    /// The viewport width the current layout was prepared for — the guard that
+    /// keeps scrolling and height-only changes from re-preparing O(photos).
+    private(set) var lastLayoutWidth: CGFloat = 0
 
     override func prepare() {
         // The viewport (clip view) width, NOT the collection view's own bounds:
@@ -247,6 +297,7 @@ final class GridFlowLayout: NSCollectionViewFlowLayout {
             // visible whenever the width shifts by a scroller. Sub-point slack
             // per row is invisible; an early wrap is not.
             let cell = max(10, ((width - spacing * CGFloat(columnCount + 1)) / CGFloat(columnCount)).rounded(.down))
+            lastLayoutWidth = width
             itemSize = NSSize(width: cell, height: cell)
             minimumInteritemSpacing = spacing
             minimumLineSpacing = spacing
@@ -256,6 +307,8 @@ final class GridFlowLayout: NSCollectionViewFlowLayout {
     }
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
-        true
+        // Scrolling changes only the origin; a cell-size change needs a new
+        // width. Column/spacing edits invalidate explicitly in `apply`.
+        newBounds.width != lastLayoutWidth
     }
 }

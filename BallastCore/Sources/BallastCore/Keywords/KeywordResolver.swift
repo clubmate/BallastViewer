@@ -48,11 +48,15 @@ public enum KeywordResolver {
 /// Autocomplete over the whole tree: every node is offered, not just leaves (Q17).
 /// Ad-hoc keywords are tree nodes too, so this is the spec's vocabulary∪index list.
 public enum KeywordAutocomplete {
+    /// Filters the tree's precomputed folded corpus with one plain-`contains`
+    /// pass — no path construction and no per-path ICU search per keystroke.
     public static func suggestions(for input: String, tree: KeywordTree) -> [String] {
         let needle = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return [] }
-        return tree.allPaths()
-            .filter { $0.range(of: needle, options: .caseInsensitive) != nil }
+        let foldedNeedle = CaseInsensitiveMatch.fold(needle)
+        return tree.allFoldedPaths()
+            .filter { $0.folded.contains(foldedNeedle) }
+            .map(\.path)
             .sorted()
     }
 }

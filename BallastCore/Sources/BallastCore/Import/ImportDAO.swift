@@ -44,13 +44,20 @@ public enum ImportDAO {
     ///
     /// Keyword strings are split on `" > "` and stored as node chains; unknown
     /// keywords become ad-hoc nodes (groupId nil), verbatim as in the original.
+    /// `existingPaths` lets the caller reuse a path set it already read (the
+    /// import flow needs one anyway to skip metadata reads); nil re-reads it
+    /// here. The UNIQUE(path) constraint stays the correctness backstop — a
+    /// path inserted between the caller's read and this transaction fails the
+    /// import loudly instead of importing a duplicate.
     public static func importPhotos(
         _ items: [ImportItem],
         folderId: Int64,
+        existingPaths: Set<String>? = nil,
         date: Date = Date(),
         in db: Database
     ) throws -> ImportResult {
-        let existingPaths = Set(try String.fetchAll(db, sql: "SELECT path FROM photo"))
+        let existingPaths = try existingPaths
+            ?? Set(String.fetchAll(db, sql: "SELECT path FROM photo"))
         let newItems = items.filter { !existingPaths.contains($0.path) }
         guard !newItems.isEmpty else {
             return ImportResult(added: 0, skipped: items.count, batchId: nil)

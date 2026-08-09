@@ -145,16 +145,26 @@ final class LibraryController {
 
     /// In-place mutation of catalog photos: memory first (synchronous, instant
     /// UI), the returned records are what the caller persists asynchronously.
+    ///
+    /// Mutations run against copies first: writing through `snapshot` fires
+    /// Observation regardless of whether anything changed, so a no-op (holding
+    /// "5" on an already-5-star photo) would re-render every snapshot reader
+    /// at key-repeat rate.
     func mutatePhotos(ids: [Int64], _ mutate: (inout PhotoRecord) -> Void) -> [PhotoRecord] {
-        guard snapshot != nil else { return [] }
+        guard let current = snapshot else { return [] }
         var changed: [PhotoRecord] = []
+        var updates: [(index: Int, record: PhotoRecord)] = []
         for id in ids {
             guard let index = photoIndexById[id] else { continue }
-            let before = snapshot!.photos[index]
-            mutate(&snapshot!.photos[index])
-            if snapshot!.photos[index] != before {
-                changed.append(snapshot!.photos[index])
+            var copy = current.photos[index]
+            mutate(&copy)
+            if copy != current.photos[index] {
+                updates.append((index, copy))
+                changed.append(copy)
             }
+        }
+        for update in updates {
+            snapshot!.photos[update.index] = update.record
         }
         return changed
     }
@@ -180,28 +190,37 @@ final class LibraryController {
 
     // MARK: Lifecycle
 
-    func createLibrary(at url: URL) {
-        do {
-            // The save panel already asked "Replace?" — honour that answer,
-            // but only ever remove something that is a library package.
-            if FileManager.default.fileExists(atPath: url.path) {
-                guard url.pathExtension == LibraryDatabase.packageExtension else {
-                    throw LibraryDatabaseError.alreadyExists(url)
+    /// Serialises open/create requests: the launch auto-reopen and an explicit
+    /// open (menu, TestHooks) may overlap now that opening suspends for the
+    /// off-main snapshot load — interleaved installs would corrupt state.
+    private let openQueue = TaskQueue()
+
+    func createLibrary(at url: URL) async {
+        await openQueue.run {
+            do {
+                // The save panel already asked "Replace?" — honour that answer,
+                // but only ever remove something that is a library package.
+                if FileManager.default.fileExists(atPath: url.path) {
+                    guard url.pathExtension == LibraryDatabase.packageExtension else {
+                        throw LibraryDatabaseError.alreadyExists(url)
+                    }
+                    try FileManager.default.removeItem(at: url)
                 }
-                try FileManager.default.removeItem(at: url)
+                let database = try LibraryDatabase.create(at: url)
+                try await self.openLoaded(database, at: url, didStartAccess: false)
+            } catch {
+                self.errorMessage = "Could not create the library.\n\(error.localizedDescription)"
             }
-            let database = try LibraryDatabase.create(at: url)
-            try install(database, at: url)
-        } catch {
-            errorMessage = "Could not create the library.\n\(error.localizedDescription)"
         }
     }
 
-    func openLibrary(at url: URL) {
-        do {
-            try openThrowing(at: url)
-        } catch {
-            errorMessage = "Could not open “\(url.lastPathComponent)”.\n\(error.localizedDescription)"
+    func openLibrary(at url: URL) async {
+        await openQueue.run {
+            do {
+                try await self.openThrowing(at: url)
+            } catch {
+                self.errorMessage = "Could not open “\(url.lastPathComponent)”.\n\(error.localizedDescription)"
+            }
         }
     }
 
@@ -243,34 +262,54 @@ final class LibraryController {
 
     private func reopenLastLibrary() {
         guard let url = bookmarks.resolveLastOpened() else { return }
-        do {
-            try openThrowing(at: url)
-        } catch {
-            // The library moved or broke since last launch: start empty, tell the
-            // user once, and stop trying on every launch.
-            bookmarks.clearLastOpened()
-            errorMessage = "The last library “\(url.lastPathComponent)” could not be reopened.\n\(error.localizedDescription)"
+        Task {
+            await self.openQueue.run {
+                do {
+                    try await self.openThrowing(at: url)
+                } catch {
+                    // The library moved or broke since last launch: start empty,
+                    // tell the user once, and stop trying on every launch.
+                    self.bookmarks.clearLastOpened()
+                    self.errorMessage = "The last library “\(url.lastPathComponent)” could not be reopened.\n\(error.localizedDescription)"
+                }
+            }
         }
     }
 
-    private func openThrowing(at url: URL) throws {
+    private func openThrowing(at url: URL) async throws {
         // Bookmark-resolved URLs need the security scope started before any file
         // access; for fresh panel URLs the call returns false and access is
         // already implicit.
         let didStartAccess = url.startAccessingSecurityScopedResource()
         do {
-            let database = try LibraryDatabase.open(at: url)
-            releaseCurrent()
-            accessedURL = didStartAccess ? url : nil
-            try install(database, at: url)
+            // Pool creation + migration is disk I/O — off the MainActor.
+            let database = try await Task.detached(priority: .userInitiated) {
+                try LibraryDatabase.open(at: url)
+            }.value
+            try await openLoaded(database, at: url, didStartAccess: didStartAccess)
         } catch {
             if didStartAccess { url.stopAccessingSecurityScopedResource() }
             throw error
         }
     }
 
-    private func install(_ database: LibraryDatabase, at url: URL) throws {
-        let loaded = try database.pool.read { try LibrarySnapshot.load($0) }
+    /// Shared tail of open/create: release the old library, load the snapshot
+    /// OFF the MainActor (a 50k-photo load was a 0.5–1 s beachball when it ran
+    /// synchronously here), then install the mirror.
+    private func openLoaded(
+        _ database: LibraryDatabase, at url: URL, didStartAccess: Bool
+    ) async throws {
+        releaseCurrent()
+        // During the load there is no writable library: writeSync no-ops and
+        // catalog mutations only touch the outgoing snapshot copy.
+        library = nil
+        writePipeline = nil
+        accessedURL = didStartAccess ? url : nil
+        let loaded = try await database.pool.read { try LibrarySnapshot.load($0) }
+        install(database, snapshot: loaded, at: url)
+    }
+
+    private func install(_ database: LibraryDatabase, snapshot loaded: LibrarySnapshot, at url: URL) {
         snapshot = loaded
         thumbnails = ThumbnailPipeline(libraryUUID: loaded.meta.libraryUUID)
         library = database
@@ -392,19 +431,21 @@ final class LibraryController {
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        createLibrary(at: url)
+        Task {
+            await createLibrary(at: url)
 
-        // U1: a fresh library flows straight into adding photos.
-        guard isLibraryOpen else {
+            // U1: a fresh library flows straight into adding photos.
+            guard isLibraryOpen else {
+                pendingImportFolders = []
+                return
+            }
+            let dropped = pendingImportFolders
             pendingImportFolders = []
-            return
-        }
-        let dropped = pendingImportFolders
-        pendingImportFolders = []
-        if dropped.isEmpty {
-            presentAddFolderPanel()
-        } else {
-            Task { await importFolders(dropped, recursive: true) }
+            if dropped.isEmpty {
+                presentAddFolderPanel()
+            } else {
+                await importFolders(dropped, recursive: true)
+            }
         }
     }
 
@@ -416,6 +457,25 @@ final class LibraryController {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        openLibrary(at: url)
+        Task { await openLibrary(at: url) }
+    }
+}
+
+/// FIFO chain of MainActor jobs: each `run` waits for everything enqueued
+/// before it. Used to serialise library open/create flows.
+@MainActor
+final class TaskQueue {
+    private var tail: Task<Void, Never>?
+
+    nonisolated init() {}
+
+    func run(_ body: @escaping @MainActor () async -> Void) async {
+        let previous = tail
+        let task = Task { @MainActor in
+            await previous?.value
+            await body()
+        }
+        tail = task
+        await task.value
     }
 }

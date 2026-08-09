@@ -5,6 +5,10 @@ import Foundation
 /// tens of thousands of keywords.
 ///
 /// Path strings (`"PEOPLE > ANNA"`) are derived here, never stored (fixes C4).
+/// Because the tree is immutable, every derived per-node value — path, folded
+/// path, effective group — is precomputed in one DFS at construction: the same
+/// path is shared by thousands of photos, and walking ancestors per lookup was
+/// the single hottest string cost in facts/counts rebuilds and autocomplete.
 public struct KeywordTree: Sendable {
     public static let separator = " > "
 
@@ -12,6 +16,12 @@ public struct KeywordTree: Sendable {
     /// Children per parent (nil = top level), name-sorted — siblings are always
     /// alphabetical, unlike drag-ordered groups (Q19).
     private let childIdsByParent: [Int64?: [Int64]]
+    /// Memoized derived data, keyed by node id. Nodes unreachable from the
+    /// roots (a parentId cycle in a corrupt DB) are absent and fall back to
+    /// the guarded ancestor walk.
+    private let pathById: [Int64: String]
+    private let foldedPathById: [Int64: String]
+    private let effectiveGroupById: [Int64: Int64]
 
     public init(records: [KeywordRecord]) {
         var byId: [Int64: KeywordRecord] = [:]
@@ -22,11 +32,34 @@ public struct KeywordTree: Sendable {
             byParent[record.parentId, default: []].append(record)
         }
         nodesById = byId
-        childIdsByParent = byParent.mapValues { siblings in
+        let children = byParent.mapValues { siblings in
             siblings
                 .sorted { ($0.name, $0.id ?? 0) < ($1.name, $1.id ?? 0) }
                 .compactMap(\.id)
         }
+        childIdsByParent = children
+
+        var paths: [Int64: String] = [:]
+        var folded: [Int64: String] = [:]
+        var groups: [Int64: Int64] = [:]
+        paths.reserveCapacity(byId.count)
+        folded.reserveCapacity(byId.count)
+        var stack: [(id: Int64, parentPath: String?, parentGroup: Int64?)] =
+            (children[nil] ?? []).map { ($0, nil, nil) }
+        while let (id, parentPath, parentGroup) = stack.popLast() {
+            guard let node = byId[id] else { continue }
+            let path = parentPath.map { $0 + Self.separator + node.name } ?? node.name
+            paths[id] = path
+            folded[id] = CaseInsensitiveMatch.fold(path)
+            let effective = node.groupId ?? parentGroup
+            if let effective { groups[id] = effective }
+            for child in children[id] ?? [] {
+                stack.append((child, path, effective))
+            }
+        }
+        pathById = paths
+        foldedPathById = folded
+        effectiveGroupById = groups
     }
 
     public var isEmpty: Bool { nodesById.isEmpty }
@@ -57,9 +90,15 @@ public struct KeywordTree: Sendable {
         return components.reversed()
     }
 
-    /// `"PEOPLE > TEAM > ANNA"` — uppercase by storage invariant.
+    /// `"PEOPLE > TEAM > ANNA"` — uppercase by storage invariant. O(1).
     public func path(of id: Int64) -> String {
-        pathComponents(of: id).joined(separator: Self.separator)
+        pathById[id] ?? pathComponents(of: id).joined(separator: Self.separator)
+    }
+
+    /// The case-folded twin of `path(of:)`, for fold-consistent substring
+    /// matching without per-lookup ICU work. O(1).
+    public func foldedPath(of id: Int64) -> String {
+        foldedPathById[id] ?? CaseInsensitiveMatch.fold(path(of: id))
     }
 
     /// All node ids in depth-first, name-sorted order. Every node — not just
@@ -76,6 +115,12 @@ public struct KeywordTree: Sendable {
 
     public func allPaths() -> [String] {
         allIdsDepthFirst().map { path(of: $0) }
+    }
+
+    /// (folded, display) pairs of every path — the autocomplete corpus.
+    /// Folding happened once at construction; matching is a plain `contains`.
+    public func allFoldedPaths() -> [(folded: String, path: String)] {
+        allIdsDepthFirst().map { (foldedPath(of: $0), path(of: $0)) }
     }
 
     /// First node matching `name` (single component, case-insensitive) in
@@ -103,8 +148,11 @@ public struct KeywordTree: Sendable {
 
     /// The node's own group, or the nearest grouped ancestor's. This is what
     /// group rules and chip colours use, so nested keywords under a grouped
-    /// root behave as group members (C2).
+    /// root behave as group members (C2). O(1).
     public func effectiveGroupId(of id: Int64) -> Int64? {
+        if let cached = effectiveGroupById[id] { return cached }
+        if pathById[id] != nil { return nil }  // reachable, genuinely ungrouped
+        // Unreachable (cyclic) node: guarded walk.
         var visited: Set<Int64> = []
         var current = nodesById[id]
         while let record = current, let recordId = record.id, visited.insert(recordId).inserted {
@@ -122,5 +170,46 @@ public struct KeywordTree: Sendable {
             stack.append(contentsOf: children(of: next))
         }
         return result
+    }
+
+    // MARK: Delta derivations
+
+    /// Every record currently in the tree — the base for delta rebuilds
+    /// without a DB round-trip after a vocabulary mutation.
+    public var allRecords: [KeywordRecord] { Array(nodesById.values) }
+
+    public func inserting(_ record: KeywordRecord) -> KeywordTree {
+        KeywordTree(records: allRecords + [record])
+    }
+
+    public func inserting(contentsOf records: [KeywordRecord]) -> KeywordTree {
+        KeywordTree(records: allRecords + records)
+    }
+
+    public func renaming(_ id: Int64, to name: String) -> KeywordTree {
+        KeywordTree(records: allRecords.map { record in
+            guard record.id == id else { return record }
+            var renamed = record
+            renamed.name = name
+            return renamed
+        })
+    }
+
+    public func deletingSubtree(_ id: Int64) -> KeywordTree {
+        let removed = Set([id] + descendants(of: id))
+        return KeywordTree(records: allRecords.filter { record in
+            record.id.map { !removed.contains($0) } ?? false
+        })
+    }
+
+    /// Mirrors the FK `onDelete: .setNull` of a group deletion: members become
+    /// ad-hoc keywords (C3).
+    public func removingGroup(_ groupId: Int64) -> KeywordTree {
+        KeywordTree(records: allRecords.map { record in
+            guard record.groupId == groupId else { return record }
+            var freed = record
+            freed.groupId = nil
+            return freed
+        })
     }
 }

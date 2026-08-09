@@ -32,6 +32,9 @@ final class MidiService {
     @ObservationIgnored private var lastDispatch: [String: Date] = [:]
     /// Last LED state sent, for diffing and Q3 re-asserts.
     @ObservationIgnored private var litAddresses: Set<MidiAddress> = []
+    /// Bindings parsed once per map change instead of per LED update.
+    @ObservationIgnored private var parsedBindings: [(address: MidiAddress, command: ActionCommand)] = []
+    @ObservationIgnored private var parsedBindingsMap: MidiMap?
 
     init(
         midiMap: MidiMapStore,
@@ -213,8 +216,18 @@ final class MidiService {
         }
     }
 
+    private func currentParsedBindings() -> [(address: MidiAddress, command: ActionCommand)] {
+        if parsedBindingsMap != midiMap.map {
+            parsedBindings = LEDStateComputer.parseBindings(midiMap.map)
+            parsedBindingsMap = midiMap.map
+        }
+        return parsedBindings
+    }
+
     private func applyLEDState() {
-        let lit = LEDStateComputer.litAddresses(map: midiMap.map, state: center.controlSurface)
+        let lit = LEDStateComputer.litAddresses(
+            parsed: currentParsedBindings(), state: center.controlSurface
+        )
         for address in lit.subtracting(litAddresses) { send(address, on: true) }
         for address in litAddresses.subtracting(lit) { send(address, on: false) }
         litAddresses = lit
@@ -224,7 +237,7 @@ final class MidiService {
     /// attached controller shows the current state immediately.
     private func resendFullLEDState() {
         litAddresses = LEDStateComputer.litAddresses(
-            map: midiMap.map, state: center.controlSurface
+            parsed: currentParsedBindings(), state: center.controlSurface
         )
         for noteString in midiMap.map.bindings.keys {
             guard let address = MidiAddress(noteString: noteString) else { continue }

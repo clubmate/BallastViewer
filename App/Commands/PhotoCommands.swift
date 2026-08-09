@@ -44,7 +44,9 @@ struct PhotoCommands: Commands {
     let dispatcher: ActionDispatcher
     let keyMap: KeyMapStore
 
-    private var hasAnchor: Bool { center.selection.anchorId != nil }
+    /// Reads the flip-guarded flag, NOT `selection` — Observation would
+    /// otherwise rebuild the menu on every anchor move at key-repeat rate.
+    private var hasAnchor: Bool { center.hasAnchor }
 
     var body: some Commands {
         CommandMenu("Photo") {
