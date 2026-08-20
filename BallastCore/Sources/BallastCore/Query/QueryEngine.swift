@@ -54,7 +54,7 @@ public struct PhotoQueryFacts: Equatable, Sendable {
 /// whole catalog, the active-collection filter) evaluate every photo against
 /// the same unchanged rules — enum parsing, value parsing, case folding and
 /// the applicable-filter allocation all happen here instead of per photo.
-/// Semantics mirror `QueryEngine.matches` exactly.
+/// `QueryEngine.matches` is a one-shot wrapper over this type.
 public struct CompiledRules: Sendable {
     struct Rule: Sendable {
         let type: RuleType
@@ -171,7 +171,9 @@ public struct CompiledRules: Sendable {
     }
 }
 
-/// Pure, stateless rule evaluation (spec §7.2/§7.3).
+/// Pure, stateless rule evaluation (spec §7.2/§7.3). One-shot convenience
+/// over `CompiledRules` — the hot paths compile once and reuse; there is a
+/// single implementation of the semantics.
 public enum QueryEngine {
     /// Empty rule list matches everything (Q6). Rules with an unknown *type*
     /// are skipped entirely (D6); a known type with an unsupported operator
@@ -182,96 +184,6 @@ public enum QueryEngine {
         rules: [CollectionRuleRecord],
         matchAll: Bool
     ) -> Bool {
-        let applicable = rules.filter { RuleType(rawValue: $0.type) != nil }
-        guard !applicable.isEmpty else { return true }
-        if matchAll {
-            return applicable.allSatisfy { evaluate($0, photo: photo, facts: facts) }
-        }
-        return applicable.contains { evaluate($0, photo: photo, facts: facts) }
-    }
-
-    static func evaluate(
-        _ rule: CollectionRuleRecord, photo: PhotoRecord, facts: PhotoQueryFacts
-    ) -> Bool {
-        guard let type = RuleType(rawValue: rule.type),
-              let op = RuleOperator(rawValue: rule.operation)
-        else { return false }
-
-        switch type {
-        case .keyword:
-            return keywordSetRule(facts.keywordPaths, op, rule.value)
-        case .filename:
-            return stringRule(photo.filename, op, rule.value)
-        case .rating:
-            return intRule(photo.rating, op, rule.value)
-        case .keywordCount:
-            return intRule(facts.keywordPaths.count, op, rule.value)
-        case .keywordGroup:
-            // Inverted-by-exception (spec §7.3): only the two negative
-            // operators negate; everything else reads as "has one".
-            guard let groupId = Int64(rule.value) else { return false }
-            let has = facts.keywordGroupIds.contains(groupId)
-            return (op == .doesNotContain || op == .doesNotEqual) ? !has : has
-        case .dateRange:
-            return dateRule(photo.dateAdded, op, rule.value)
-        case .captureDate:
-            guard let captureDate = photo.captureDate else { return false }
-            return dateRule(captureDate, op, rule.value)
-        case .importBatch:
-            return photo.importBatchId.map(String.init) == rule.value
-        }
-    }
-
-    /// `contains`/`equals` = *any* keyword matches; the negatives are the
-    /// exact logical negations (*no* keyword matches). Case-insensitive via
-    /// the same folding as the search filter.
-    private static func keywordSetRule(_ paths: [String], _ op: RuleOperator, _ value: String) -> Bool {
-        switch op {
-        case .contains:
-            return paths.contains { CaseInsensitiveMatch.contains($0, value) }
-        case .equals:
-            return paths.contains { CaseInsensitiveMatch.equals($0, value) }
-        case .doesNotContain:
-            return !paths.contains { CaseInsensitiveMatch.contains($0, value) }
-        case .doesNotEqual:
-            return !paths.contains { CaseInsensitiveMatch.equals($0, value) }
-        case .greaterThan, .lessThan:
-            return false
-        }
-    }
-
-    private static func stringRule(_ subject: String, _ op: RuleOperator, _ value: String) -> Bool {
-        switch op {
-        case .contains: return CaseInsensitiveMatch.contains(subject, value)
-        case .equals: return CaseInsensitiveMatch.equals(subject, value)
-        case .doesNotContain: return !CaseInsensitiveMatch.contains(subject, value)
-        case .doesNotEqual: return !CaseInsensitiveMatch.equals(subject, value)
-        case .greaterThan, .lessThan: return false
-        }
-    }
-
-    /// `doesNotEqual` is implemented (U10) — the original silently returned
-    /// false. Non-numeric values never match (spec §7.3).
-    private static func intRule(_ subject: Int, _ op: RuleOperator, _ value: String) -> Bool {
-        guard let number = Int(value.trimmingCharacters(in: .whitespaces)) else { return false }
-        switch op {
-        case .equals: return subject == number
-        case .doesNotEqual: return subject != number
-        case .greaterThan: return subject > number
-        case .lessThan: return subject < number
-        case .contains, .doesNotContain: return false
-        }
-    }
-
-    /// Value is a Unix timestamp (seconds) as string; only ordering
-    /// comparisons are meaningful for dates (spec §7.3).
-    private static func dateRule(_ subject: Date, _ op: RuleOperator, _ value: String) -> Bool {
-        guard let seconds = Double(value.trimmingCharacters(in: .whitespaces)) else { return false }
-        let reference = Date(timeIntervalSince1970: seconds)
-        switch op {
-        case .greaterThan: return subject > reference
-        case .lessThan: return subject < reference
-        case .equals, .doesNotEqual, .contains, .doesNotContain: return false
-        }
+        CompiledRules(rules, matchAll: matchAll).matches(photo, facts: facts)
     }
 }

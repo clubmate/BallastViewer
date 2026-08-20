@@ -10,59 +10,44 @@ import Testing
         CollectionRuleRecord(collectionId: 1, type: type, operation: op, value: value, sortOrder: 0)
     }
 
-    @Test func compiledRulesAgreeWithInterpreter() {
-        let photos = [
-            PhotoRecord(id: 1, folderId: 1, path: "/p/Strasse.jpg", rating: 3,
-                        captureDate: Date(timeIntervalSince1970: 1_000),
-                        dateAdded: Date(timeIntervalSince1970: 2_000), importBatchId: 7),
-            PhotoRecord(id: 2, folderId: 1, path: "/p/beach.png", rating: 0,
-                        captureDate: nil,
-                        dateAdded: Date(timeIntervalSince1970: 9_000), importBatchId: nil),
+    /// `CompiledRules` is the single rule implementation (the interpreter was
+    /// folded into it); pin its §7.3 semantics on a table so a future edit
+    /// cannot drift silently.
+    @Test func compiledRulesSemanticsTable() {
+        let photo = PhotoRecord(id: 1, folderId: 1, path: "/p/Strasse.jpg", rating: 3,
+                                captureDate: Date(timeIntervalSince1970: 1_000),
+                                dateAdded: Date(timeIntervalSince1970: 2_000), importBatchId: 7)
+        let empty = PhotoRecord(id: 2, folderId: 1, path: "/p/beach.png", rating: 0,
+                                captureDate: nil,
+                                dateAdded: Date(timeIntervalSince1970: 9_000), importBatchId: nil)
+        let facts = PhotoQueryFacts(keywordPaths: ["STRASSE", "PEOPLE > ANNA"], keywordGroupIds: [3])
+        let table: [(CollectionRuleRecord, Bool, Bool)] = [
+            (rule("keyword", "contains", "straße"), true, false),
+            (rule("keyword", "equals", "people > anna"), true, false),
+            (rule("keyword", "doesNotContain", "ANNA"), false, true),
+            (rule("filename", "contains", "STRAS"), true, false),
+            (rule("rating", "greaterThan", " 2 "), true, false),
+            (rule("rating", "doesNotEqual", "abc"), false, false),
+            (rule("keywordCount", "equals", "2"), true, false),
+            (rule("keywordGroup", "contains", "3"), true, false),
+            (rule("keywordGroup", "doesNotEqual", "3"), false, true),
+            (rule("dateRange", "lessThan", "5000"), true, false),
+            (rule("captureDate", "greaterThan", "500"), true, false),
+            (rule("importBatch", "equals", "7"), true, false),
+            (rule("rating", "unknownOp", "3"), false, false),
         ]
-        let facts = [
-            PhotoQueryFacts(keywordPaths: ["STRASSE", "PEOPLE > ANNA"], keywordGroupIds: [3]),
-            PhotoQueryFacts(),
-        ]
-        let rules = [
-            rule("keyword", "contains", "straße"),
-            rule("keyword", "equals", "people > anna"),
-            rule("keyword", "doesNotContain", "ANNA"),
-            rule("filename", "contains", "STRAS"),
-            rule("rating", "greaterThan", " 2 "),
-            rule("rating", "doesNotEqual", "abc"),
-            rule("keywordCount", "equals", "2"),
-            rule("keywordGroup", "contains", "3"),
-            rule("keywordGroup", "doesNotEqual", "3"),
-            rule("dateRange", "lessThan", "5000"),
-            rule("captureDate", "greaterThan", "500"),
-            rule("importBatch", "equals", "7"),
-            rule("unknownType", "equals", "x"),
-            rule("rating", "unknownOp", "3"),
-        ]
-        for (photo, fact) in zip(photos, facts) {
-            for singleRule in rules {
-                for matchAll in [true, false] {
-                    let interpreted = QueryEngine.matches(
-                        photo, facts: fact, rules: [singleRule], matchAll: matchAll
-                    )
-                    let compiled = CompiledRules([singleRule], matchAll: matchAll)
-                        .matches(photo, facts: fact)
-                    #expect(
-                        interpreted == compiled,
-                        "divergence: \(singleRule.type)/\(singleRule.operation)/\(singleRule.value) matchAll=\(matchAll) photo=\(photo.id ?? 0)"
-                    )
-                }
-            }
-            // Whole-set semantics: empty and mixed lists.
-            #expect(
-                QueryEngine.matches(photo, facts: fact, rules: [], matchAll: true)
-                    == CompiledRules([], matchAll: true).matches(photo, facts: fact)
-            )
-            #expect(
-                QueryEngine.matches(photo, facts: fact, rules: rules, matchAll: false)
-                    == CompiledRules(rules, matchAll: false).matches(photo, facts: fact)
-            )
+        for (singleRule, expectHit, expectEmpty) in table {
+            let compiled = CompiledRules([singleRule], matchAll: true)
+            #expect(compiled.matches(photo, facts: facts) == expectHit,
+                    "\(singleRule.type)/\(singleRule.operation)/\(singleRule.value)")
+            #expect(compiled.matches(empty, facts: PhotoQueryFacts()) == expectEmpty,
+                    "empty: \(singleRule.type)/\(singleRule.operation)/\(singleRule.value)")
         }
+        // Unknown types are skipped (D6): alone → matches everything (Q6).
+        #expect(CompiledRules([rule("unknownType", "equals", "x")], matchAll: true).matches(empty, facts: PhotoQueryFacts()))
+        // QueryEngine is a one-shot wrapper with identical results.
+        #expect(QueryEngine.matches(photo, facts: facts, rules: table.map(\.0), matchAll: false))
+        #expect(!QueryEngine.matches(empty, facts: PhotoQueryFacts(), rules: table.map(\.0), matchAll: true))
     }
 
     @Test func memoizedTreeLookupsAgreeWithWalks() {

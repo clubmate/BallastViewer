@@ -76,21 +76,11 @@ struct MidiRecorderView: View {
                 session.begin(midi: midi, onRecord: { onRecord($0) }, onClear: { onClear() })
             }
         } label: {
-            Text(session.isRecording ? "MIDI…" : (address?.displayName ?? "None"))
-                .font(.caption.monospaced())
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(width: 80, height: 20)
-                .background(
-                    session.isRecording
-                        ? Color.orange.opacity(0.5)
-                        : Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 4)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(.separator, lineWidth: 1)
-                )
+            RecorderPill(
+                text: session.isRecording ? "MIDI…" : (address?.displayName ?? "None"),
+                isActive: session.isRecording,
+                activeColor: Color.orange.opacity(0.5)
+            )
         }
         .buttonStyle(.plain)
         .onDisappear { session.cancel() }

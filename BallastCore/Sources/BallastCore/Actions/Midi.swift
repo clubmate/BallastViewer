@@ -89,42 +89,72 @@ public enum MidiNoteEvent: Equatable, Sendable {
 /// with its full defined length, so a Control Change's data bytes are never
 /// re-examined as potential status bytes and can't fabricate phantom notes.
 /// Only note on/off produce events; everything else is skipped whole.
+///
+/// Two wire-level conventions are honoured as well: single-byte realtime
+/// messages (0xF8…0xFF — clock, active sensing) may be interleaved *between
+/// the data bytes* of any channel message and are skipped transparently, and
+/// running status (data bytes without a repeated status byte) reuses the last
+/// channel status.
 public enum MidiParser {
     public static func parse(_ bytes: [UInt8]) -> [MidiNoteEvent] {
         var events: [MidiNoteEvent] = []
         var index = 0
+        var runningStatus: UInt8? = nil
+
+        /// Next non-realtime byte at or after `index`, advancing past it;
+        /// nil when the stream ends.
+        func nextData() -> UInt8? {
+            while index < bytes.count {
+                let byte = bytes[index]
+                index += 1
+                if byte < 0xF8 { return byte }
+            }
+            return nil
+        }
+
         while index < bytes.count {
-            let status = bytes[index]
+            var status = bytes[index]
+            if status >= 0xF8 {
+                index += 1  // realtime: never alters running status
+                continue
+            }
+            if status < 0x80 {
+                // Data byte in status position → running status, if any.
+                guard let running = runningStatus else { index += 1; continue }
+                status = running
+            } else {
+                index += 1
+                // System common/exclusive clears running status; channel
+                // messages set it.
+                runningStatus = status < 0xF0 ? status : nil
+            }
+
             switch status {
-            case 0x80...0x8F, 0x90...0x9F:
-                guard index + 2 < bytes.count else { return events }
+            case 0x80...0x9F:
+                guard let note = nextData(), let velocity = nextData() else { return events }
                 let channel = status & 0x0F
-                let note = bytes[index + 1]
-                let velocity = bytes[index + 2]
                 if let address = MidiAddress(channel: channel, note: note) {
                     let isOn = status >= 0x90 && velocity > 0
                     events.append(isOn ? .on(address, velocity: velocity) : .off(address))
                 }
-                index += 3
             case 0xA0...0xBF, 0xE0...0xEF:
-                // Poly aftertouch, control change, pitch bend: 3 bytes.
-                index += 3
+                // Poly aftertouch, control change, pitch bend: 2 data bytes.
+                _ = nextData(); _ = nextData()
             case 0xC0...0xDF:
-                // Program change, channel aftertouch: 2 bytes.
-                index += 2
+                // Program change, channel aftertouch: 1 data byte.
+                _ = nextData()
             case 0xF0:
                 // SysEx: consume through the terminating 0xF7 — embedded bytes
                 // are data, never status (the phantom-note fix).
-                index += 1
                 while index < bytes.count, bytes[index] != 0xF7 { index += 1 }
                 index += 1
             case 0xF1, 0xF3:
-                index += 2
+                _ = nextData()
             case 0xF2:
-                index += 3
+                _ = nextData(); _ = nextData()
             default:
-                // Remaining system/realtime messages and stray data bytes.
-                index += 1
+                // Remaining system common messages: no data.
+                break
             }
         }
         return events
@@ -171,16 +201,5 @@ public enum LEDStateComputer {
         parsed: [(address: MidiAddress, command: ActionCommand)], state: ControlSurfaceState
     ) -> Set<MidiAddress> {
         Set(parsed.compactMap { isLit($0.command, state: state) ? $0.address : nil })
-    }
-
-    /// All bound addresses that must currently be lit.
-    public static func litAddresses(map: MidiMap, state: ControlSurfaceState) -> Set<MidiAddress> {
-        Set(map.bindings.compactMap { noteString, actionString in
-            guard let address = MidiAddress(noteString: noteString),
-                  let command = ActionCommand(actionString: actionString),
-                  isLit(command, state: state)
-            else { return nil }
-            return address
-        })
     }
 }

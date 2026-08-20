@@ -59,7 +59,14 @@ public enum KeywordChipBuilder {
                     )
                 )
             }
-            .sorted { ($0.priority, $0.chip.path) < ($1.priority, $1.chip.path) }
+            .sorted { a, b in
+                if a.priority != b.priority { return a.priority < b.priority }
+                switch a.chip.path.localizedStandardCompare(b.chip.path) {
+                case .orderedAscending: return true
+                case .orderedDescending: return false
+                case .orderedSame: return a.chip.id < b.chip.id
+                }
+            }
             .map(\.chip)
     }
 }

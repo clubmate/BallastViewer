@@ -95,20 +95,26 @@ extension LibraryController {
         emitCatalogEvent(.collectionListChanged)
     }
 
-    /// The editor sheet saves its copy wholesale: name, match mode and the
-    /// full rule list (spec §9.7).
+    /// The editor sheet saves what it edits: name, match mode and the full
+    /// rule list (spec §9.7). Group and sort position come from the LIVE
+    /// record — the sheet's copy is as old as the sheet, and a reorder or move
+    /// made while it was open must not be undone by Save.
     func saveCollection(
         _ collection: SmartCollectionRecord,
         rules: [(type: String, operation: String, value: String)]
     ) {
-        guard let collectionId = collection.id else { return }
+        guard let collectionId = collection.id,
+              var record = snapshot?.collections.first(where: { $0.id == collectionId })
+        else { return }
+        record.name = collection.name
+        record.matchAll = collection.matchAll
         guard writeSync({ (db) -> Void in
-            try CollectionDAO.updateCollection(collection, in: db)
+            try CollectionDAO.updateCollection(record, in: db)
             try CollectionDAO.saveRules(rules, forCollection: collectionId, in: db)
         }) != nil else { return }
         mutateSnapshot { snapshot in
             if let index = snapshot.collections.firstIndex(where: { $0.id == collectionId }) {
-                snapshot.collections[index] = collection
+                snapshot.collections[index] = record
             }
             snapshot.rules.removeAll { $0.collectionId == collectionId }
             // Ids of the replaced rule rows are not mirrored back — nothing
@@ -128,8 +134,9 @@ extension LibraryController {
 
     /// Persists the sidebar selection — it survives relaunch (Q24).
     func setSelectedSidebarItem(_ item: SidebarItem) {
-        mutateSnapshot { $0.meta.selectedCollection = item.encoded }
-        persistMeta()
+        let encoded = item.encoded
+        mutateSnapshot { $0.meta.selectedCollection = encoded }
+        persistMeta(column: "selectedCollection", value: encoded)
     }
 
     var storedSidebarItem: SidebarItem? {
@@ -141,7 +148,7 @@ extension LibraryController {
               let json = String(data: data, encoding: .utf8)
         else { return }
         mutateSnapshot { $0.meta.collapsedGroups = json }
-        persistMeta()
+        persistMeta(column: "collapsedGroups", value: json)
     }
 
     var storedCollapsedGroups: Set<Int64> {
@@ -152,10 +159,15 @@ extension LibraryController {
     }
 
     /// Meta writes ride the write pipeline: ordered against every other write,
-    /// drained on quit, and never racing a pool that is closing.
-    private func persistMeta() {
-        guard let meta = snapshot?.meta else { return }
-        persist { db in try meta.update(db) }
+    /// drained on quit, and never racing a pool that is closing. Only the
+    /// changed column is written — persisting the whole in-memory row let a
+    /// sidebar click queued during an import commit a stale
+    /// `lastImportBatchId` on top of the batch the import had just recorded.
+    private func persistMeta(column: String, value: String?) {
+        guard let metaId = snapshot?.meta.id else { return }
+        persist { db in
+            try LibraryMetaRecord.filter(key: metaId).updateAll(db, Column(column).set(to: value))
+        }
     }
 
     /// Synchronous write for rare structural edits; failures surface as the

@@ -34,3 +34,22 @@ extension CGFloat {
         Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
     }
 }
+
+/// Q15: keyword text is uppercase while typing, everywhere. Forces the bound
+/// text to uppercase on every change.
+private struct UppercasingModifier: ViewModifier {
+    @Binding var text: String
+
+    func body(content: Content) -> some View {
+        content.onChange(of: text) { _, newValue in
+            let upper = newValue.uppercased()
+            if upper != newValue { text = upper }
+        }
+    }
+}
+
+extension View {
+    func uppercasing(_ text: Binding<String>) -> some View {
+        modifier(UppercasingModifier(text: text))
+    }
+}

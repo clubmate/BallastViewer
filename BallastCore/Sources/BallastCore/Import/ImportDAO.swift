@@ -66,6 +66,9 @@ public enum ImportDAO {
         var batch = ImportBatchRecord(date: date)
         try batch.insert(db)
 
+        // One memo for the whole batch: keyword nodes resolve by dictionary
+        // lookup instead of one SELECT per path component per photo.
+        let keywordCache = try KeywordPathCache(preloading: db)
         for item in newItems {
             var photo = PhotoRecord(
                 folderId: folderId,
@@ -81,7 +84,9 @@ public enum ImportDAO {
                 let components = keywordPath.components(separatedBy: KeywordTree.separator)
                     .map(KeywordDAO.normalize).filter { !$0.isEmpty }
                 guard !components.isEmpty else { continue }
-                let keywordId = try KeywordDAO.ensurePath(components, groupId: nil, in: db)
+                let keywordId = try KeywordDAO.ensurePath(
+                    components, groupId: nil, cache: keywordCache, in: db
+                )
                 try PhotoDAO.assignKeyword(keywordId, toPhotoIds: [photo.id!], in: db)
             }
         }

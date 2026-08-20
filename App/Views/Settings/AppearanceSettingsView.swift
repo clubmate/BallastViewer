@@ -51,8 +51,7 @@ struct AppearanceSettingsView: View {
     private var backgroundBinding: Binding<Color> {
         Binding(
             get: {
-                Color(hex: appearance.backgroundHex)
-                    ?? Color(hex: AppearanceStore.defaultBackgroundHex)!
+                appearance.backgroundColor
             },
             set: { newColor in
                 if let hex = newColor.canonicalHex {

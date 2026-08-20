@@ -63,11 +63,8 @@ struct KeywordsSettingsView: View {
             )
         ) {
             TextField("Name", text: $renameText)
-                .onChange(of: renameText) { _, newValue in
-                    // Q15: keywords are uppercase while typing, everywhere.
-                    let upper = newValue.uppercased()
-                    if upper != newValue { renameText = upper }
-                }
+                // Q15: keywords are uppercase while typing, everywhere.
+                .uppercasing($renameText)
             Button("Rename") {
                 if let id = renameKeywordId {
                     controller.renameKeyword(id, to: renameText)
@@ -304,15 +301,7 @@ struct KeywordsSettingsView: View {
     private func palettePicker(selected: String, choose: @escaping (String) -> Void) -> some View {
         HStack(spacing: 8) {
             ForEach(keywordGroupPalette, id: \.self) { hex in
-                Circle()
-                    .fill(Color(hex: hex) ?? .gray)
-                    .frame(width: 22, height: 22)
-                    .overlay {
-                        if hex.caseInsensitiveCompare(selected) == .orderedSame {
-                            Circle().strokeBorder(Color.primary, lineWidth: 2)
-                        }
-                    }
-                    .onTapGesture { choose(hex) }
+                PaletteSwatch(hex: hex, selected: selected, size: 22) { choose(hex) }
             }
         }
         .padding(12)
@@ -336,22 +325,11 @@ private struct GroupEditSheet: View {
 
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
-                .onChange(of: name) { _, newValue in
-                    let upper = newValue.uppercased()
-                    if upper != newValue { name = upper }
-                }
+                .uppercasing($name)
 
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(30)), count: 5), spacing: 10) {
                 ForEach(keywordGroupPalette, id: \.self) { hex in
-                    Circle()
-                        .fill(Color(hex: hex) ?? .gray)
-                        .frame(width: 26, height: 26)
-                        .overlay {
-                            if hex.caseInsensitiveCompare(color) == .orderedSame {
-                                Circle().strokeBorder(Color.primary, lineWidth: 2)
-                            }
-                        }
-                        .onTapGesture { color = hex }
+                    PaletteSwatch(hex: hex, selected: color, size: 26) { color = hex }
                 }
             }
 
@@ -384,5 +362,31 @@ private struct GroupEditSheet: View {
             name = group.name
             color = group.color
         }
+    }
+}
+
+/// One colour well of the group palette — a real button so it carries a
+/// label and is reachable by keyboard/VoiceOver.
+private struct PaletteSwatch: View {
+    let hex: String
+    let selected: String
+    let size: CGFloat
+    let choose: () -> Void
+
+    var body: some View {
+        let isSelected = hex.caseInsensitiveCompare(selected) == .orderedSame
+        Button(action: choose) {
+            Circle()
+                .fill(Color(hex: hex) ?? .gray)
+                .frame(width: size, height: size)
+                .overlay {
+                    if isSelected {
+                        Circle().strokeBorder(Color.primary, lineWidth: 2)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Colour \(hex)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

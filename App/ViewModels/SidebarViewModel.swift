@@ -56,17 +56,29 @@ final class SidebarViewModel {
             self?.handle(event)
         }
         collapsedGroups = controller.storedCollapsedGroups
+        refreshLists()
         rebuildCounts()
     }
 
     // MARK: Snapshot accessors for the view
 
-    var groups: [SmartGroupRecord] {
-        controller.snapshot?.smartGroups ?? []
-    }
+    /// Own copies rather than reads through `controller.snapshot`: the
+    /// controller mutates that observable in place for every rating,
+    /// rotation and keyword change, which would re-render the whole sidebar
+    /// per key press. These refresh only on collection-list events.
+    private(set) var groups: [SmartGroupRecord] = []
+    private(set) var collectionsByGroup: [Int64: [SmartCollectionRecord]] = [:]
 
     func collections(inGroup groupId: Int64) -> [SmartCollectionRecord] {
-        (controller.snapshot?.collections ?? []).filter { $0.groupId == groupId }
+        collectionsByGroup[groupId] ?? []
+    }
+
+    private func refreshLists() {
+        let snapshot = controller.snapshot
+        let newGroups = snapshot?.smartGroups ?? []
+        let newByGroup = Dictionary(grouping: snapshot?.collections ?? [], by: \.groupId)
+        if groups != newGroups { groups = newGroups }
+        if collectionsByGroup != newByGroup { collectionsByGroup = newByGroup }
     }
 
     func toggleCollapse(_ groupId: Int64) {
@@ -85,12 +97,12 @@ final class SidebarViewModel {
             if case .catalogReplaced = event {
                 collapsedGroups = controller.storedCollapsedGroups
             }
+            refreshLists()
             rebuildCounts()
         case .collectionListChanged:
             // Cosmetic (rename/reorder/empty group): membership is untouched,
-            // so no O(photos × collections) sweep. The sidebar rows refresh
-            // via snapshot observation on their own.
-            break
+            // so no O(photos × collections) sweep — only the row lists.
+            refreshLists()
         case .photosUpdated(let ids):
             guard let snapshot = controller.snapshot else { return }
             // Delta only — O(changed × collections), the acceptance criterion.

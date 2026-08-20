@@ -87,7 +87,7 @@ struct CollectionEditorSheet: View {
             .frame(width: 130)
 
             Picker("", selection: rule.operation) {
-                ForEach(operators(for: rule.wrappedValue.type), id: \.self) { op in
+                ForEach(operators(for: rule.wrappedValue.type, including: rule.wrappedValue.operation), id: \.self) { op in
                     Text(operatorName(op, for: rule.wrappedValue.type)).tag(op)
                 }
             }
@@ -202,6 +202,14 @@ struct CollectionEditorSheet: View {
         case .dateRange: "Date Added"
         case .importBatch: "Import Batch"
         }
+    }
+
+    /// A persisted operator outside the list for its type (older data, a
+    /// type whose list shrank) would otherwise render an empty picker the
+    /// user cannot correct without changing the type.
+    private func operators(for type: RuleType, including current: RuleOperator) -> [RuleOperator] {
+        let offered = operators(for: type)
+        return offered.contains(current) ? offered : offered + [current]
     }
 
     private func operators(for type: RuleType) -> [RuleOperator] {

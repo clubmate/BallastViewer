@@ -68,6 +68,23 @@ struct MidiParserTests {
         #expect(events == [on(61)])
     }
 
+    @Test func interleavedRealtimeBytesAreTransparent() {
+        // Clock (0xF8) and active sensing (0xFE) may sit between the data
+        // bytes of a channel message; they are neither data nor a new status.
+        let events = MidiParser.parse([0x90, 0xFE, 60, 0xF8, 100, 0xFE, 0x80, 60, 0xF8, 0])
+        #expect(events == [on(60), .off(MidiAddress(channel: 0, note: 60)!)])
+    }
+
+    @Test func runningStatusReusesLastChannelStatus() {
+        // Two notes, the second without a repeated 0x90.
+        let events = MidiParser.parse([0x90, 60, 100, 61, 90])
+        #expect(events == [on(60), on(61, velocity: 90)])
+        // A CC in between takes over running status; stray data after SysEx
+        // (which clears it) is ignored.
+        let mixed = MidiParser.parse([0x90, 60, 100, 0xB0, 7, 1, 7, 2, 0xF0, 1, 0xF7, 62, 5, 0x90, 63, 4])
+        #expect(mixed == [on(60), on(63, velocity: 4)])
+    }
+
     @Test func pitchBendAndAftertouchAreSkipped() {
         let events = MidiParser.parse([0xE0, 0, 64, 0xD0, 50, 0xA0, 60, 10, 0x90, 62, 9])
         #expect(events == [on(62, velocity: 9)])
@@ -132,7 +149,7 @@ struct LEDStateComputerTests {
         map.assign(MidiAddress(channel: 0, note: 62)!, to: .keyword(anna))
         map.assign(MidiAddress(channel: 0, note: 63)!, to: .app(.nextPhoto))
         let state = ControlSurfaceState(anchorKeywords: [anna], anchorRating: 2)
-        let lit = LEDStateComputer.litAddresses(map: map, state: state)
+        let lit = LEDStateComputer.litAddresses(parsed: LEDStateComputer.parseBindings(map), state: state)
         #expect(lit == [MidiAddress(channel: 0, note: 60)!, MidiAddress(channel: 0, note: 62)!])
     }
 }

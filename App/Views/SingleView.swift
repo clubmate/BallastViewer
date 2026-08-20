@@ -41,12 +41,16 @@ struct SingleView: View {
                                 .loaded($0.image, path: photo.path, orientation: photo.orientation)
                             } ?? .failed(path: photo.path)
                         }
-                        // Fire-and-forget neighbour warm-up; the pipeline's
-                        // coalescing dedups against a real request when the
-                        // user steps onto one of them meanwhile.
-                        for neighbor in neighbors where neighbor.path != photo.path {
-                            let path = neighbor.path
-                            Task { _ = await pipeline.originalImage(forPath: path) }
+                        // Neighbour warm-up as child tasks: stepping on
+                        // cancels them with this `.task`, so rapid stepping
+                        // cannot pile up 2N decodes behind the one the user
+                        // is waiting for. The pipeline's coalescing still
+                        // dedups against a real request for the same path.
+                        let paths = neighbors.map(\.path).filter { $0 != photo.path }
+                        await withTaskGroup(of: Void.self) { group in
+                            for path in paths {
+                                group.addTask { _ = await pipeline.originalImage(forPath: path) }
+                            }
                         }
                     }
             } else {

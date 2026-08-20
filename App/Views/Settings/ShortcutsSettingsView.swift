@@ -79,7 +79,7 @@ struct ShortcutsSettingsView: View {
                 if let address = binding.address {
                     midiMap.removeBinding(for: address)
                 }
-                conflictHints["keyword:\(binding.keyword)"] = nil
+                conflictHints[ActionCommand.keyword(binding.keyword).actionString] = nil
             } label: {
                 Image(systemName: "trash")
             }

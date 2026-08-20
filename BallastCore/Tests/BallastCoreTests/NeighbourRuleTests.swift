@@ -17,6 +17,13 @@ import Testing
         #expect(NeighbourRule.nextAnchor(for: 3, previousOrder: previous, newOrder: [1, 2, 5]) == 5)
     }
 
+    @Test func anchorUnknownToPreviousOrderFallsBackToFirst() {
+        // The anchor was never in the old order (stale selection after a
+        // library swap): no neighbour to prefer → first of the new order.
+        #expect(NeighbourRule.nextAnchor(for: 42, previousOrder: previous, newOrder: [2, 4]) == 2)
+        #expect(NeighbourRule.nextAnchor(for: 42, previousOrder: [], newOrder: []) == nil)
+    }
+
     @Test func fallsBackToNearestSurvivorBefore() {
         // Nothing survives after 3 → nearest before, i.e. 2.
         #expect(NeighbourRule.nextAnchor(for: 3, previousOrder: previous, newOrder: [1, 2]) == 2)

@@ -67,8 +67,9 @@ public enum SortEngine {
     ) -> [PhotoRecord] {
         switch option {
         case .random:
+            // A duplicate id in the order must mis-sort, not trap: first wins.
             let position = Dictionary(
-                uniqueKeysWithValues: randomOrder.enumerated().map { ($1, $0) }
+                randomOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first }
             )
             return photos.enumerated().sorted { a, b in
                 let posA = a.element.id.flatMap { position[$0] } ?? randomOrder.count + a.offset

@@ -84,11 +84,15 @@ struct MainWindow: View {
         .background(.bar)
         .navigationTitle(controller.libraryURL?.lastPathComponent ?? "ballastviewer")
         .background(MainWindowRegistrar())
-        .onAppear {
+        // The environment undo manager can be nil on the first body pass and
+        // arrive later; onAppear alone would then leave Edit ▸ Undo dead.
+        .onChange(of: windowUndoManager, initial: true) {
             controller.undoManager = windowUndoManager
             // Bound so a pathological undo entry (a 50k-photo folder removal
             // captures every row) cannot accumulate without limit.
             windowUndoManager?.levelsOfUndo = 50
+        }
+        .onAppear {
             // The search field must not grab first responder at launch —
             // focused text suppresses every culling shortcut (Q21). Clearing
             // initialFirstResponder also keeps later activations from
@@ -105,6 +109,10 @@ struct MainWindow: View {
         .dropDestination(for: URL.self) { urls, _ in
             handleDrop(urls)
         }
+        // A real modal shield: while a bulk transaction runs, clicks and
+        // keyboard/MIDI actions (guarded in ShortcutMonitor/ActionDispatcher)
+        // must not queue mutations behind it, or memory and DB diverge.
+        .allowsHitTesting(!(controller.isImporting || controller.isSyncing))
         .overlay {
             if controller.isImporting || controller.isSyncing {
                 ProgressView(controller.isImporting ? "Importing…" : "Syncing metadata…")
@@ -228,11 +236,7 @@ struct MainWindow: View {
                 // The appearance color backs the CONTENT only — not the bar
                 // below, and not the titlebar above (ignoresSafeAreaEdges: []);
                 // both belong to the window-wide .bar material.
-                .background(
-                    Color(hex: appearance.backgroundHex)
-                        ?? Color(hex: AppearanceStore.defaultBackgroundHex)!,
-                    ignoresSafeAreaEdges: []
-                )
+                .background(appearance.backgroundColor, ignoresSafeAreaEdges: [])
             if center.showBottomPanel {
                 bottomBar
                     // The search dropdown overlays upward across the content.
@@ -384,6 +388,11 @@ struct MainWindow: View {
                 .onSubmit {
                     showSearchSuggestions = false
                 }
+                .onChange(of: searchFocused) { _, focused in
+                    // Blur closes the dropdown too; otherwise re-focusing a
+                    // submitted field reopens it without any typing.
+                    if !focused { showSearchSuggestions = false }
+                }
             if !center.searchText.isEmpty {
                 Button {
                     center.searchText = ""
@@ -426,17 +435,19 @@ struct MainWindow: View {
         return ScrollView {
             VStack(spacing: 0) {
                 ForEach(suggestions, id: \.self) { path in
-                    Text(path)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8)
-                        .frame(height: 28)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            suppressNextSuggestionOpen = true
-                            center.searchText = path
-                            showSearchSuggestions = false
-                        }
+                    Button {
+                        suppressNextSuggestionOpen = true
+                        center.searchText = path
+                        showSearchSuggestions = false
+                    } label: {
+                        Text(path)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .frame(height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

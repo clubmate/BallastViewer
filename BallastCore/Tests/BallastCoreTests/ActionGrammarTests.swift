@@ -63,6 +63,21 @@ import Testing
 }
 
 @Suite struct KeyMapTests {
+    @Test func renameKeywordPathRewritesSubtreeBindings() {
+        var map = KeyMap(bindings: [
+            "a": ActionCommand.keyword("PEOPLE").actionString,
+            "b": ActionCommand.keyword("PEOPLE > ANNA").actionString,
+            "c": ActionCommand.keyword("PEOPLEX > BOB").actionString,
+            "d": ActionCommand.app(.rate1).actionString,
+        ])
+        map.renameKeywordPath(from: "PEOPLE", to: "FOLKS")
+        #expect(map.bindings["a"] == ActionCommand.keyword("FOLKS").actionString)
+        #expect(map.bindings["b"] == ActionCommand.keyword("FOLKS > ANNA").actionString)
+        // Prefix match is on whole components — PEOPLEX is untouched.
+        #expect(map.bindings["c"] == ActionCommand.keyword("PEOPLEX > BOB").actionString)
+        #expect(map.bindings["d"] == ActionCommand.app(.rate1).actionString)
+    }
+
     @Test func defaultsMatchSpec12_3() throws {
         let map = KeyMap.defaults
         #expect(map.bindings.count == 16)

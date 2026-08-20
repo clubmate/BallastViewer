@@ -108,4 +108,50 @@ import Testing
         )
         #expect(store.counts.collections[10] == 1)
     }
+
+    @Test func updateWithUnknownPhotoAddsItToAllPhotos() {
+        var store = CollectionCountsStore()
+        let collections = [collection(10)]
+        let rules: [Int64: [CollectionRuleRecord]] = [10: [rule(10, "rating", "greaterThan", "0")]]
+        store.rebuild(
+            photos: [photo(1, rating: 2)], collections: collections, rulesByCollection: rules,
+            lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
+        )
+        // A photo the memo has never seen (appended after a rebuild) counts as new.
+        store.update(
+            changedPhotos: [photo(2, rating: 4)], collections: collections, rulesByCollection: rules,
+            lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
+        )
+        #expect(store.counts.allPhotos == 2)
+        #expect(store.counts.ratings[4] == 1)
+        #expect(store.counts.collections[10] == 2)
+        // Updating it again does not double count.
+        store.update(
+            changedPhotos: [photo(2, rating: 0)], collections: collections, rulesByCollection: rules,
+            lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
+        )
+        #expect(store.counts.allPhotos == 2)
+        #expect(store.counts.ratings[4] == 0 && store.counts.ratings[0] == 1)
+        #expect(store.counts.collections[10] == 1)
+    }
+
+    @Test func updateTracksLastImportFlip() {
+        var store = CollectionCountsStore()
+        store.rebuild(
+            photos: [photo(1, batch: 5), photo(2, batch: 4)], collections: [], rulesByCollection: [:],
+            lastImportBatchId: 5, facts: { _ in PhotoQueryFacts() }
+        )
+        #expect(store.counts.lastImport == 1)
+        // The batch pointer moved to 4: photo 1 leaves, photo 2 joins.
+        store.update(
+            changedPhotos: [photo(1, batch: 5), photo(2, batch: 4)], collections: [], rulesByCollection: [:],
+            lastImportBatchId: 4, facts: { _ in PhotoQueryFacts() }
+        )
+        #expect(store.counts.lastImport == 1)
+        store.update(
+            changedPhotos: [photo(2, batch: 4)], collections: [], rulesByCollection: [:],
+            lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
+        )
+        #expect(store.counts.lastImport == 0)
+    }
 }

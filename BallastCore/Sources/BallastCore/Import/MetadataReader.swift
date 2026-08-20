@@ -45,8 +45,11 @@ public enum MetadataReader {
 
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, sourceOptions)
             as? [CFString: Any]
+        // Only EXIF 1…8 are meaningful; anything else (0, 9+) would be stored
+        // verbatim and written back into the file's XMP on Save. Mirror the
+        // rating clamp (D5): out of range reads as "normal".
         if let orientation = properties?[kCGImagePropertyOrientation] as? Int {
-            result.orientation = orientation
+            result.orientation = (1...8).contains(orientation) ? orientation : 1
         }
         let iptc = properties?[kCGImagePropertyIPTCDictionary] as? [CFString: Any]
         let exif = properties?[kCGImagePropertyExifDictionary] as? [CFString: Any]

@@ -267,26 +267,30 @@ final class CenterViewModel {
     }
 
     private func passesFilter(_ photo: PhotoRecord) -> Bool {
+        passesFilter(photo, search: SearchFilter.FoldedQuery(searchText))
+    }
+
+    /// `search` is folded once per pass by the caller (nil = search off);
+    /// facts are fetched once per photo and shared by both filters.
+    private func passesFilter(_ photo: PhotoRecord, search: SearchFilter.FoldedQuery?) -> Bool {
         guard let snapshot = controller.snapshot else { return false }
+        let facts = photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
         guard SidebarFilter.matches(
             photo,
-            facts: photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts(),
+            facts: facts,
             item: activeItem,
             compiledCollections: compiledCollections,
             lastImportBatchId: snapshot.meta.lastImportBatchId
         ) else { return false }
-        guard !searchText.isEmpty else { return true }
-        return SearchFilter.matches(
-            filename: photo.filename,
-            keywordPaths: photo.id.map { controller.queryFacts(forPhotoId: $0).keywordPaths } ?? [],
-            query: searchText
-        )
+        guard let search else { return true }
+        return search.matches(filename: photo.filename, facts: facts)
     }
 
     /// Full recompute — bulk changes only (library open/import, sort or filter
     /// change). Single-photo mutations go through `photosDidChange`.
     private func rebuildVisible() {
-        let records = (controller.snapshot?.photos ?? []).filter(passesFilter)
+        let search = SearchFilter.FoldedQuery(searchText)
+        let records = (controller.snapshot?.photos ?? []).filter { passesFilter($0, search: search) }
         if sortOption == .random {
             var rng = SystemRandomNumberGenerator()
             randomOrder.reconcile(with: Set(records.compactMap(\.id)), using: &rng)

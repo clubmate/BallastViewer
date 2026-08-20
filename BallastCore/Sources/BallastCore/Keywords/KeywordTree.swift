@@ -33,8 +33,16 @@ public struct KeywordTree: Sendable {
         }
         nodesById = byId
         let children = byParent.mapValues { siblings in
+            // Alphabetical for humans (Q19), not by code point: "ÄPFEL" sorts
+            // next to "APFEL", not after "ZEBRA". Ties break by id for stability.
             siblings
-                .sorted { ($0.name, $0.id ?? 0) < ($1.name, $1.id ?? 0) }
+                .sorted { a, b in
+                    switch a.name.localizedStandardCompare(b.name) {
+                    case .orderedAscending: true
+                    case .orderedDescending: false
+                    case .orderedSame: (a.id ?? 0) < (b.id ?? 0)
+                    }
+                }
                 .compactMap(\.id)
         }
         childIdsByParent = children
@@ -77,7 +85,7 @@ public struct KeywordTree: Sendable {
         childIdsByParent[id] ?? []
     }
 
-    public func pathComponents(of id: Int64) -> [String] {
+    func pathComponents(of id: Int64) -> [String] {
         var components: [String] = []
         var visited: Set<Int64> = []
         var current = nodesById[id]

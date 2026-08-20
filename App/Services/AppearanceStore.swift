@@ -1,6 +1,7 @@
 import BallastCore
 import Foundation
 import Observation
+import SwiftUI
 
 /// App-level preferences behind Settings ▸ Appearance (spec §9.9), persisted in
 /// UserDefaults — they describe this Mac, not a library. Colors are stored
@@ -20,6 +21,12 @@ final class AppearanceStore {
     }
 
     /// Centre-pane background, canonical `#RRGGBBAA`.
+    /// The parsed background — the stored hex is validated on load, so the
+    /// default fallback only covers a programmatic write of garbage.
+    var backgroundColor: Color {
+        Color(hex: backgroundHex) ?? Color(hex: Self.defaultBackgroundHex)!
+    }
+
     var backgroundHex: String {
         didSet { UserDefaults.standard.set(backgroundHex, forKey: Self.backgroundKey) }
     }

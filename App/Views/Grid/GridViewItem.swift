@@ -114,6 +114,17 @@ final class GridItemView: NSView {
         }
     }
 
+    /// CGColor snapshots do not follow the system accent colour or light/
+    /// dark switches; re-resolve so selected cells do not keep the old tint.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            withoutAnimation {
+                layer?.borderColor = NSColor.controlAccentColor.cgColor
+            }
+        }
+    }
+
     // MARK: Layout
 
     override func layout() {

@@ -4,6 +4,20 @@ import Testing
 // MARK: - Search (spec §11.3 + U5: keywords AND filenames)
 
 struct SearchFilterTests {
+    @Test func foldedQueryAgreesWithPlainMatch() {
+        let paths = ["PEOPLE > ANNA", "STRASSE", "MÜNCHEN"]
+        let facts = PhotoQueryFacts(keywordPaths: paths, keywordGroupIds: [],
+                                    foldedKeywordPaths: paths.map(CaseInsensitiveMatch.fold))
+        let unfolded = PhotoQueryFacts(keywordPaths: paths)
+        for query in ["ann", "PeOpLe", "straße", "münchen", "MÜN", "img_12", ".jpg", "bernd", "  "] {
+            let expected = SearchFilter.matches(filename: "IMG_1234.JPG", keywordPaths: paths, query: query)
+            let folded = SearchFilter.FoldedQuery(query)
+            #expect((folded?.matches(filename: "IMG_1234.JPG", facts: facts) ?? true) == expected, Comment(rawValue: query))
+            #expect((folded?.matches(filename: "IMG_1234.JPG", facts: unfolded) ?? true) == expected, Comment(rawValue: query))
+        }
+        #expect(SearchFilter.FoldedQuery("   ") == nil)
+    }
+
     @Test func emptyQueryMatchesEverything() {
         #expect(SearchFilter.matches(filename: "a.jpg", keywordPaths: [], query: ""))
         #expect(SearchFilter.matches(filename: "a.jpg", keywordPaths: [], query: "   "))

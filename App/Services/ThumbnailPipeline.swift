@@ -46,6 +46,12 @@ actor ThumbnailPipeline {
     private final class InFlightDecode {
         var continuations: [UUID: CheckedContinuation<CGImageBox?, Never>] = [:]
         var task: Task<Void, Never>?
+        /// Set when the last requester detached: the task is cancelled but may
+        /// still be draining past its last cancellation check. The entry stays
+        /// in `inFlight` until it finishes, so a re-request (fast scroll back)
+        /// waits for the drain instead of starting a second decode of the
+        /// same key alongside it.
+        var isCancelled = false
     }
     private var inFlight: [String: InFlightDecode] = [:]
 
@@ -220,14 +226,19 @@ actor ThumbnailPipeline {
         let requestId = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                if let entry = inFlight[key] {
+                if let entry = inFlight[key], !entry.isCancelled {
                     entry.continuations[requestId] = continuation
                     return
                 }
                 let entry = InFlightDecode()
                 entry.continuations[requestId] = continuation
+                let draining = inFlight[key]
                 inFlight[key] = entry
                 entry.task = Task {
+                    // A cancelled predecessor gets to finish first — bounded
+                    // (it bails at its next check) and keeps decodes of one
+                    // key strictly sequential.
+                    await draining?.task?.value
                     let value = await work()
                     self.finishDecode(key: key, entry: entry, value: value)
                 }
@@ -251,7 +262,9 @@ actor ThumbnailPipeline {
         else { return }
         continuation.resume(returning: nil)
         if entry.continuations.isEmpty {
-            inFlight[key] = nil
+            // Stays in `inFlight` (marked) until `finishDecode` runs — see
+            // `InFlightDecode.isCancelled`.
+            entry.isCancelled = true
             entry.task?.cancel()
         }
     }
@@ -395,13 +408,26 @@ actor ThumbnailPipeline {
         }
     }
 
+    /// Writes to a sibling temp file and renames into place: the rename is
+    /// atomic, so a concurrent reader (a re-request racing the tail of a
+    /// cancelled decode) sees either no file or a complete JPEG — never a
+    /// truncated one it would decode and pin in memory for the session.
     nonisolated private static func writeCacheFile(_ box: CGImageBox, to url: URL) async {
+        let temporary = url.deletingPathExtension()
+            .appendingPathExtension(UUID().uuidString + ".tmp")
         guard let destination = CGImageDestinationCreateWithURL(
-            url as CFURL, UTType.jpeg.identifier as CFString, 1, nil
+            temporary as CFURL, UTType.jpeg.identifier as CFString, 1, nil
         ) else { return }
         let options = [kCGImageDestinationLossyCompressionQuality: 0.75] as CFDictionary
         CGImageDestinationAddImage(destination, box.image, options)
-        CGImageDestinationFinalize(destination)
+        guard CGImageDestinationFinalize(destination) else {
+            try? FileManager.default.removeItem(at: temporary)
+            return
+        }
+        // rename(2) replaces an existing entry atomically.
+        if rename(temporary.path, url.path) != 0 {
+            try? FileManager.default.removeItem(at: temporary)
+        }
     }
 
     nonisolated private static func hash(_ string: String) -> String {

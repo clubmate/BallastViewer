@@ -211,6 +211,12 @@ struct PhotoGridView: NSViewRepresentable {
         /// refcounted in-flight bookkeeping.
         private var prefetchTasks: [IndexPath: Task<Void, Never>] = [:]
 
+        /// Lets a task compare itself against the dictionary entry on
+        /// completion (a task cannot reference its own handle directly).
+        private final class TaskBox: @unchecked Sendable {
+            var value: Task<Void, Never>?
+        }
+
         private func cancelAllPrefetches() {
             for task in prefetchTasks.values { task.cancel() }
             prefetchTasks = [:]
@@ -228,10 +234,23 @@ struct PhotoGridView: NSViewRepresentable {
             let bucket = currentBucket(collectionView)
             for indexPath in indexPaths where photos.indices.contains(indexPath.item) {
                 let path = photos[indexPath.item].path
+                let currentTask = TaskBox()
                 guard pipeline.cachedThumbnail(forPath: path, longEdge: bucket) == nil else { continue }
-                prefetchTasks[indexPath] = Task {
+                // Replace, don't stack: a stale task for the same slot would
+                // otherwise keep decoding for a cell that moved on.
+                prefetchTasks[indexPath]?.cancel()
+                let task = Task { [weak self] in
                     _ = await pipeline.thumbnail(forPath: path, longEdge: bucket)
+                    // AppKit only cancels prefetches for cells that never
+                    // became visible; everything else must remove itself or
+                    // the dictionary grows by one dead entry per scrolled cell.
+                    guard let self, !Task.isCancelled else { return }
+                    if self.prefetchTasks[indexPath] == currentTask.value {
+                        self.prefetchTasks[indexPath] = nil
+                    }
                 }
+                currentTask.value = task
+                prefetchTasks[indexPath] = task
             }
         }
 
@@ -257,6 +276,8 @@ struct PhotoGridView: NSViewRepresentable {
                 withIdentifier: GridViewItem.identifier, for: indexPath
             ) as! GridViewItem
             let photo = photos[indexPath.item]
+            // The cell is visible now; its prefetch (if any) has done its job.
+            prefetchTasks.removeValue(forKey: indexPath)
             guard let pipeline else { return item }
 
             let bucket = currentBucket(collectionView)

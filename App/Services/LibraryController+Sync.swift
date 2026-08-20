@@ -116,7 +116,8 @@ extension LibraryController {
     /// the UI). `isSyncing` is raised for the duration so the modal progress
     /// overlay blocks new mutations until memory mirrors the commit.
     func applyMetadataValues(
-        _ changes: [(photoId: Int64, values: PhotoFileMetadata)], actionName: String
+        _ changes: [(photoId: Int64, values: PhotoFileMetadata)], actionName: String,
+        registerInverse: Bool = true
     ) async {
         guard !changes.isEmpty, snapshot != nil, let pipeline = writePipeline else { return }
         let wasSyncing = isSyncing
@@ -141,6 +142,9 @@ extension LibraryController {
         let result: TxResult
         do {
             result = try await pipeline.submitAndWait { db in
+                // One memo for the whole transaction: thousands of photos
+                // resolve the same few hundred keyword nodes.
+                let cache = try KeywordPathCache(preloading: db)
                 var idsByPhoto: [Int64: Set<Int64>] = [:]
                 for change in changes {
                     try PhotoDAO.setRatings([(change.photoId, change.values.rating)], in: db)
@@ -148,7 +152,7 @@ extension LibraryController {
                     var keywordIds: Set<Int64> = []
                     for keywordPath in change.values.keywords {
                         let components = keywordPath.components(separatedBy: KeywordTree.separator)
-                        keywordIds.insert(try KeywordDAO.ensurePath(components, groupId: nil, in: db))
+                        keywordIds.insert(try KeywordDAO.ensurePath(components, groupId: nil, cache: cache, in: db))
                     }
                     try PhotoDAO.setKeywords(Array(keywordIds), forPhotoId: change.photoId, in: db)
                     idsByPhoto[change.photoId] = keywordIds
@@ -173,10 +177,31 @@ extension LibraryController {
             }
         }
         invalidateFacts(forPhotoIds: changes.map(\.photoId))
-        registerUndo(actionName) { controller in
-            Task { await controller.applyMetadataValues(before, actionName: actionName) }
+        if registerInverse {
+            registerMetadataUndo(actionName: actionName, restore: before, reapply: changes)
         }
         emitCatalogEvent(.photosUpdated(changes.map(\.photoId)))
+    }
+
+    /// Undo step that applies `restore`. The inverse (re-applying `reapply`)
+    /// is registered synchronously INSIDE the handler, while the undo manager
+    /// is still in `isUndoing`/`isRedoing` — that is what lands it on the
+    /// redo stack. Registering it from the async applier after an `await`
+    /// pushed it onto the undo stack instead, so ⌘⇧Z did nothing and ⌘Z
+    /// toggled.
+    private func registerMetadataUndo(
+        actionName: String,
+        restore: [(photoId: Int64, values: PhotoFileMetadata)],
+        reapply: [(photoId: Int64, values: PhotoFileMetadata)]
+    ) {
+        registerUndo(actionName) { controller in
+            controller.registerMetadataUndo(actionName: actionName, restore: reapply, reapply: restore)
+            Task {
+                await controller.applyMetadataValues(
+                    restore, actionName: actionName, registerInverse: false
+                )
+            }
+        }
     }
 
     // MARK: Helpers

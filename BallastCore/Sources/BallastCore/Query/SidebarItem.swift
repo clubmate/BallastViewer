@@ -41,36 +41,11 @@ public enum SidebarFilter {
     ///   is a real match-nothing — the list is empty, not full (Q8).
     /// - `rating(n)`: exactly n stars (Q9).
     /// - `collection`: rule evaluation; a deleted/unknown id matches nothing.
-    public static func matches(
-        _ photo: PhotoRecord,
-        facts: @autoclosure () -> PhotoQueryFacts,
-        item: SidebarItem,
-        collectionsById: [Int64: SmartCollectionRecord],
-        rulesByCollection: [Int64: [CollectionRuleRecord]],
-        lastImportBatchId: Int64?
-    ) -> Bool {
-        switch item {
-        case .allPhotos:
-            return true
-        case .lastImport:
-            guard let batchId = lastImportBatchId else { return false }
-            return photo.importBatchId == batchId
-        case .rating(let stars):
-            return photo.rating == stars
-        case .collection(let id):
-            guard let collection = collectionsById[id] else { return false }
-            return QueryEngine.matches(
-                photo,
-                facts: facts(),
-                rules: rulesByCollection[id] ?? [],
-                matchAll: collection.matchAll
-            )
-        }
-    }
-
-    /// Hot-path variant: the caller compiled each collection's rules once
-    /// (`CompiledRules`) instead of re-parsing them for every photo. A missing
-    /// entry means "unknown collection" → matches nothing, like above.
+    /// - `collection`: compiled rule evaluation; a missing entry means a
+    ///   deleted/unknown id → matches nothing.
+    ///
+    /// Callers compile each collection's rules once (`CompiledRules`) instead
+    /// of re-parsing them for every photo.
     public static func matches(
         _ photo: PhotoRecord,
         facts: @autoclosure () -> PhotoQueryFacts,

@@ -24,6 +24,10 @@ final class ActionDispatcher {
     }
 
     func dispatch(_ command: ActionCommand, source: DispatchSource = .keyboard) {
+        // Modal shield (see LibraryController.isBusy): no catalog mutation or
+        // navigation while a bulk transaction owns the catalog. Covers every
+        // source — keyboard, menu and MIDI all funnel through here.
+        guard !controller.isBusy else { return }
         switch command {
         case .keyword(let text):
             // C7: the resolver normalises whatever text the binding stores;

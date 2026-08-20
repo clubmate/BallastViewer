@@ -56,16 +56,19 @@ struct InspectorView: View {
         return HStack(spacing: 6) {
             ForEach(1...5, id: \.self) { star in
                 let filled = star <= (current ?? 0)
-                Image(systemName: filled ? "star.fill" : "star")
-                    .font(.title2)
-                    .foregroundStyle(filled ? Color.yellow : Color.secondary)
-                    .onTapGesture {
-                        let ids = selectedIds
-                        guard !ids.isEmpty else { return }
-                        // Q12: tapping the current rating is the mouse route to 0.
-                        let value = star == current ? 0 : star
-                        controller.updateRatings(ids: ids) { _ in value }
-                    }
+                Button {
+                    let ids = selectedIds
+                    guard !ids.isEmpty else { return }
+                    // Q12: tapping the current rating is the mouse route to 0.
+                    let value = star == current ? 0 : star
+                    controller.updateRatings(ids: ids) { _ in value }
+                } label: {
+                    Image(systemName: filled ? "star.fill" : "star")
+                        .font(.title2)
+                        .foregroundStyle(filled ? Color.yellow : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(star == 1 ? "1 star" : "\(star) stars")
             }
             if isMixed {
                 // U4: a mixed selection is not displayed as "unrated".
@@ -94,10 +97,9 @@ struct InspectorView: View {
             TextField("Add Keyword", text: $keywordInput)
                 .textFieldStyle(.plain)
                 .focused($keywordFieldFocused)
-                .onChange(of: keywordInput) { _, newValue in
-                    // Q15: the field itself forces uppercase on every keystroke.
-                    let upper = newValue.uppercased()
-                    if upper != newValue { keywordInput = upper }
+                // Q15: the field itself forces uppercase on every keystroke.
+                .uppercasing($keywordInput)
+                .onChange(of: keywordInput) { _, _ in
                     // Typing resets the highlight (spec §9.8).
                     highlight.reset()
                 }
@@ -112,7 +114,13 @@ struct InspectorView: View {
                     return .handled
                 }
                 .onKeyPress(.return) {
-                    commit(highlight.index.map { suggestions[$0] })
+                    // Bounds-checked: the vocabulary can shrink (keyword
+                    // deleted in Settings) between the body pass that built
+                    // `suggestions` and this key press.
+                    let highlighted = highlight.index.flatMap { index in
+                        suggestions.indices.contains(index) ? suggestions[index] : nil
+                    }
+                    commit(highlighted)
                     return .handled
                 }
             Button {
@@ -146,18 +154,22 @@ struct InspectorView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(Array(suggestions.enumerated()), id: \.element) { index, path in
-                        Text(path)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8)
-                            .frame(height: 35)
-                            .background(
-                                highlight.index == index
-                                    ? Color.accentColor.opacity(0.3) : Color.clear
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture { commit(path) }
-                            .id(index)
+                        Button {
+                            commit(path)
+                        } label: {
+                            Text(path)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .frame(height: 35)
+                                .background(
+                                    highlight.index == index
+                                        ? Color.accentColor.opacity(0.3) : Color.clear
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .id(index)
                     }
                 }
             }

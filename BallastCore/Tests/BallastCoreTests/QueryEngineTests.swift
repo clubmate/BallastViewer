@@ -175,12 +175,12 @@ private func photo(
         let subject = photo(batch: nil)
         #expect(!SidebarFilter.matches(
             subject, facts: PhotoQueryFacts(), item: .lastImport,
-            collectionsById: [:], rulesByCollection: [:], lastImportBatchId: nil
+            compiledCollections: [:], lastImportBatchId: nil
         ))
         let batched = photo(batch: 9)
         #expect(SidebarFilter.matches(
             batched, facts: PhotoQueryFacts(), item: .lastImport,
-            collectionsById: [:], rulesByCollection: [:], lastImportBatchId: 9
+            compiledCollections: [:], lastImportBatchId: 9
         ))
     }
 
@@ -189,19 +189,19 @@ private func photo(
         let threeStars = photo(rating: 3)
         #expect(SidebarFilter.matches(
             threeStars, facts: PhotoQueryFacts(), item: .rating(3),
-            collectionsById: [:], rulesByCollection: [:], lastImportBatchId: nil
+            compiledCollections: [:], lastImportBatchId: nil
         ))
         let fourStars = photo(rating: 4)
         #expect(!SidebarFilter.matches(
             fourStars, facts: PhotoQueryFacts(), item: .rating(3),
-            collectionsById: [:], rulesByCollection: [:], lastImportBatchId: nil
+            compiledCollections: [:], lastImportBatchId: nil
         ))
     }
 
     @Test func deletedCollectionMatchesNothing() {
         #expect(!SidebarFilter.matches(
             photo(), facts: PhotoQueryFacts(), item: .collection(99),
-            collectionsById: [:], rulesByCollection: [:], lastImportBatchId: nil
+            compiledCollections: [:], lastImportBatchId: nil
         ))
     }
 }

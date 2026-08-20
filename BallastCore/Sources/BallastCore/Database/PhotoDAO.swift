@@ -4,18 +4,6 @@ import GRDB
 /// Row-level photo operations. All functions run inside a caller-provided
 /// transaction (`pool.write { db in … }`) so multi-photo batches stay atomic.
 public enum PhotoDAO {
-    @discardableResult
-    public static func insert(_ photo: PhotoRecord, in db: Database) throws -> PhotoRecord {
-        var record = photo
-        try record.insert(db)
-        return record
-    }
-
-    @discardableResult
-    public static func insertAll(_ photos: [PhotoRecord], in db: Database) throws -> [PhotoRecord] {
-        try photos.map { try insert($0, in: db) }
-    }
-
     public static func fetchAll(_ db: Database) throws -> [PhotoRecord] {
         try PhotoRecord.fetchAll(db)
     }

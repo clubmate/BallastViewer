@@ -31,6 +31,12 @@ final class LibraryController {
     var isImporting = false
     /// A metadata sync command is running (used by LibraryController+Sync).
     var isSyncing = false
+    /// A bulk transaction (import, metadata sync, folder undo) is replacing
+    /// catalog state. The modal shield: MainWindow blocks hit-testing and
+    /// ActionDispatcher drops keyboard/MIDI/menu actions while this is set —
+    /// a rating pressed mid-transaction would otherwise commit behind it and
+    /// leave memory and DB disagreeing without an event.
+    var isBusy: Bool { isImporting || isSyncing }
 
     // MARK: Undo (U8)
 
@@ -293,23 +299,37 @@ final class LibraryController {
         }
     }
 
-    /// Shared tail of open/create: release the old library, load the snapshot
-    /// OFF the MainActor (a 50k-photo load was a 0.5–1 s beachball when it ran
-    /// synchronously here), then install the mirror.
+    /// Shared tail of open/create: load the new snapshot OFF the MainActor (a
+    /// 50k-photo load was a 0.5–1 s beachball when it ran synchronously here),
+    /// and only THEN release the old library and install the mirror.
+    ///
+    /// Load-before-release is what keeps the outgoing library fully live —
+    /// writes still persist — until the new one is ready: releasing first left
+    /// a zombie catalog during the load (and permanently after a failed one)
+    /// whose mutations were applied in memory and silently dropped.
     private func openLoaded(
         _ database: LibraryDatabase, at url: URL, didStartAccess: Bool
     ) async throws {
+        // Reopening the SAME library: queued writes must commit before the
+        // new snapshot reads, or they would silently overtake it.
+        await writePipeline?.flush()
+        let loaded: LibrarySnapshot
+        do {
+            loaded = try await database.pool.read { try LibrarySnapshot.load($0) }
+        } catch {
+            try? database.pool.close()
+            throw error
+        }
         releaseCurrent()
-        // During the load there is no writable library: writeSync no-ops and
-        // catalog mutations only touch the outgoing snapshot copy.
-        library = nil
-        writePipeline = nil
-        accessedURL = didStartAccess ? url : nil
-        let loaded = try await database.pool.read { try LibrarySnapshot.load($0) }
-        install(database, snapshot: loaded, at: url)
+        install(database, snapshot: loaded, at: url, didStartAccess: didStartAccess)
     }
 
-    private func install(_ database: LibraryDatabase, snapshot loaded: LibrarySnapshot, at url: URL) {
+    private func install(
+        _ database: LibraryDatabase, snapshot loaded: LibrarySnapshot, at url: URL, didStartAccess: Bool
+    ) {
+        // Scope bookkeeping is set on success only; the failure path in
+        // `openThrowing` stops access itself, so it must never be stopped twice.
+        accessedURL = didStartAccess ? url : nil
         snapshot = loaded
         thumbnails = ThumbnailPipeline(libraryUUID: loaded.meta.libraryUUID)
         library = database

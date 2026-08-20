@@ -71,7 +71,19 @@ struct SidebarView: View {
         item: SidebarItem, count: Int?, @ViewBuilder label: () -> some View
     ) -> some View {
         let selected = center.activeItem == item
-        return HStack {
+        return Button {
+            center.selectSidebarItem(item)
+        } label: {
+            rowLabel(selected: selected, count: count, label: label)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func rowLabel(
+        selected: Bool, count: Int?, @ViewBuilder label: () -> some View
+    ) -> some View {
+        HStack {
             label()
             Spacer()
             if let count {
@@ -94,7 +106,6 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .background(selected ? Color.accentColor : .clear)
-        .onTapGesture { center.selectSidebarItem(item) }
     }
 
     // MARK: Groups
