@@ -3,21 +3,31 @@ import BallastCore
 import SwiftUI
 
 /// The Photo Picker utility window: folder list left (photos waiting, picks
-/// in `_auswahl` highlighted; toggled via the toolbar), current photo right.
-/// The root is chosen once per window session (restart the picker to change it). Keys: ← → step, Space
-/// rotate, Return move to `_auswahl`, Backspace undo the last pick.
+/// in `_auswahl` highlighted; collapsed via a grab-handle at its edge),
+/// current photo right. The root is chosen once per window session (reopen
+/// the picker to change it). Keys: ← → step, Space rotate, Return move to
+/// `_auswahl`, Backspace undo the last pick. Full screen is the native one
+/// (green button / ⌃⌘F); the title bar hides there like in any other app.
 struct PhotoPickerWindow: View {
     @Bindable var model: PhotoPickerModel
     @State private var showFolders = true
 
+    private let panelWidth: CGFloat = 260
+
     var body: some View {
-        HSplitView {
+        HStack(spacing: 0) {
             if showFolders {
                 folderList
-                    .frame(minWidth: 200, idealWidth: 260, maxWidth: 400)
+                    .frame(width: panelWidth)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .transition(.move(edge: .leading))
             }
             photoPane
-                .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .overlay(alignment: .leading) {
+            panelHandle
+                .offset(x: showFolders ? panelWidth - 10 : 0)
         }
         .frame(minWidth: 700, minHeight: 450)
         .background(PickerWindowRegistrar(model: model))
@@ -31,24 +41,6 @@ struct PhotoPickerWindow: View {
             }
             #endif
         }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { showFolders.toggle() }
-                } label: {
-                    Label(showFolders ? "Hide Folders" : "Show Folders", systemImage: "sidebar.left")
-                }
-                .help(showFolders ? "Hide Folders" : "Show Folders")
-            }
-            ToolbarItem {
-                Button {
-                    model.window?.toggleFullScreen(nil)
-                } label: {
-                    Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
-                }
-                .help("Enter Full Screen (⌃⌘F)")
-            }
-        }
         .alert(
             "Photo Picker",
             isPresented: Binding(
@@ -58,6 +50,22 @@ struct PhotoPickerWindow: View {
             actions: { Button("OK") { model.errorMessage = nil } },
             message: { Text(model.errorMessage ?? "") }
         )
+    }
+
+    /// Small grab-handle at the panel edge: collapses the folder list, and
+    /// stays at the window's left edge to bring it back.
+    private var panelHandle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { showFolders.toggle() }
+        } label: {
+            Image(systemName: showFolders ? "chevron.left" : "chevron.right")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 44)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(showFolders ? "Hide Folders" : "Show Folders")
     }
 
     @ViewBuilder
@@ -87,8 +95,10 @@ struct PhotoPickerWindow: View {
                     }
                 }
                 .tag(folder.id)
+                .padding(.vertical, 2)
             }
-            .listStyle(.sidebar)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
     }
 
