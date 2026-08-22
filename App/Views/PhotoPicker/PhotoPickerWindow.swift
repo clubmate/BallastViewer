@@ -3,15 +3,19 @@ import BallastCore
 import SwiftUI
 
 /// The Photo Picker utility window: folder list left (photos waiting, picks
-/// in `_auswahl` highlighted), current photo right. Keys: ← → step, Space
+/// in `_auswahl` highlighted; toggled via the toolbar), current photo right.
+/// The root is chosen once per window session (restart the picker to change it). Keys: ← → step, Space
 /// rotate, Return move to `_auswahl`, Backspace undo the last pick.
 struct PhotoPickerWindow: View {
     @Bindable var model: PhotoPickerModel
+    @State private var showFolders = true
 
     var body: some View {
         HSplitView {
-            folderList
-                .frame(minWidth: 200, idealWidth: 260, maxWidth: 400)
+            if showFolders {
+                folderList
+                    .frame(minWidth: 200, idealWidth: 260, maxWidth: 400)
+            }
             photoPane
                 .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -29,7 +33,20 @@ struct PhotoPickerWindow: View {
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                Button("Choose Folder…") { model.chooseRoot() }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showFolders.toggle() }
+                } label: {
+                    Label(showFolders ? "Hide Folders" : "Show Folders", systemImage: "sidebar.left")
+                }
+                .help(showFolders ? "Hide Folders" : "Show Folders")
+            }
+            ToolbarItem {
+                Button {
+                    model.window?.toggleFullScreen(nil)
+                } label: {
+                    Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
+                .help("Enter Full Screen (⌃⌘F)")
             }
         }
         .alert(
@@ -104,13 +121,17 @@ private struct PickerWindowRegistrar: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async { [weak view] in
             model.window = view?.window
+            view?.window?.collectionBehavior.insert(.fullScreenPrimary)
         }
         return view
     }
 
     func updateNSView(_ view: NSView, context: Context) {
         if let window = view.window, model.window !== window {
-            DispatchQueue.main.async { model.window = window }
+            DispatchQueue.main.async {
+                model.window = window
+                window.collectionBehavior.insert(.fullScreenPrimary)
+            }
         }
     }
 }
