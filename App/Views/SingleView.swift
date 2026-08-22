@@ -85,7 +85,7 @@ struct SingleView: View {
 
 /// Layer-backed fit-scaled image with the EXIF transform applied on top —
 /// same display convention as the grid cells.
-private struct SingleImageSurface: NSViewRepresentable {
+struct SingleImageSurface: NSViewRepresentable {
     let image: CGImage
     let orientation: Int
 

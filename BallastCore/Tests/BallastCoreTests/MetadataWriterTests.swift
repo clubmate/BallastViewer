@@ -53,6 +53,31 @@ struct MetadataWriterTests {
         #expect(metadata.captureDate != nil)
     }
 
+    @Test func orientationOnlyWriteSetsEXIFAndXMPAndKeepsRatingKeywords() throws {
+        let url = tempJPEG()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeJPEG(to: url, properties: [:])
+        try MetadataWriter.write(rating: 2, orientation: 1, keywords: ["KEEP"], to: url)
+        let before = try pixelBytes(of: url)
+
+        try MetadataWriter.writeOrientation(8, to: url)
+
+        let metadata = MetadataReader.read(from: url)
+        #expect(metadata.orientation == 8)
+        #expect(metadata.rating == 2)
+        #expect(metadata.keywords == ["KEEP"])
+        #expect(try pixelBytes(of: url) == before)
+        // The classic EXIF/TIFF tag (what Finder/Preview read) is set too.
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        #expect(props?[kCGImagePropertyOrientation] as? Int == 8)
+        let tiff = props?[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        #expect(tiff?[kCGImagePropertyTIFFOrientation] as? Int == 8)
+        let xmp = try #require(CGImageSourceCopyMetadataAtIndex(source, 0, nil))
+        let tag = CGImageMetadataCopyTagWithPath(xmp, nil, "tiff:Orientation" as CFString)
+        #expect(tag.flatMap { CGImageMetadataTagCopyValue($0) as? String } == "8")
+    }
+
     @Test func imagePixelsAreUntouched() throws {
         let url = tempJPEG()
         defer { try? FileManager.default.removeItem(at: url) }

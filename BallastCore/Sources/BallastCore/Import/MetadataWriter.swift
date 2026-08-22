@@ -49,8 +49,41 @@ public enum MetadataWriter {
             throw MetadataWriteError.writeFailed("Could not build the metadata patch.")
         }
 
-        // Temp file on the same volume as the original so the final replace
-        // stays atomic (spec §6.2 steps 2/5).
+        try copyPatched(source: source, type: type, patch: patch, extraOptions: [:], to: url)
+    }
+
+    /// Orientation-only variant for the Photo Picker utility: patches XMP
+    /// `tiff:Orientation` AND the classic EXIF/TIFF orientation tag (via
+    /// `kCGImageDestinationOrientation`), so Finder, Preview and Lightroom all
+    /// agree. Rating and keywords are left exactly as they are — the picker
+    /// works on files that are not part of any library.
+    public static func writeOrientation(_ orientation: Int, to url: URL) throws {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
+              CGImageSourceGetCount(source) > 0,
+              let type = CGImageSourceGetType(source)
+        else {
+            throw MetadataWriteError.unreadableSource(url.path)
+        }
+        // ImageIO refuses kCGImageDestinationMetadata together with
+        // kCGImageDestinationOrientation, so the EXIF/TIFF tag goes in via
+        // the dedicated option alone (ImageIO keeps XMP in step itself).
+        try copyPatched(
+            source: source, type: type, patch: nil,
+            extraOptions: [kCGImageDestinationOrientation: orientation],
+            to: url
+        )
+    }
+
+    /// Shared lossless copy: temp file on the same volume as the original so
+    /// the final replace stays atomic (spec §6.2 steps 2/5).
+    private static func copyPatched(
+        source: CGImageSource,
+        type: CFString,
+        patch: CGMutableImageMetadata?,
+        extraOptions: [CFString: Any],
+        to url: URL
+    ) throws {
         let tempDir = try FileManager.default.url(
             for: .itemReplacementDirectory, in: .userDomainMask,
             appropriateFor: url, create: true
@@ -69,10 +102,12 @@ public enum MetadataWriter {
             throw MetadataWriteError.writeFailed("Could not create the destination file.")
         }
 
-        let options: [CFString: Any] = [
-            kCGImageDestinationMetadata: patch,
-            kCGImageDestinationMergeMetadata: true,
-        ]
+        var options: [CFString: Any] = [:]
+        if let patch {
+            options[kCGImageDestinationMetadata] = patch
+            options[kCGImageDestinationMergeMetadata] = true
+        }
+        options.merge(extraOptions) { _, new in new }
         var copyError: Unmanaged<CFError>?
         guard CGImageDestinationCopyImageSource(
             destination, source, options as CFDictionary, &copyError

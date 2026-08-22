@@ -14,6 +14,7 @@ struct BallastviewerApp: App {
     @State private var shortcutMonitor: ShortcutMonitor
     @State private var midiService: MidiService
     @State private var settingsRouter = SettingsRouter()
+    @State private var photoPicker = PhotoPickerModel()
 
     init() {
         let controller = LibraryController()
@@ -52,6 +53,7 @@ struct BallastviewerApp: App {
                 .environment(center)
                 .environment(sidebar)
                 .environment(appearance)
+                .background(PhotoPickerAutoOpen())
                 .task {
                     await TestHooks.runIfRequested(
                         controller, center: center, sidebar: sidebar,
@@ -69,7 +71,15 @@ struct BallastviewerApp: App {
             LibraryCommands(controller: controller, settingsRouter: settingsRouter)
             PhotoCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
             ViewCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
+            PhotoPickerCommands()
         }
+
+        // Standalone first-pass selection utility — shares nothing with the
+        // library window except the image surface.
+        Window("Photo Picker", id: "photoPicker") {
+            PhotoPickerWindow(model: photoPicker)
+        }
+        .defaultSize(width: 1100, height: 750)
 
         Settings {
             SettingsView()
@@ -79,6 +89,22 @@ struct BallastviewerApp: App {
                 .environment(appearance)
                 .environment(midiService)
                 .environment(settingsRouter)
+        }
+    }
+}
+
+/// Debug hook: `BV_TEST_PICKER_ROOT` opens the picker window at launch so it
+/// can be checked headlessly (the open panel is unreachable under the sandbox).
+private struct PhotoPickerAutoOpen: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear.task {
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["BV_TEST_PICKER_ROOT"] != nil {
+                openWindow(id: "photoPicker")
+            }
+            #endif
         }
     }
 }
