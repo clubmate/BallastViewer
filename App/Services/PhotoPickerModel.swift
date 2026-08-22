@@ -74,13 +74,8 @@ final class PhotoPickerModel {
     func setRoot(_ url: URL) {
         rootURL = url
         picks.removeAll()
-        refreshFolders()
+        folders = PhotoPickerScanner.folders(in: url)
         selectedFolderID = folders.first?.id
-    }
-
-    func refreshFolders() {
-        guard let rootURL else { folders = []; return }
-        folders = PhotoPickerScanner.folders(in: rootURL)
     }
 
     private func loadSelectedFolder() {

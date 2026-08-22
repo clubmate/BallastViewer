@@ -31,12 +31,6 @@ struct PhotoPickerWindow: View {
             ToolbarItem(placement: .navigation) {
                 Button("Choose Folder…") { model.chooseRoot() }
             }
-            ToolbarItem {
-                Button { model.refreshFolders() } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .disabled(model.rootURL == nil)
-            }
         }
         .alert(
             "Photo Picker",
@@ -83,45 +77,22 @@ struct PhotoPickerWindow: View {
 
     @ViewBuilder
     private var photoPane: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Color.black
-                if let box = model.currentImage, model.currentPhoto != nil {
-                    SingleImageSurface(image: box.image, orientation: model.currentOrientation)
-                } else if model.decodeFailed {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.largeTitle)
-                        .foregroundStyle(.red)
-                } else if model.currentPhoto == nil {
-                    Text(model.selectedFolder == nil ? "No Folder Selected" : "No Photos Left")
-                        .font(.title)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ProgressView()
-                }
-            }
-            statusBar
-        }
-    }
-
-    private var statusBar: some View {
-        HStack {
-            Text(model.currentPhoto?.lastPathComponent ?? "")
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-            if !model.photos.isEmpty {
-                Text("\(model.index + 1) / \(model.photos.count)")
-                    .monospacedDigit()
+        ZStack {
+            Color.black
+            if let box = model.currentImage, model.currentPhoto != nil {
+                SingleImageSurface(image: box.image, orientation: model.currentOrientation)
+            } else if model.decodeFailed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(.red)
+            } else if model.currentPhoto == nil {
+                Text(model.selectedFolder == nil ? "No Folder Selected" : "No Photos Left")
+                    .font(.title)
                     .foregroundStyle(.secondary)
+            } else {
+                ProgressView()
             }
-            Text("← → step · Space rotate · Return pick · ⌫ undo")
-                .foregroundStyle(.tertiary)
         }
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.bar)
     }
 }
 
