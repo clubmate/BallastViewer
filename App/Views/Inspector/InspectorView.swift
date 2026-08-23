@@ -113,6 +113,14 @@ struct InspectorView: View {
                     highlight.moveUp(count: suggestions.count)
                     return .handled
                 }
+                .onKeyPress(.escape) {
+                    // Hand the keyboard back to the grid (Q21 suppresses
+                    // shortcuts while the field has focus).
+                    keywordInput = ""
+                    highlight.reset()
+                    keywordFieldFocused = false
+                    return .handled
+                }
                 .onKeyPress(.return) {
                     // Bounds-checked: the vocabulary can shrink (keyword
                     // deleted in Settings) between the body pass that built
@@ -162,6 +170,10 @@ struct InspectorView: View {
         controller.assignKeyword(text: text, toPhotoIds: ids)
         keywordInput = ""
         highlight.reset()
+        // Hand the keyboard back to the grid right away: the usual flow is
+        // "keyword, then arrow to the next photo" (Q21 would otherwise swallow
+        // the arrow). Click the field again to add another keyword.
+        keywordFieldFocused = false
     }
 
     // MARK: Chips (Q14 intersection, Q18 order)

@@ -79,8 +79,17 @@ final class ShortcutMonitor {
               window.attachedSheet == nil
         else { return false }
         // NSTextView is an NSText — one check covers both field editors and views.
-        return !(window.firstResponder is NSText)
+        guard let text = window.firstResponder as? NSText else { return true }
+        // Culling flow: after committing a keyword the entry keeps focus so the
+        // next keyword can be typed, but an EMPTY field has no caret to move
+        // and no suggestion list (KeywordAutocomplete returns nothing for an
+        // empty query), so the arrow keys may navigate photos instead of
+        // being swallowed. Anything typed still goes to the field.
+        return text.string.isEmpty && Self.arrowKeyCodes.contains(event.keyCode)
     }
+
+    /// Left, right, down, up.
+    private static let arrowKeyCodes: Set<UInt16> = [123, 124, 125, 126]
 }
 
 /// Shared local key-down monitor plumbing (ShortcutMonitor, PhotoPickerModel).
