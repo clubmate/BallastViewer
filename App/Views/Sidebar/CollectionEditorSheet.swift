@@ -28,13 +28,15 @@ struct CollectionEditorSheet: View {
                 }
                 GridRow {
                     Text("Match")
-                    Picker("Match", selection: $draft.collection.matchAll) {
+                    // Empty title: even a hidden label reserves width on macOS
+                    // and pushes the control off the Name field's edge.
+                    Picker("", selection: $draft.collection.matchAll) {
                         Text("All").tag(true)
                         Text("Any").tag(false)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 160)
+                    .fixedSize()
                 }
             }
 
@@ -51,16 +53,16 @@ struct CollectionEditorSheet: View {
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
             }
 
-            List {
-                ForEach($draft.rules) { $rule in
-                    ruleRow($rule)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            // A plain scroll view, not a List: List adds side insets of its
+            // own that no style removes, and rows are deleted via their button.
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach($draft.rules) { $rule in
+                        ruleRow($rule)
+                    }
                 }
-                .onDelete { draft.rules.remove(atOffsets: $0) }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 150)
+            .frame(maxWidth: .infinity, minHeight: 150)
 
             HStack {
                 Button {
