@@ -280,6 +280,13 @@ struct KeywordsSettingsView: View {
             }
             Text(tree.node(id)?.name ?? "")
             Spacer()
+            Button {
+                addKeyword(parentId: id, groupId: nil, base: "NEW SUB-KEYWORD")
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.borderless)
+            .help("Add sub-keyword to \(tree.node(id)?.name ?? "")")
         }
         .padding(.leading, CGFloat(depth) * 18)
         .padding(.vertical, 2)
