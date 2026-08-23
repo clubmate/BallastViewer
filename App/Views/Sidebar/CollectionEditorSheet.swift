@@ -94,7 +94,10 @@ struct CollectionEditorSheet: View {
             .labelsHidden()
             .frame(width: 120)
 
+            // The value takes whatever is left so the delete button always
+            // sits at the right edge, whatever control the type uses.
             valueControl(rule)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
                 draft.rules.removeAll { $0.id == rule.wrappedValue.id }
