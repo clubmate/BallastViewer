@@ -24,13 +24,17 @@ public enum FolderScanner {
         ) else {
             return []
         }
-        var urls: [URL] = []
+        // `URL.path` is recomputed on every access; sorting by it directly
+        // costs O(n log n) path conversions (millions at 50k files), so the
+        // path is derived once per file and the sort compares plain strings.
+        var entries: [(url: URL, path: String)] = []
         for case let url as URL in enumerator {
             guard acceptedExtensions.contains(url.pathExtension.lowercased()),
                   (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
             else { continue }
-            urls.append(url)
+            entries.append((url, url.path))
         }
-        return urls.sorted { $0.path < $1.path }
+        entries.sort { $0.path < $1.path }
+        return entries.map(\.url)
     }
 }

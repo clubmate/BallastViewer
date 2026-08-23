@@ -38,15 +38,27 @@ public struct PhotoQueryFacts: Equatable, Sendable {
     /// match with plain `contains`. Empty means "not precomputed"; consumers
     /// fold on the fly then.
     public var foldedKeywordPaths: [String]
+    /// Case-folded `photo.filename`, computed once when the facts are built
+    /// (filenames never change after import) instead of per rule evaluation
+    /// and per search pass. nil means "not precomputed"; consumers fold on
+    /// the fly then.
+    public var foldedFilename: String?
 
     public init(
         keywordPaths: [String] = [],
         keywordGroupIds: Set<Int64> = [],
-        foldedKeywordPaths: [String] = []
+        foldedKeywordPaths: [String] = [],
+        foldedFilename: String? = nil
     ) {
         self.keywordPaths = keywordPaths
         self.keywordGroupIds = keywordGroupIds
         self.foldedKeywordPaths = foldedKeywordPaths
+        self.foldedFilename = foldedFilename
+    }
+
+    /// The precomputed folded filename, or a fresh fold of `filename`.
+    public func foldedFilename(or filename: String) -> String {
+        foldedFilename ?? CaseInsensitiveMatch.fold(filename)
     }
 }
 
@@ -65,6 +77,7 @@ public struct CompiledRules: Sendable {
         let intValue: Int?
         let dateValue: Date?
         let groupIdValue: Int64?
+        let batchIdValue: Int64?
     }
 
     let rules: [Rule]
@@ -83,7 +96,8 @@ public struct CompiledRules: Sendable {
                 foldedValue: CaseInsensitiveMatch.fold(record.value),
                 intValue: Int(trimmed),
                 dateValue: Double(trimmed).map { Date(timeIntervalSince1970: $0) },
-                groupIdValue: Int64(record.value)
+                groupIdValue: Int64(trimmed),
+                batchIdValue: Int64(trimmed)
             )
         }
     }
@@ -104,7 +118,7 @@ public struct CompiledRules: Sendable {
             return Self.keywordSetRule(Self.foldedPaths(facts), op, rule.foldedValue)
         case .filename:
             return Self.foldedStringRule(
-                CaseInsensitiveMatch.fold(photo.filename), op, rule.foldedValue
+                facts.foldedFilename(or: photo.filename), op, rule.foldedValue
             )
         case .rating:
             return Self.intRule(photo.rating, op, rule.intValue)
@@ -120,7 +134,9 @@ public struct CompiledRules: Sendable {
             guard let captureDate = photo.captureDate else { return false }
             return Self.dateRule(captureDate, op, rule.dateValue)
         case .importBatch:
-            return photo.importBatchId.map(String.init) == rule.value
+            // Integer compare: an unparsable value (nil) never equals a batch.
+            guard let batchId = rule.batchIdValue else { return false }
+            return photo.importBatchId == batchId
         }
     }
 

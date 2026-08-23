@@ -12,19 +12,21 @@ public enum PhotoDAO {
     /// exceed SQLITE_MAX_VARIABLE_NUMBER, so every id list is chunked.
     static let idChunkSize = 500
 
+    /// `ids` split into `idChunkSize`-sized slices, in order.
+    private static func idChunks(_ ids: [Int64]) -> [ArraySlice<Int64>] {
+        stride(from: 0, to: ids.count, by: idChunkSize)
+            .map { ids[$0..<min($0 + idChunkSize, ids.count)] }
+    }
+
     public static func setRating(_ rating: Int, forPhotoIds ids: [Int64], in db: Database) throws {
-        for chunk in stride(from: 0, to: ids.count, by: idChunkSize)
-            .map({ ids[$0..<min($0 + idChunkSize, ids.count)] })
-        {
+        for chunk in idChunks(ids) {
             try PhotoRecord.filter(keys: chunk)
                 .updateAll(db, Column("rating").set(to: rating))
         }
     }
 
     public static func setOrientation(_ orientation: Int, forPhotoIds ids: [Int64], in db: Database) throws {
-        for chunk in stride(from: 0, to: ids.count, by: idChunkSize)
-            .map({ ids[$0..<min($0 + idChunkSize, ids.count)] })
-        {
+        for chunk in idChunks(ids) {
             try PhotoRecord.filter(keys: chunk)
                 .updateAll(db, Column("orientation").set(to: orientation))
         }
@@ -56,9 +58,7 @@ public enum PhotoDAO {
     }
 
     public static func removeKeyword(_ keywordId: Int64, fromPhotoIds ids: [Int64], in db: Database) throws {
-        for chunk in stride(from: 0, to: ids.count, by: idChunkSize)
-            .map({ ids[$0..<min($0 + idChunkSize, ids.count)] })
-        {
+        for chunk in idChunks(ids) {
             try PhotoKeywordRecord
                 .filter(Column("keywordId") == keywordId && chunk.contains(Column("photoId")))
                 .deleteAll(db)
@@ -75,9 +75,19 @@ public enum PhotoDAO {
         }
     }
 
-    /// All (photoId, keywordId) pairs — one query, used by the snapshot load.
-    public static func fetchKeywordAssignments(_ db: Database) throws -> [(photoId: Int64, keywordId: Int64)] {
-        try Row.fetchAll(db, sql: "SELECT photoId, keywordId FROM photoKeyword")
-            .map { (photoId: $0["photoId"], keywordId: $0["keywordId"]) }
+    /// The join table as keyword-id sets per photo id — the snapshot's
+    /// in-memory form, built straight off a row cursor with positional
+    /// column access (no intermediate row array or tuple list).
+    public static func fetchKeywordIdsByPhoto(_ db: Database) throws -> [Int64: Set<Int64>] {
+        var result: [Int64: Set<Int64>] = [:]
+        let photoCount = try Int.fetchOne(db, sql: "SELECT COUNT(DISTINCT photoId) FROM photoKeyword") ?? 0
+        result.reserveCapacity(photoCount)
+        let cursor = try Row.fetchCursor(db, sql: "SELECT photoId, keywordId FROM photoKeyword")
+        while let row = try cursor.next() {
+            let photoId: Int64 = row[0]
+            let keywordId: Int64 = row[1]
+            result[photoId, default: []].insert(keywordId)
+        }
+        return result
     }
 }

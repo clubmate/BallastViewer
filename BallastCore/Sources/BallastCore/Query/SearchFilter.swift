@@ -26,11 +26,12 @@ public enum SearchFilter {
             folded = CaseInsensitiveMatch.fold(needle)
         }
 
-        /// `facts.foldedKeywordPaths` comes from the tree memo; when it is not
-        /// precomputed (count mismatch) the paths are folded on the fly so the
-        /// result still equals `SearchFilter.matches`.
+        /// `facts.foldedFilename` / `facts.foldedKeywordPaths` come from the
+        /// facts cache and tree memo; when not precomputed (nil / count
+        /// mismatch) the strings are folded on the fly so the result still
+        /// equals `SearchFilter.matches`.
         public func matches(filename: String, facts: PhotoQueryFacts) -> Bool {
-            if CaseInsensitiveMatch.fold(filename).contains(folded) { return true }
+            if facts.foldedFilename(or: filename).contains(folded) { return true }
             if facts.foldedKeywordPaths.count == facts.keywordPaths.count {
                 return facts.foldedKeywordPaths.contains { $0.contains(folded) }
             }

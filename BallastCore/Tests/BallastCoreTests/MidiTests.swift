@@ -98,6 +98,17 @@ struct MidiParserTests {
     @Test func strayDataBytesAreIgnored() {
         #expect(MidiParser.parse([12, 34, 0x90, 60, 100]) == [on(60)])
     }
+
+    /// A status byte where data was expected ends the truncated message and
+    /// starts a new one — it is never consumed as a velocity (which would
+    /// have produced velocity 144 and swallowed the real note).
+    @Test func statusByteInDataPositionRestartsParsing() {
+        let events = MidiParser.parse([0x90, 0x3C, 0x90, 0x3C, 0x40])
+        #expect(events == [on(60, velocity: 64)])
+        for case .on(_, let velocity) in events {
+            #expect(velocity < 128)
+        }
+    }
 }
 
 struct LEDStateComputerTests {

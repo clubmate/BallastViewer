@@ -57,7 +57,7 @@ import Testing
 
         photos[1].rating = 3
         store.update(
-            changedPhotos: [photos[1]], collections: collections, rulesByCollection: rules,
+            changedPhotos: [photos[1]],
             lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
         )
         #expect(store.counts.ratings[0] == 3 && store.counts.ratings[3] == 1)
@@ -66,7 +66,7 @@ import Testing
 
         photos[1].rating = 4
         store.update(
-            changedPhotos: [photos[1]], collections: collections, rulesByCollection: rules,
+            changedPhotos: [photos[1]],
             lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
         )
         #expect(store.counts.ratings[3] == 0 && store.counts.ratings[4] == 1)
@@ -83,7 +83,7 @@ import Testing
         )
         let before = store.counts
         store.update(
-            changedPhotos: photos, collections: [], rulesByCollection: [:],
+            changedPhotos: photos,
             lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
         )
         #expect(store.counts == before)
@@ -102,7 +102,7 @@ import Testing
 
         // Step 8 will tag photos; counts must follow the new facts.
         store.update(
-            changedPhotos: [subject], collections: collections, rulesByCollection: rules,
+            changedPhotos: [subject],
             lastImportBatchId: nil,
             facts: { _ in PhotoQueryFacts(keywordPaths: ["PEOPLE > ANNA"], keywordGroupIds: [7]) }
         )
@@ -119,7 +119,7 @@ import Testing
         )
         // A photo the memo has never seen (appended after a rebuild) counts as new.
         store.update(
-            changedPhotos: [photo(2, rating: 4)], collections: collections, rulesByCollection: rules,
+            changedPhotos: [photo(2, rating: 4)],
             lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
         )
         #expect(store.counts.allPhotos == 2)
@@ -127,7 +127,7 @@ import Testing
         #expect(store.counts.collections[10] == 2)
         // Updating it again does not double count.
         store.update(
-            changedPhotos: [photo(2, rating: 0)], collections: collections, rulesByCollection: rules,
+            changedPhotos: [photo(2, rating: 0)],
             lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
         )
         #expect(store.counts.allPhotos == 2)
@@ -144,12 +144,12 @@ import Testing
         #expect(store.counts.lastImport == 1)
         // The batch pointer moved to 4: photo 1 leaves, photo 2 joins.
         store.update(
-            changedPhotos: [photo(1, batch: 5), photo(2, batch: 4)], collections: [], rulesByCollection: [:],
+            changedPhotos: [photo(1, batch: 5), photo(2, batch: 4)],
             lastImportBatchId: 4, facts: { _ in PhotoQueryFacts() }
         )
         #expect(store.counts.lastImport == 1)
         store.update(
-            changedPhotos: [photo(2, batch: 4)], collections: [], rulesByCollection: [:],
+            changedPhotos: [photo(2, batch: 4)],
             lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
         )
         #expect(store.counts.lastImport == 0)

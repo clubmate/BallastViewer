@@ -29,46 +29,23 @@ public struct MidiAddress: Hashable, Sendable {
     }
 }
 
+extension MidiAddress: BindingKey {
+    public var bindingString: String { noteString }
+
+    public init?(bindingString: String) {
+        self.init(noteString: bindingString)
+    }
+}
+
 /// The MIDI shortcut map: note string → action string, same persistence model
-/// and strict 1:1 binding rules as `KeyMap` (§13.1). There are no defaults —
-/// the map starts empty and *Reset Defaults* clears it entirely.
-public struct MidiMap: Equatable, Sendable {
-    public private(set) var bindings: [String: String]
+/// and strict 1:1 binding rules as `KeyMap` (§13.1) — one `BindingMap`
+/// implementation. There are no defaults — the map starts empty and *Reset
+/// Defaults* clears it entirely.
+public typealias MidiMap = BindingMap<MidiAddress>
 
-    public init(bindings: [String: String] = [:]) {
-        self.bindings = bindings
-    }
-
-    public func command(for address: MidiAddress) -> ActionCommand? {
-        bindings[address.noteString].flatMap(ActionCommand.init(actionString:))
-    }
-
+extension BindingMap where Key == MidiAddress {
     public func address(for command: ActionCommand) -> MidiAddress? {
-        let action = command.actionString
-        return bindings.first { $0.value == action }
-            .flatMap { MidiAddress(noteString: $0.key) }
-    }
-
-    public mutating func assign(_ address: MidiAddress, to command: ActionCommand) {
-        let action = command.actionString
-        bindings = bindings.filter { $0.value != action }
-        bindings[address.noteString] = action
-    }
-
-    public mutating func removeBinding(for address: MidiAddress) {
-        bindings[address.noteString] = nil
-    }
-
-    /// Rewrites keyword bindings after a vocabulary rename (see
-    /// `ActionCommand.renamingKeywordPath`) so bindings follow the keyword
-    /// instead of going stale.
-    public mutating func renameKeywordPath(from oldPath: String, to newPath: String) {
-        for (key, actionString) in bindings {
-            guard let command = ActionCommand(actionString: actionString),
-                  let updated = command.renamingKeywordPath(from: oldPath, to: newPath)
-            else { continue }
-            bindings[key] = updated.actionString
-        }
+        key(for: command)
     }
 }
 
@@ -101,13 +78,18 @@ public enum MidiParser {
         var index = 0
         var runningStatus: UInt8? = nil
 
-        /// Next non-realtime byte at or after `index`, advancing past it;
-        /// nil when the stream ends.
+        /// Next data byte at or after `index`, advancing past it (realtime
+        /// bytes are skipped). nil when the stream ends — or when a status
+        /// byte appears where data was expected (a truncated message); then
+        /// `index` is left pointing at that status byte so the outer loop
+        /// parses it instead of swallowing it as a velocity or note.
         func nextData() -> UInt8? {
             while index < bytes.count {
                 let byte = bytes[index]
+                if byte >= 0xF8 { index += 1; continue }
+                if byte >= 0x80 { return nil }
                 index += 1
-                if byte < 0xF8 { return byte }
+                return byte
             }
             return nil
         }
@@ -131,7 +113,9 @@ public enum MidiParser {
 
             switch status {
             case 0x80...0x9F:
-                guard let note = nextData(), let velocity = nextData() else { return events }
+                // Truncated note message: drop it and resume at the status
+                // byte that cut it short.
+                guard let note = nextData(), let velocity = nextData() else { continue }
                 let channel = status & 0x0F
                 if let address = MidiAddress(channel: channel, note: note) {
                     let isOn = status >= 0x90 && velocity > 0

@@ -257,8 +257,8 @@ final class CenterViewModel {
     }
 
     private func refreshQueryCaches() {
-        collectionsById = controller.snapshot?.collectionsById ?? [:]
-        let rulesByCollection = controller.snapshot?.rulesByCollection ?? [:]
+        collectionsById = controller.snapshot?.makeCollectionsById() ?? [:]
+        let rulesByCollection = controller.snapshot?.makeRulesByCollection() ?? [:]
         compiledCollections = collectionsById.mapValues { collection in
             CompiledRules(
                 rulesByCollection[collection.id ?? -1] ?? [], matchAll: collection.matchAll
@@ -271,10 +271,11 @@ final class CenterViewModel {
     }
 
     /// `search` is folded once per pass by the caller (nil = search off);
-    /// facts are fetched once per photo and shared by both filters.
+    /// facts (incl. the pre-folded filename) are fetched once per photo and
+    /// shared by both filters.
     private func passesFilter(_ photo: PhotoRecord, search: SearchFilter.FoldedQuery?) -> Bool {
         guard let snapshot = controller.snapshot else { return false }
-        let facts = photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
+        let facts = controller.queryFacts(for: photo)
         guard SidebarFilter.matches(
             photo,
             facts: facts,

@@ -375,7 +375,7 @@ enum TestHooks {
         func anchorState() -> String {
             guard let id = center.selection.anchorId, let record = controller.photo(withId: id),
                   let snapshot = controller.snapshot else { return "none" }
-            let paths = snapshot.queryFacts(forPhotoId: id).keywordPaths.sorted()
+            let paths = snapshot.queryFacts(for: record).keywordPaths.sorted()
             return "anchor=\(id) rating=\(record.rating) orientation=\(record.orientation) keywords=\(paths)"
         }
         func dumpAll(_ label: String) {

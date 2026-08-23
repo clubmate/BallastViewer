@@ -19,26 +19,34 @@ public struct LibrarySnapshot: Sendable {
     public struct MissingMetaError: Error {}
 
     /// Rule-evaluation facts for one photo (resolved keyword paths + effective
-    /// groups). Cheap — proportional to the photo's keyword count.
-    public func queryFacts(forPhotoId id: Int64) -> PhotoQueryFacts {
-        guard let keywordIds = keywordIdsByPhoto[id], !keywordIds.isEmpty else {
-            return PhotoQueryFacts()
+    /// groups + folded filename). Cheap — proportional to the photo's keyword
+    /// count; the folded filename costs one ICU fold, paid here once rather
+    /// than on every rule evaluation or search pass.
+    public func queryFacts(for photo: PhotoRecord) -> PhotoQueryFacts {
+        let foldedFilename = CaseInsensitiveMatch.fold(photo.filename)
+        guard let id = photo.id, let keywordIds = keywordIdsByPhoto[id], !keywordIds.isEmpty else {
+            return PhotoQueryFacts(foldedFilename: foldedFilename)
         }
         let ids = Array(keywordIds)
         return PhotoQueryFacts(
             keywordPaths: ids.map { keywordTree.path(of: $0) },
             keywordGroupIds: Set(ids.compactMap { keywordTree.effectiveGroupId(of: $0) }),
-            foldedKeywordPaths: ids.map { keywordTree.foldedPath(of: $0) }
+            foldedKeywordPaths: ids.map { keywordTree.foldedPath(of: $0) },
+            foldedFilename: foldedFilename
         )
     }
 
-    public var collectionsById: [Int64: SmartCollectionRecord] {
+    /// Builds a fresh dictionary on every call — cache the result, don't
+    /// read it in a loop.
+    public func makeCollectionsById() -> [Int64: SmartCollectionRecord] {
         Dictionary(uniqueKeysWithValues: collections.compactMap { record in
             record.id.map { ($0, record) }
         })
     }
 
-    public var rulesByCollection: [Int64: [CollectionRuleRecord]] {
+    /// Builds a fresh dictionary on every call — cache the result, don't
+    /// read it in a loop.
+    public func makeRulesByCollection() -> [Int64: [CollectionRuleRecord]] {
         Dictionary(grouping: rules, by: \.collectionId)
     }
 
@@ -46,10 +54,7 @@ public struct LibrarySnapshot: Sendable {
         guard let meta = try LibraryMetaRecord.fetchOne(db) else {
             throw MissingMetaError()
         }
-        var keywordIdsByPhoto: [Int64: Set<Int64>] = [:]
-        for pair in try PhotoDAO.fetchKeywordAssignments(db) {
-            keywordIdsByPhoto[pair.photoId, default: []].insert(pair.keywordId)
-        }
+        let keywordIdsByPhoto = try PhotoDAO.fetchKeywordIdsByPhoto(db)
         return LibrarySnapshot(
             meta: meta,
             folders: try FolderRecord.order(Column("dateAdded")).fetchAll(db),

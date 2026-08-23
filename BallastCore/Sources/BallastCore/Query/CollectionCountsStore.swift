@@ -12,7 +12,8 @@ public struct SidebarCounts: Equatable, Sendable {
     public init() {}
 }
 
-public struct CollectionCountsStore: Equatable, Sendable {
+/// Not `Equatable`: it carries compiled rules. Compare `counts` instead.
+public struct CollectionCountsStore: Sendable {
     /// What each photo currently counts towards — the memo that makes deltas
     /// possible without knowing the pre-mutation state.
     private struct Membership: Equatable {
@@ -23,6 +24,10 @@ public struct CollectionCountsStore: Equatable, Sendable {
 
     public private(set) var counts = SidebarCounts()
     private var membershipByPhoto: [Int64: Membership] = [:]
+    /// The collections' rules, compiled by the last `rebuild` and reused by
+    /// every `update` — rule edits always arrive as a rebuild, so a delta
+    /// never needs to recompile.
+    private var compiled: [(id: Int64, rules: CompiledRules)] = []
 
     public init() {}
 
@@ -42,29 +47,29 @@ public struct CollectionCountsStore: Equatable, Sendable {
         counts.collections = Dictionary(
             uniqueKeysWithValues: collections.compactMap { $0.id.map { ($0, 0) } }
         )
-        let compiled = Self.compile(collections, rulesByCollection)
+        compiled = Self.compile(collections, rulesByCollection)
+        var matched: Set<Int64> = []
         for photo in photos {
             let membership = membership(
-                of: photo, compiled: compiled, lastImportBatchId: lastImportBatchId, facts: facts
+                of: photo, lastImportBatchId: lastImportBatchId, facts: facts, scratch: &matched
             )
             add(membership, photoId: photo.id ?? -1)
         }
     }
 
-    /// Delta update after in-place photo mutations. Photos must still be part
-    /// of the catalog (removals go through `rebuild`).
+    /// Delta update after in-place photo mutations, against the collections
+    /// compiled by the last `rebuild`. Photos must still be part of the
+    /// catalog (removals and rule edits go through `rebuild`).
     public mutating func update(
         changedPhotos: [PhotoRecord],
-        collections: [SmartCollectionRecord],
-        rulesByCollection: [Int64: [CollectionRuleRecord]],
         lastImportBatchId: Int64?,
         facts: (PhotoRecord) -> PhotoQueryFacts
     ) {
-        let compiled = Self.compile(collections, rulesByCollection)
+        var matched: Set<Int64> = []
         for photo in changedPhotos {
             guard let photoId = photo.id else { continue }
             let new = membership(
-                of: photo, compiled: compiled, lastImportBatchId: lastImportBatchId, facts: facts
+                of: photo, lastImportBatchId: lastImportBatchId, facts: facts, scratch: &matched
             )
             if let old = membershipByPhoto[photoId] {
                 guard old != new else { continue }
@@ -85,14 +90,16 @@ public struct CollectionCountsStore: Equatable, Sendable {
         }
     }
 
+    /// `scratch` is a caller-owned set reused across photos (cleared, capacity
+    /// kept) so the per-photo loop does not allocate one set per photo.
     private func membership(
         of photo: PhotoRecord,
-        compiled: [(id: Int64, rules: CompiledRules)],
         lastImportBatchId: Int64?,
-        facts: (PhotoRecord) -> PhotoQueryFacts
+        facts: (PhotoRecord) -> PhotoQueryFacts,
+        scratch matched: inout Set<Int64>
     ) -> Membership {
         let photoFacts = facts(photo)
-        var matched: Set<Int64> = []
+        matched.removeAll(keepingCapacity: true)
         for collection in compiled where collection.rules.matches(photo, facts: photoFacts) {
             matched.insert(collection.id)
         }

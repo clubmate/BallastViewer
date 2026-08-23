@@ -22,6 +22,12 @@ public struct KeywordTree: Sendable {
     private let pathById: [Int64: String]
     private let foldedPathById: [Int64: String]
     private let effectiveGroupById: [Int64: Int64]
+    /// Every reachable node id in depth-first, name-sorted order — the order
+    /// `firstMatch` and the autocomplete corpus iterate in (Q16/Q17).
+    private let depthFirstIds: [Int64]
+    /// (folded, display) path per `depthFirstIds` entry — the autocomplete
+    /// corpus, built once so a keystroke is a plain `contains` scan.
+    private let foldedCorpus: [(folded: String, path: String)]
 
     public init(records: [KeywordRecord]) {
         var byId: [Int64: KeywordRecord] = [:]
@@ -50,24 +56,35 @@ public struct KeywordTree: Sendable {
         var paths: [Int64: String] = [:]
         var folded: [Int64: String] = [:]
         var groups: [Int64: Int64] = [:]
+        var order: [Int64] = []
+        var corpus: [(folded: String, path: String)] = []
         paths.reserveCapacity(byId.count)
         folded.reserveCapacity(byId.count)
+        order.reserveCapacity(byId.count)
+        corpus.reserveCapacity(byId.count)
+        // Children are pushed reversed so popLast yields them in sorted
+        // order: the single DFS also produces the depth-first id list.
         var stack: [(id: Int64, parentPath: String?, parentGroup: Int64?)] =
-            (children[nil] ?? []).map { ($0, nil, nil) }
+            (children[nil] ?? []).reversed().map { ($0, nil, nil) }
         while let (id, parentPath, parentGroup) = stack.popLast() {
             guard let node = byId[id] else { continue }
             let path = parentPath.map { $0 + Self.separator + node.name } ?? node.name
+            let foldedPath = CaseInsensitiveMatch.fold(path)
             paths[id] = path
-            folded[id] = CaseInsensitiveMatch.fold(path)
+            folded[id] = foldedPath
+            order.append(id)
+            corpus.append((foldedPath, path))
             let effective = node.groupId ?? parentGroup
             if let effective { groups[id] = effective }
-            for child in children[id] ?? [] {
+            for child in (children[id] ?? []).reversed() {
                 stack.append((child, path, effective))
             }
         }
         pathById = paths
         foldedPathById = folded
         effectiveGroupById = groups
+        depthFirstIds = order
+        foldedCorpus = corpus
     }
 
     public var isEmpty: Bool { nodesById.isEmpty }
@@ -110,32 +127,26 @@ public struct KeywordTree: Sendable {
     }
 
     /// All node ids in depth-first, name-sorted order. Every node — not just
-    /// leaves — is assignable (Q17).
+    /// leaves — is assignable (Q17). Precomputed at construction; O(1).
     public func allIdsDepthFirst() -> [Int64] {
-        var result: [Int64] = []
-        var stack: [Int64] = rootIds.reversed()
-        while let id = stack.popLast() {
-            result.append(id)
-            stack.append(contentsOf: children(of: id).reversed())
-        }
-        return result
+        depthFirstIds
     }
 
     public func allPaths() -> [String] {
-        allIdsDepthFirst().map { path(of: $0) }
+        foldedCorpus.map(\.path)
     }
 
     /// (folded, display) pairs of every path — the autocomplete corpus.
     /// Folding happened once at construction; matching is a plain `contains`.
     public func allFoldedPaths() -> [(folded: String, path: String)] {
-        allIdsDepthFirst().map { (foldedPath(of: $0), path(of: $0)) }
+        foldedCorpus
     }
 
     /// First node matching `name` (single component, case-insensitive) in
     /// depth-first order — first match wins, ambiguity is not expressible (Q16).
     public func firstMatch(named name: String) -> Int64? {
         let needle = KeywordDAO.normalize(name)
-        return allIdsDepthFirst().first { nodesById[$0]?.name == needle }
+        return depthFirstIds.first { nodesById[$0]?.name == needle }
     }
 
     /// Descends the tree along path components (case-insensitive).

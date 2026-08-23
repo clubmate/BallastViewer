@@ -45,10 +45,9 @@ final class SidebarViewModel {
         }
     }
 
+    /// Holds the compiled collection rules from the last rebuild, so a
+    /// photosUpdated delta never regroups or recompiles anything.
     @ObservationIgnored private var store = CollectionCountsStore()
-    /// Rules grouped per collection, cached — recomputing the grouping on
-    /// every photosUpdated event was pure per-event overhead.
-    @ObservationIgnored private var cachedRulesByCollection: [Int64: [CollectionRuleRecord]] = [:]
 
     init(controller: LibraryController) {
         self.controller = controller
@@ -108,12 +107,8 @@ final class SidebarViewModel {
             // Delta only — O(changed × collections), the acceptance criterion.
             store.update(
                 changedPhotos: ids.compactMap { controller.photo(withId: $0) },
-                collections: snapshot.collections,
-                rulesByCollection: cachedRulesByCollection,
                 lastImportBatchId: snapshot.meta.lastImportBatchId,
-                facts: { [controller] photo in
-                    photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
-                }
+                facts: { [controller] photo in controller.queryFacts(for: photo) }
             )
             // Equality guard: a rotation changes no count, and an unguarded
             // assignment would invalidate the sidebar per key repeat.
@@ -124,19 +119,15 @@ final class SidebarViewModel {
     private func rebuildCounts() {
         guard let snapshot = controller.snapshot else {
             store = CollectionCountsStore()
-            cachedRulesByCollection = [:]
             counts = SidebarCounts()
             return
         }
-        cachedRulesByCollection = snapshot.rulesByCollection
         store.rebuild(
             photos: snapshot.photos,
             collections: snapshot.collections,
-            rulesByCollection: cachedRulesByCollection,
+            rulesByCollection: snapshot.makeRulesByCollection(),
             lastImportBatchId: snapshot.meta.lastImportBatchId,
-            facts: { [controller] photo in
-                photo.id.map { controller.queryFacts(forPhotoId: $0) } ?? PhotoQueryFacts()
-            }
+            facts: { [controller] photo in controller.queryFacts(for: photo) }
         )
         if counts != store.counts { counts = store.counts }
     }

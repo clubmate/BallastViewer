@@ -83,17 +83,25 @@ final class LibraryController {
     var keywordPathRenamed: (@MainActor (String, String) -> Void)?
 
     /// Derived query facts per photo (resolved keyword paths + effective group
-    /// ids). Building these walks the keyword tree and joins strings — cached
-    /// here because counts rebuilds, collection filters, search and metadata
-    /// sync all hammer the same lookups. Invalidated on assignment changes
-    /// (per photo) and vocabulary changes (wholesale).
+    /// ids + folded filename). Building these walks the keyword tree and
+    /// joins/folds strings — cached here because counts rebuilds, collection
+    /// filters, search and metadata sync all hammer the same lookups.
+    /// Invalidated on assignment changes (per photo) and vocabulary changes
+    /// (wholesale); filenames never change, so they need no invalidation.
     @ObservationIgnored private var factsCache: [Int64: PhotoQueryFacts] = [:]
+
+    func queryFacts(for photo: PhotoRecord) -> PhotoQueryFacts {
+        guard let id = photo.id else { return PhotoQueryFacts() }
+        if let cached = factsCache[id] { return cached }
+        let facts = snapshot?.queryFacts(for: photo) ?? PhotoQueryFacts()
+        factsCache[id] = facts
+        return facts
+    }
 
     func queryFacts(forPhotoId id: Int64) -> PhotoQueryFacts {
         if let cached = factsCache[id] { return cached }
-        let facts = snapshot?.queryFacts(forPhotoId: id) ?? PhotoQueryFacts()
-        factsCache[id] = facts
-        return facts
+        guard let photo = photo(withId: id) else { return PhotoQueryFacts() }
+        return queryFacts(for: photo)
     }
 
     func invalidateFacts(forPhotoIds ids: [Int64]) {
