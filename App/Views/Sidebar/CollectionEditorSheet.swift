@@ -78,21 +78,17 @@ struct CollectionEditorSheet: View {
 
     private func ruleRow(_ rule: Binding<CollectionDraft.DraftRule>) -> some View {
         HStack(spacing: 8) {
-            Picker("", selection: typeBinding(rule)) {
-                ForEach(Self.selectableTypes, id: \.self) { type in
-                    Text(typeName(type)).tag(type)
-                }
-            }
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
+            FullWidthPicker(
+                selection: typeBinding(rule),
+                options: Self.selectableTypes,
+                title: typeName
+            )
 
-            Picker("", selection: rule.operation) {
-                ForEach(operators(for: rule.wrappedValue.type, including: rule.wrappedValue.operation), id: \.self) { op in
-                    Text(operatorName(op, for: rule.wrappedValue.type)).tag(op)
-                }
-            }
-            .labelsHidden()
-            .frame(maxWidth: .infinity)
+            FullWidthPicker(
+                selection: rule.operation,
+                options: operators(for: rule.wrappedValue.type, including: rule.wrappedValue.operation),
+                title: { operatorName($0, for: rule.wrappedValue.type) }
+            )
 
             // Equal-width columns keep the delete button at the right edge,
             // whatever control the type uses.
@@ -128,15 +124,11 @@ struct CollectionEditorSheet: View {
         case .rating:
             starPicker(rule.value)
         case .keywordGroup:
-            Picker("", selection: rule.value) {
-                Text("Select Group…").tag("")
-                ForEach(keywordGroups) { group in
-                    if let id = group.id {
-                        Text(group.name).tag("\(id)")
-                    }
-                }
-            }
-            .labelsHidden()
+            FullWidthPicker(
+                selection: rule.value,
+                options: [""] + keywordGroups.compactMap { $0.id.map(String.init) },
+                title: { id in keywordGroups.first { $0.id.map(String.init) == id }?.name ?? "Select Group…" }
+            )
         case .captureDate, .dateRange:
             // Both compare dates — a raw Unix-timestamp text field would
             // silently produce a never-matching rule.
@@ -245,6 +237,57 @@ struct CollectionEditorSheet: View {
         case .rating: "0"
         case .captureDate, .dateRange: "\(Int(Date().timeIntervalSince1970))"
         default: ""
+        }
+    }
+}
+
+/// A pop-up that fills its column. SwiftUI's menu `Picker` (and `Menu`) wrap
+/// an NSPopUpButton sized to its widest item and ignore `maxWidth`, which left
+/// the three rule columns visibly unequal — so the button is hosted directly
+/// with horizontal hugging turned off.
+private struct FullWidthPicker<Option: Hashable>: NSViewRepresentable {
+    @Binding var selection: Option
+    let options: [Option]
+    let title: (Option) -> String
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.changed(_:))
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.parent = self
+        let titles = options.map(title)
+        if button.itemTitles != titles {
+            button.removeAllItems()
+            button.addItems(withTitles: titles)
+        }
+        if let index = options.firstIndex(of: selection), button.indexOfSelectedItem != index {
+            button.selectItem(at: index)
+        }
+    }
+
+    /// Take the full proposed width; otherwise SwiftUI falls back to the
+    /// button's intrinsic (widest-item) width and centres it in the column.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? nsView.intrinsicContentSize.width,
+               height: nsView.intrinsicContentSize.height)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject {
+        var parent: FullWidthPicker
+        init(parent: FullWidthPicker) { self.parent = parent }
+
+        @objc func changed(_ sender: NSPopUpButton) {
+            let index = sender.indexOfSelectedItem
+            guard parent.options.indices.contains(index) else { return }
+            parent.selection = parent.options[index]
         }
     }
 }
