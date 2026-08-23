@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: the version is the commit count
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Version from commit count
+        id: version
+        run: |
+          N=$(git rev-list --count HEAD)
+          echo "number=$N" >> "$GITHUB_OUTPUT"
+          echo "tag=v0.1.$N" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          xcodegen generate
+          xcodebuild -project BallastViewer.xcodeproj \
+            -scheme BallastViewer \
+            -configuration Release \
+            -derivedDataPath build \
+            MARKETING_VERSION="0.1.${{ steps.version.outputs.number }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.number }}" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_ALLOWED=YES \
+            -quiet build
+
+      - name: Zip app
+        run: |
+          cd build/Build/Products/Release
+          ditto -c -k --sequesterRsrc --keepParent BallastViewer.app \
+            "$GITHUB_WORKSPACE/BallastViewer-${{ steps.version.outputs.tag }}.zip"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: BallastViewer ${{ steps.version.outputs.tag }}
+          files: BallastViewer-${{ steps.version.outputs.tag }}.zip
+          body: |
+            Automatic build of `${{ github.sha }}`.
+
+            The app is ad-hoc signed, not notarized. After unzipping, macOS will refuse to open it once.
+            Either right-click the app ▸ Open ▸ Open, or run in Terminal:
+
+                xattr -dr com.apple.quarantine ~/Downloads/BallastViewer.app
