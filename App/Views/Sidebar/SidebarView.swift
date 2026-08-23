@@ -181,6 +181,11 @@ struct SidebarView: View {
             ) {
                 Text(collection.name)
             }
+            // Simultaneous: the row is a Button, which would otherwise swallow
+            // the second click of a double-click.
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded { sidebar.beginEditing(collection) }
+            )
             .contextMenu {
                 Button("Edit Smart Collection") { sidebar.beginEditing(collection) }
                 Button("Delete", role: .destructive) {
