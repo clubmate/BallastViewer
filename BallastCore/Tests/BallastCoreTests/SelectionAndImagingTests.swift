@@ -1,5 +1,8 @@
 import Testing
 @testable import BallastCore
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 @Suite struct SelectionModelTests {
     let order: [Int64] = [10, 20, 30, 40, 50]
@@ -70,6 +73,19 @@ import Testing
         #expect(OrientationTransform.forEXIF(8).swapsDimensions)
         #expect(!OrientationTransform.forEXIF(3).swapsDimensions)
     }
+
+    #if canImport(CoreGraphics)
+    /// Upright is the identity; EXIF 6 (90° CW) maps the unit x-axis to -y
+    /// (Core Animation rotates counter-clockwise for positive angles, so the
+    /// transform applies -90°); EXIF 2 mirrors x only.
+    @Test func affineTransform() {
+        #expect(OrientationTransform.forEXIF(1).affineTransform == .identity)
+        let rotated = CGPoint(x: 1, y: 0).applying(OrientationTransform.forEXIF(6).affineTransform)
+        #expect(abs(rotated.x) < 1e-9 && abs(rotated.y + 1) < 1e-9)
+        let mirrored = CGPoint(x: 1, y: 2).applying(OrientationTransform.forEXIF(2).affineTransform)
+        #expect(mirrored == CGPoint(x: -1, y: 2))
+    }
+    #endif
 }
 
 @Suite struct ThumbnailBucketsTests {

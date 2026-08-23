@@ -89,6 +89,7 @@ extension LibraryController {
             // Delta rebuild from memory — no re-fetch of the whole keyword
             // table on the assign-while-culling hot path.
             mutateSnapshot { $0.keywordTree = $0.keywordTree.inserting(contentsOf: result.created) }
+            refreshVocabulary()
             return result.leafId
         }
     }
@@ -109,6 +110,7 @@ extension LibraryController {
             return record
         }) else { return nil }
         mutateSnapshot { $0.keywordTree = $0.keywordTree.inserting(created) }
+        refreshVocabulary()
         // No photo carries a brand-new node — no event needed.
         return created.id
     }
@@ -129,6 +131,7 @@ extension LibraryController {
         else { return }
         let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
         mutateSnapshot { $0.keywordTree = $0.keywordTree.renaming(id, to: name) }
+        refreshVocabulary()
         // Only the carriers' facts changed — wiping the whole cache would make
         // the next rebuild re-derive 50k photos.
         invalidateFacts(forPhotoIds: carriers)
@@ -157,6 +160,7 @@ extension LibraryController {
                 snapshot.keywordIdsByPhoto[photoId]?.subtract(removedIds)
             }
         }
+        refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)
         emitCatalogEvent(.photosUpdated(carriers))
     }
@@ -173,6 +177,7 @@ extension LibraryController {
               })
         else { return nil }
         mutateSnapshot { $0.keywordGroups.append(created) }
+        refreshVocabulary()
         return created
     }
 
@@ -187,6 +192,7 @@ extension LibraryController {
                 snapshot.keywordGroups[index].name = name
             }
         }
+        refreshVocabulary()
     }
 
     func setKeywordGroupColor(_ id: Int64, color: String) {
@@ -207,6 +213,7 @@ extension LibraryController {
                 snapshot.keywordGroups[index].color = color
             }
         }
+        refreshVocabulary()
         emitCatalogEvent(.photosUpdated(carriers))
     }
 
@@ -238,6 +245,7 @@ extension LibraryController {
             // Mirrors the FK setNull cascade without a re-fetch.
             snapshot.keywordTree = snapshot.keywordTree.removingGroup(id)
         }
+        refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)
         emitCatalogEvent(.photosUpdated(carriers))
     }
@@ -254,6 +262,7 @@ extension LibraryController {
             }
             snapshot.keywordGroups.sort { $0.sortOrder < $1.sortOrder }
         }
+        refreshVocabulary()
     }
 
     // MARK: Helpers

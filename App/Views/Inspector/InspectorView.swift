@@ -85,8 +85,8 @@ struct InspectorView: View {
     // MARK: ADD KEYWORD (Q15/Q16/Q17, spec §9.8 keyboard table)
 
     private var suggestions: [String] {
-        guard let tree = controller.snapshot?.keywordTree else { return [] }
-        return KeywordAutocomplete.suggestions(for: keywordInput, tree: tree)
+        // The vocabulary mirror, not `snapshot` — see LibraryController.vocabulary.
+        KeywordAutocomplete.suggestions(for: keywordInput, tree: controller.vocabulary.tree)
     }
 
     private func keywordEntry(hasSelection: Bool) -> some View {
@@ -136,54 +136,14 @@ struct InspectorView: View {
         // main window but not this field: creating an unknown keyword is a
         // synchronous structural write — see LibraryController.writeSync.
         .disabled(controller.isBusy)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(.separator, lineWidth: 1)
-        )
+        .roundedFieldChrome()
         .overlay(alignment: .topLeading) {
             // Dropdown overlays below the field (spec §9.8: offset 45).
             if keywordFieldFocused && !suggestions.isEmpty {
-                suggestionList(suggestions)
-                    .offset(y: 45)
-            }
-        }
-    }
-
-    private func suggestionList(_ suggestions: [String]) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(Array(suggestions.enumerated()), id: \.element) { index, path in
-                        Button {
-                            commit(path)
-                        } label: {
-                            Text(path)
-                                .lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .frame(height: 35)
-                                .background(
-                                    highlight.index == index
-                                        ? Color.accentColor.opacity(0.3) : Color.clear
-                                )
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .id(index)
-                    }
-                }
-            }
-            .frame(height: min(CGFloat(suggestions.count) * 35, 150))
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-            .shadow(radius: 4)
-            .onChange(of: highlight) {
-                if let index = highlight.index {
-                    proxy.scrollTo(index)
-                }
+                SuggestionDropdown(
+                    suggestions: suggestions, highlightIndex: highlight.index, rowHeight: 35
+                ) { commit($0) }
+                .offset(y: 45)
             }
         }
     }

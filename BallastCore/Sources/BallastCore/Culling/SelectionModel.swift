@@ -43,7 +43,13 @@ public struct SelectionModel: Equatable, Sendable {
     /// same rule. Used after list membership changes that did not remove the
     /// anchor (the neighbour rule handles that case).
     public mutating func prune(keeping visibleIds: Set<Int64>) {
-        selectedIds.formIntersection(visibleIds)
+        prune { visibleIds.contains($0) }
+    }
+
+    /// Predicate form — O(selection), so callers with an id→index map need
+    /// not materialise a visible-id set per change.
+    public mutating func prune(where isVisible: (Int64) -> Bool) {
+        selectedIds = selectedIds.filter(isVisible)
         if let anchorId, !selectedIds.contains(anchorId) {
             self.anchorId = nil
         }

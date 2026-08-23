@@ -26,12 +26,6 @@ struct MainWindow: View {
     @Environment(\.undoManager) private var windowUndoManager
     @Environment(\.displayScale) private var displayScale
 
-    @FocusState private var searchFocused: Bool
-    /// Closed on accept/submit even though text is still present (spec §11.3).
-    @State private var showSearchSuggestions = false
-    /// Set when the search text changes programmatically (accepted suggestion)
-    /// so the text-change observer keeps the dropdown closed.
-    @State private var suppressNextSuggestionOpen = false
     /// Panel widths, owned by us (not a split view — see libraryContent) so
     /// hide/show round-trips and relaunches keep the exact width. Persisted
     /// on drag end.
@@ -41,9 +35,6 @@ struct MainWindow: View {
     @State private var inspectorWidth: CGFloat = Self.storedPanelWidth(
         "inspectorPanelWidth", fallback: 350
     )
-    /// Width of the pane being dragged, captured at drag start.
-    @State private var paneDragBase: CGFloat?
-
     private static func storedPanelWidth(_ key: String, fallback: CGFloat) -> CGFloat {
         let stored = UserDefaults.standard.double(forKey: key)
         return stored > 0 ? stored : fallback
@@ -182,51 +173,20 @@ struct MainWindow: View {
             if center.showLeftPanel {
                 SidebarView(sidebar: sidebar, center: center)
                     .frame(width: sidebarWidth)
-                paneDivider { delta in
-                    if paneDragBase == nil { paneDragBase = sidebarWidth }
-                    sidebarWidth = min(300, max(200, paneDragBase! + delta))
-                } commit: {
+                PaneDivider(width: $sidebarWidth, range: 200...300, direction: 1) {
                     UserDefaults.standard.set(Double(sidebarWidth), forKey: "sidebarPanelWidth")
                 }
             }
             centerPane
                 .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
             if center.showRightPanel {
-                paneDivider { delta in
-                    if paneDragBase == nil { paneDragBase = inspectorWidth }
-                    inspectorWidth = min(350, max(250, paneDragBase! - delta))
-                } commit: {
+                PaneDivider(width: $inspectorWidth, range: 250...350, direction: -1) {
                     UserDefaults.standard.set(Double(inspectorWidth), forKey: "inspectorPanelWidth")
                 }
                 InspectorView()
                     .frame(width: inspectorWidth)
             }
         }
-    }
-
-    /// A 1 pt divider in the panel material with a wider invisible grab area.
-    /// `resize` receives the cumulative drag delta; `commit` runs on drag end.
-    private func paneDivider(
-        resize: @escaping (CGFloat) -> Void, commit: @escaping () -> Void
-    ) -> some View {
-        Color.clear
-            .frame(width: 1)
-            .overlay {
-                Color.clear
-                    .frame(width: 9)
-                    .contentShape(Rectangle())
-                    .onHover { inside in
-                        if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-                    }
-                    .gesture(
-                        DragGesture(coordinateSpace: .global)
-                            .onChanged { resize($0.translation.width) }
-                            .onEnded { _ in
-                                paneDragBase = nil
-                                commit()
-                            }
-                    )
-            }
     }
 
     @ViewBuilder
@@ -238,7 +198,7 @@ struct MainWindow: View {
                 // both belong to the window-wide .bar material.
                 .background(appearance.backgroundColor, ignoresSafeAreaEdges: [])
             if center.showBottomPanel {
-                bottomBar
+                BottomBar(center: center, controller: controller)
                     // The search dropdown overlays upward across the content.
                     .zIndex(1)
             }
@@ -249,14 +209,22 @@ struct MainWindow: View {
     private var centerContent: some View {
         let photos = center.visiblePhotos
         if let pipeline = controller.thumbnails, !photos.isEmpty {
-            Group {
-                switch center.viewMode {
-                case .grid:
-                    PhotoGridView(
-                        photos: photos, pipeline: pipeline, viewModel: center,
-                        selectionColor: NSColor(appearance.selectionColor)
-                    )
-                case .single:
+            let isGrid = center.viewMode == .grid
+            // Both modes live in one ZStack and the grid is only HIDDEN in
+            // single mode: swapping the views rebuilt the NSCollectionView
+            // (new coordinator, full reloadData, O(n) layout) on every
+            // grid⇄single toggle and lost the scroll position. The single
+            // view is cheap to recreate and would otherwise keep decoding
+            // originals for every anchor move while hidden, so it is swapped.
+            ZStack {
+                PhotoGridView(
+                    photos: photos, pipeline: pipeline, viewModel: center,
+                    selectionColor: NSColor(appearance.selectionColor),
+                    isVisible: isGrid
+                )
+                .opacity(isGrid ? 1 : 0)
+                .allowsHitTesting(isGrid)
+                if !isGrid {
                     SingleView(
                         photo: center.anchorPhoto,
                         neighbors: center.anchorNeighbors,
@@ -297,18 +265,121 @@ struct MainWindow: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Bottom bar per spec §9.6 — mode switch in both modes; search, slider and
-    /// sort in grid mode only. The search filter stays active across the mode
-    /// change, so single mode names it (with the position among the matches) —
-    /// otherwise the filter would invisibly truncate the list (C6).
-    private var bottomBar: some View {
+    /// Hands the hosting NSWindow to the ShortcutMonitor whitelist.
+    private struct MainWindowRegistrar: NSViewRepresentable {
+        func makeNSView(context: Context) -> NSView {
+            let view = NSView()
+            DispatchQueue.main.async { [weak view] in
+                ShortcutMonitor.mainWindow = view?.window
+                view?.window.map(Self.configureTitlebar)
+            }
+            return view
+        }
+
+        func updateNSView(_ view: NSView, context: Context) {
+            if let window = view.window, ShortcutMonitor.mainWindow !== window {
+                DispatchQueue.main.async {
+                    ShortcutMonitor.mainWindow = window
+                    Self.configureTitlebar(window)
+                }
+            }
+        }
+
+        /// The AppKit titlebar blends with the content region below it, so its
+        /// tone shifted whenever the layout under it changed (panel toggles).
+        /// Transparent titlebar + full-size content lets the root .bar
+        /// material own that area instead — one deterministic surface.
+        private static func configureTitlebar(_ window: NSWindow) {
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
+            // The system separator cannot be used with a transparent titlebar
+            // (.automatic flickers, .line draws nothing) — we draw our own.
+            window.titlebarSeparatorStyle = .none
+        }
+    }
+}
+
+/// A 1 pt divider in the panel material with a wider invisible grab area.
+/// `direction` is +1 when dragging right widens the pane (sidebar) and -1
+/// when it narrows it (inspector); `commit` runs on drag end.
+private struct PaneDivider: View {
+    @Binding var width: CGFloat
+    let range: ClosedRange<CGFloat>
+    let direction: CGFloat
+    let commit: () -> Void
+
+    /// Width captured at drag start; the drag applies its cumulative delta.
+    @State private var dragBase: CGFloat?
+    @State private var hovered = false
+    /// Our own push is balanced by our own pop — a hover exit during a drag
+    /// beyond the strip, or the strip disappearing under the pointer (panel
+    /// toggle), must never leave an unbalanced cursor stack.
+    @State private var cursorPushed = false
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1)
+            .overlay {
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        hovered = inside
+                        // Keep the resize cursor while a drag runs past the strip.
+                        if inside { pushCursor() } else if dragBase == nil { popCursor() }
+                    }
+                    .gesture(
+                        DragGesture(coordinateSpace: .global)
+                            .onChanged { value in
+                                if dragBase == nil { dragBase = width }
+                                pushCursor()
+                                let proposed = dragBase! + direction * value.translation.width
+                                width = min(range.upperBound, max(range.lowerBound, proposed))
+                            }
+                            .onEnded { _ in
+                                dragBase = nil
+                                if !hovered { popCursor() }
+                                commit()
+                            }
+                    )
+                    .onDisappear(perform: popCursor)
+            }
+    }
+
+    private func pushCursor() {
+        guard !cursorPushed else { return }
+        cursorPushed = true
+        NSCursor.resizeLeftRight.push()
+    }
+
+    private func popCursor() {
+        guard cursorPushed else { return }
+        cursorPushed = false
+        NSCursor.pop()
+    }
+}
+
+/// Bottom bar per spec §9.6 — mode switch in both modes; search, slider and
+/// sort in grid mode only. The search filter stays active across the mode
+/// change, so single mode names it (with the position among the matches) —
+/// otherwise the filter would invisibly truncate the list (C6).
+///
+/// Its own view (not a MainWindow computed property) so Observation scopes
+/// the invalidation: reading `searchText`/`columnCount` inside
+/// `MainWindow.body` re-ran the whole window — and with it the grid's
+/// `updateNSView` (a 50k-id sweep) — on every keystroke and slider tick.
+private struct BottomBar: View {
+    let center: CenterViewModel
+    let controller: LibraryController
+
+    var body: some View {
         VStack(spacing: 0) {
             Divider()
-            bottomBarContent
+            content
         }
     }
 
-    private var bottomBarContent: some View {
+    private var content: some View {
         @Bindable var center = center
         return HStack {
             Picker("View Mode", selection: $center.viewMode) {
@@ -320,7 +391,7 @@ struct MainWindow: View {
             .fixedSize()
 
             if center.viewMode == .grid {
-                searchField
+                SearchField(center: center, controller: controller)
 
                 Spacer()
 
@@ -358,19 +429,28 @@ struct MainWindow: View {
         .padding(.horizontal, 8)
         .frame(height: PanelMetrics.footerHeight)
     }
+}
 
-    // MARK: Search (spec §11.3, C6/U5, Q21 via the focused-text-field pass-through)
+// MARK: Search (spec §11.3, C6/U5, Q21 via the focused-text-field pass-through)
 
+/// Same visual recipe as the inspector's Add Keyword field (`roundedFieldChrome`).
+private struct SearchField: View {
+    let center: CenterViewModel
+    let controller: LibraryController
+
+    @FocusState private var searchFocused: Bool
+    /// Closed on accept/submit even though text is still present (spec §11.3).
+    @State private var showSearchSuggestions = false
+    /// Set when the search text changes programmatically (accepted suggestion)
+    /// so the text-change observer keeps the dropdown closed.
+    @State private var suppressNextSuggestionOpen = false
 
     private var searchSuggestions: [String] {
-        guard let tree = controller.snapshot?.keywordTree else { return [] }
-        return KeywordAutocomplete.suggestions(for: center.searchText, tree: tree)
+        // The vocabulary mirror, not `snapshot` — see LibraryController.vocabulary.
+        KeywordAutocomplete.suggestions(for: center.searchText, tree: controller.vocabulary.tree)
     }
 
-    /// Same visual recipe as the inspector's Add Keyword field: a plain text
-    /// field in a controlBackgroundColor rounded rect — a bordered field is
-    /// invisible against the bar material.
-    private var searchField: some View {
+    var body: some View {
         @Bindable var center = center
         return HStack(spacing: 4) {
             TextField("Search", text: $center.searchText)
@@ -405,88 +485,28 @@ struct MainWindow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(.separator, lineWidth: 1)
-        )
+        .roundedFieldChrome()
         // 200 pt per spec §9.6, but compressible — at the 400 pt minimum
         // centre width the bar must never push the mode picker out.
         .frame(minWidth: 80, idealWidth: 200, maxWidth: 200)
         .overlay(alignment: .topLeading) {
-                // Visibility first — the suggestion computation walks every
-                // keyword path and must not run on unrelated body passes.
-                if searchFocused && showSearchSuggestions {
-                    let suggestions = searchSuggestions
-                    if !suggestions.isEmpty {
-                        searchSuggestionList(suggestions)
-                    }
-                }
-            }
-    }
-
-    /// Dropdown above the field (spec §11.3): clicking a suggestion replaces
-    /// the search text with the full keyword path.
-    private func searchSuggestionList(_ suggestions: [String]) -> some View {
-        let height = min(CGFloat(suggestions.count) * 28, 150)
-        return ScrollView {
-            VStack(spacing: 0) {
-                ForEach(suggestions, id: \.self) { path in
-                    Button {
+            // Visibility first — the suggestion computation walks every
+            // keyword path and must not run on unrelated body passes.
+            if searchFocused && showSearchSuggestions {
+                let suggestions = searchSuggestions
+                if !suggestions.isEmpty {
+                    // Dropdown above the field (spec §11.3): clicking a
+                    // suggestion replaces the search text with the full path.
+                    let height = min(CGFloat(suggestions.count) * 28, 150)
+                    SuggestionDropdown(suggestions: suggestions) { path in
                         suppressNextSuggestionOpen = true
                         center.searchText = path
                         showSearchSuggestions = false
-                    } label: {
-                        Text(path)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8)
-                            .frame(height: 28)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .frame(width: 200)
+                    .offset(y: -(height + 6))
                 }
             }
-        }
-        .frame(width: 200, height: height)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .shadow(radius: 4)
-        .offset(y: -(height + 6))
-    }
-
-    /// Hands the hosting NSWindow to the ShortcutMonitor whitelist.
-    private struct MainWindowRegistrar: NSViewRepresentable {
-        func makeNSView(context: Context) -> NSView {
-            let view = NSView()
-            DispatchQueue.main.async { [weak view] in
-                ShortcutMonitor.mainWindow = view?.window
-                view?.window.map(Self.configureTitlebar)
-            }
-            return view
-        }
-
-        func updateNSView(_ view: NSView, context: Context) {
-            if let window = view.window, ShortcutMonitor.mainWindow !== window {
-                DispatchQueue.main.async {
-                    ShortcutMonitor.mainWindow = window
-                    Self.configureTitlebar(window)
-                }
-            }
-        }
-
-        /// The AppKit titlebar blends with the content region below it, so its
-        /// tone shifted whenever the layout under it changed (panel toggles).
-        /// Transparent titlebar + full-size content lets the root .bar
-        /// material own that area instead — one deterministic surface.
-        private static func configureTitlebar(_ window: NSWindow) {
-            window.titlebarAppearsTransparent = true
-            window.styleMask.insert(.fullSizeContentView)
-            // The system separator cannot be used with a transparent titlebar
-            // (.automatic flickers, .line draws nothing) — we draw our own.
-            window.titlebarSeparatorStyle = .none
         }
     }
 }

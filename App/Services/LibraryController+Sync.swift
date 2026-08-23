@@ -178,6 +178,7 @@ extension LibraryController {
                 snapshot.keywordIdsByPhoto[photoId] = keywordIds
             }
         }
+        refreshVocabulary()
         invalidateFacts(forPhotoIds: changes.map(\.photoId))
         if registerInverse {
             registerMetadataUndo(actionName: actionName, restore: before, reapply: changes)

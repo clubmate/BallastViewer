@@ -84,7 +84,7 @@ final class CenterViewModel {
                 randomOrder.reroll(ids: visiblePhotos.map(\.id), using: &rng)
             }
             rebuildVisible()
-            selection.prune(keeping: visibleIdSet)
+            pruneSelection()
             updateControlSurface()
         }
     }
@@ -126,9 +126,9 @@ final class CenterViewModel {
     }
 
     @ObservationIgnored private var randomOrder = StableRandomOrder()
-    @ObservationIgnored private var visibleIdSet: Set<Int64> = []
     /// id → index into visiblePhotos, maintained alongside it — rebuilding this
-    /// per keystroke is an O(50k) tax the 16 ms budget cannot afford.
+    /// per keystroke is an O(50k) tax the 16 ms budget cannot afford. Also
+    /// the visible-membership set (`visibleIndexById[id] != nil`).
     @ObservationIgnored private var visibleIndexById: [Int64: Int] = [:]
     /// Query caches, refreshed on collection/catalog changes. Rules are kept
     /// pre-compiled — the filter evaluates every photo against them.
@@ -227,8 +227,8 @@ final class CenterViewModel {
                 // Same library, bulk change (import, folder removal).
                 activeItem = validated(activeItem)
                 rebuildVisible()
-                if let anchor = selection.anchorId, visibleIdSet.contains(anchor) {
-                    selection.prune(keeping: visibleIdSet)
+                if let anchor = selection.anchorId, visibleIndexById[anchor] != nil {
+                    pruneSelection()
                 } else {
                     // Never leave the user with nothing current (spec §10.4).
                     selection.selectSingle(visiblePhotos.first?.id)
@@ -266,10 +266,6 @@ final class CenterViewModel {
         }
     }
 
-    private func passesFilter(_ photo: PhotoRecord) -> Bool {
-        passesFilter(photo, search: SearchFilter.FoldedQuery(searchText))
-    }
-
     /// `search` is folded once per pass by the caller (nil = search off);
     /// facts (incl. the pre-folded filename) are fetched once per photo and
     /// shared by both filters.
@@ -298,8 +294,13 @@ final class CenterViewModel {
         }
         let sorted = SortEngine.sorted(records, by: sortOption, randomOrder: randomOrder.order)
         visiblePhotos = sorted.compactMap(makeGridPhoto)
-        visibleIdSet = Set(visiblePhotos.map(\.id))
         rebuildVisibleIndex()
+    }
+
+    /// Drops selected ids that left the visible list — O(selection) against
+    /// the index map, which must be current (call after `rebuildVisibleIndex`).
+    private func pruneSelection() {
+        selection.prune { visibleIndexById[$0] != nil }
     }
 
     private func rebuildVisibleIndex() {
@@ -325,7 +326,7 @@ final class CenterViewModel {
             )
             selection.selectSingle(next)
         } else {
-            selection.prune(keeping: visibleIdSet)
+            pruneSelection()
         }
         updateControlSurface()
     }
@@ -336,10 +337,12 @@ final class CenterViewModel {
         var removals = Set<Int64>()
         var insertions: [PhotoRecord] = []
         var valueUpdates: [GridPhoto] = []
+        // Folded once per event, not per changed photo.
+        let search = SearchFilter.FoldedQuery(searchText)
         for id in Set(ids) {
             let record = controller.photo(withId: id)
-            let matches = record.map(passesFilter) ?? false
-            let isVisible = visibleIdSet.contains(id)
+            let matches = record.map { passesFilter($0, search: search) } ?? false
+            let isVisible = visibleIndexById[id] != nil
             if isVisible && !matches {
                 removals.insert(id)
             } else if !isVisible && matches, let record {
@@ -363,7 +366,6 @@ final class CenterViewModel {
         }
         if !removals.isEmpty {
             visiblePhotos.removeAll { removals.contains($0.id) }
-            visibleIdSet.subtract(removals)
         }
         if !insertions.isEmpty {
             insert(insertions)
@@ -378,7 +380,7 @@ final class CenterViewModel {
             )
             selection.selectSingle(next)
         } else if !removals.isEmpty {
-            selection.prune(keeping: visibleIdSet)
+            pruneSelection()
         }
         // Rating changes alter the LED state even when the anchor stays put.
         updateControlSurface()
@@ -400,7 +402,9 @@ final class CenterViewModel {
     private func insert(_ records: [PhotoRecord]) {
         if sortOption == .random {
             var rng = SystemRandomNumberGenerator()
-            let newSet = visibleIdSet.union(records.compactMap(\.id))
+            // The list itself is the membership truth here: removals of the
+            // same event are already applied, the index map is rebuilt after.
+            let newSet = Set(visiblePhotos.map(\.id)).union(records.compactMap(\.id))
             randomOrder.reconcile(with: newSet, using: &rng)
             let position = Dictionary(
                 uniqueKeysWithValues: randomOrder.order.enumerated().map { ($1, $0) }
@@ -409,7 +413,6 @@ final class CenterViewModel {
                 for record in records {
                     guard let gridPhoto = makeGridPhoto(record) else { continue }
                     visiblePhotos.append(gridPhoto)
-                    visibleIdSet.insert(gridPhoto.id)
                 }
                 visiblePhotos.sort { (position[$0.id] ?? .max) < (position[$1.id] ?? .max) }
                 return
@@ -420,7 +423,6 @@ final class CenterViewModel {
                 guard let gridPhoto = makeGridPhoto(record) else { continue }
                 let index = randomInsertionIndex(for: gridPhoto.id, position: position)
                 visiblePhotos.insert(gridPhoto, at: index)
-                visibleIdSet.insert(gridPhoto.id)
             }
         } else {
             let sortedNew = records.sorted {
@@ -433,7 +435,6 @@ final class CenterViewModel {
             for record in sortedNew {
                 guard let gridPhoto = makeGridPhoto(record) else { continue }
                 visiblePhotos.insert(gridPhoto, at: insertionIndex(for: record))
-                visibleIdSet.insert(gridPhoto.id)
             }
         }
     }
@@ -454,7 +455,6 @@ final class CenterViewModel {
             if SortEngine.areInIncreasingOrder(sortedNew[newIndex], existingRecord, by: sortOption) {
                 if let gridPhoto = makeGridPhoto(sortedNew[newIndex]) {
                     merged.append(gridPhoto)
-                    visibleIdSet.insert(gridPhoto.id)
                 }
                 newIndex += 1
             } else {
@@ -466,7 +466,6 @@ final class CenterViewModel {
         for record in sortedNew[newIndex...] {
             guard let gridPhoto = makeGridPhoto(record) else { continue }
             merged.append(gridPhoto)
-            visibleIdSet.insert(gridPhoto.id)
         }
         visiblePhotos = merged
     }

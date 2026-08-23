@@ -93,7 +93,7 @@ final class GridItemView: NSView {
 
     func setImage(_ image: CGImage?) {
         imageSize = image.map { CGSize(width: $0.width, height: $0.height) } ?? .zero
-        withoutAnimation {
+        CATransaction.withoutAnimation {
             imageLayer.contents = image
             applyCrop()
         }
@@ -101,14 +101,14 @@ final class GridItemView: NSView {
 
     func setOrientation(_ orientation: Int) {
         transform = OrientationTransform.forEXIF(orientation)
-        withoutAnimation {
+        CATransaction.withoutAnimation {
             applyTransform()
             applyCrop()
         }
     }
 
     func setSelectedVisual(_ selected: Bool, color: NSColor) {
-        withoutAnimation {
+        CATransaction.withoutAnimation {
             layer?.borderWidth = selected ? 3 : 0
             layer?.borderColor = color.cgColor
             layer?.cornerRadius = selected ? 4 : 0
@@ -119,7 +119,7 @@ final class GridItemView: NSView {
 
     override func layout() {
         super.layout()
-        withoutAnimation {
+        CATransaction.withoutAnimation {
             imageLayer.frame = bounds
             applyTransform()
         }
@@ -135,12 +135,7 @@ final class GridItemView: NSView {
     }
 
     private func applyTransform() {
-        var affine = CGAffineTransform.identity
-        if transform.mirroredHorizontally {
-            affine = affine.scaledBy(x: -1, y: 1)
-        }
-        affine = affine.rotated(by: -CGFloat(transform.rotationDegrees) * .pi / 180)
-        imageLayer.setAffineTransform(affine)
+        imageLayer.setAffineTransform(transform.affineTransform)
     }
 
     /// Q22: the square source region whose post-transform position is the TOP
@@ -171,12 +166,5 @@ final class GridItemView: NSView {
             }
         }
         imageLayer.contentsRect = rect
-    }
-
-    private func withoutAnimation(_ changes: () -> Void) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        changes()
-        CATransaction.commit()
     }
 }

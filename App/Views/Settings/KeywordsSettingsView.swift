@@ -15,7 +15,7 @@ let keywordGroupPalette: [String] = [
 struct KeywordsSettingsView: View {
     @Environment(LibraryController.self) private var controller
 
-    @State private var draggedGroupId: Int64?
+    @State private var groupReorder = RowReorderSession()
     @State private var collapsedGroups: Set<Int64> = []
     @State private var collapsedKeywords: Set<Int64> = []
     @State private var colorPopoverGroupId: Int64?
@@ -26,22 +26,33 @@ struct KeywordsSettingsView: View {
     @State private var pendingKeywordDeletion: Int64?
     @State private var pendingGroupDeletion: KeywordGroupRecord?
 
-    private var tree: KeywordTree? { controller.snapshot?.keywordTree }
+    /// The vocabulary mirror, not `snapshot`: the editor must not re-render
+    /// on every rating/rotation in the main window.
+    private var tree: KeywordTree { controller.vocabulary.tree }
 
     var body: some View {
         Group {
-            if let snapshot = controller.snapshot {
+            if controller.isLibraryOpen {
+                let vocabulary = controller.vocabulary
                 VStack(spacing: 0) {
                     ScrollView {
                         // Lazy: a large vocabulary must not lay out every row on
-                        // each snapshot change.
+                        // each vocabulary change.
                         LazyVStack(alignment: .leading, spacing: 2) {
-                            ForEach(snapshot.keywordGroups) { group in
-                                groupSection(group, tree: snapshot.keywordTree)
+                            ForEach(groupReorder.ordered(vocabulary.groups, id: \.id)) { group in
+                                groupSection(group, tree: vocabulary.tree)
                             }
                         }
                         .padding(12)
                     }
+                    // Drops between rows (and drags that leave the list) end
+                    // the reorder session — one write per drag.
+                    .onDrop(
+                        of: [UTType.plainText],
+                        delegate: RowReorderEndDelegate(
+                            flush: { groupReorder.flush() }, end: { groupReorder.end() }
+                        )
+                    )
                     Divider()
                     HStack {
                         Spacer()
@@ -122,7 +133,7 @@ struct KeywordsSettingsView: View {
 
     private func keywordDeletionMessage(_ id: Int64) -> String {
         let impact = controller.keywordDeletionImpact(id)
-        let path = tree?.path(of: id) ?? ""
+        let path = tree.path(of: id)
         var message = "Delete “\(path)”"
         if impact.keywordCount > 1 {
             let subCount = impact.keywordCount - 1
@@ -210,17 +221,16 @@ struct KeywordsSettingsView: View {
                 Button("Delete Group", role: .destructive) { pendingGroupDeletion = group }
             }
             .onDrag {
-                draggedGroupId = groupId
+                groupReorder.begin(
+                    draggedId: groupId,
+                    order: controller.vocabulary.groups.compactMap(\.id),
+                    commit: { controller.reorderKeywordGroups($0) }
+                )
                 return NSItemProvider(object: "keywordGroup:\(groupId)" as NSString)
             }
             .onDrop(
                 of: [UTType.plainText],
-                delegate: RowReorderDelegate(
-                    targetId: groupId,
-                    draggedId: $draggedGroupId,
-                    orderedIds: (controller.snapshot?.keywordGroups ?? []).compactMap(\.id),
-                    reorder: { controller.reorderKeywordGroups($0) }
-                )
+                delegate: RowReorderDelegate(targetId: groupId, session: $groupReorder)
             )
 
             if !collapsed {
@@ -309,21 +319,21 @@ struct KeywordsSettingsView: View {
         guard let id = controller.createKeyword(baseName: base, parentId: parentId, groupId: groupId)
         else { return }
         if let parentId { collapsedKeywords.remove(parentId) }
-        beginRename(id, tree: controller.snapshot?.keywordTree)
+        beginRename(id, tree: tree)
     }
 
     /// Same create-then-edit flow as keywords: the group exists immediately
     /// (next free palette colour), the sheet lets the user name it.
     private func addGroup() {
-        let used = Set((controller.snapshot?.keywordGroups ?? []).map { $0.color.uppercased() })
+        let used = Set(controller.vocabulary.groups.map { $0.color.uppercased() })
         let color = keywordGroupPalette.first { !used.contains($0.uppercased()) } ?? keywordGroupPalette[0]
         if let group = controller.createKeywordGroup(name: "NEW GROUP", color: color) {
             editingGroup = group
         }
     }
 
-    private func beginRename(_ id: Int64, tree: KeywordTree?) {
-        renameText = tree?.node(id)?.name ?? ""
+    private func beginRename(_ id: Int64, tree: KeywordTree) {
+        renameText = tree.node(id)?.name ?? ""
         renameKeywordId = id
     }
 

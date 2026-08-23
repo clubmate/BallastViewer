@@ -114,7 +114,7 @@ final class SingleImageNSView: NSView {
 
     func display(image: CGImage, orientation: Int) {
         transform = OrientationTransform.forEXIF(orientation)
-        withoutAnimation {
+        CATransaction.withoutAnimation {
             imageLayer.contents = image
             applyLayout()
         }
@@ -122,7 +122,7 @@ final class SingleImageNSView: NSView {
 
     override func layout() {
         super.layout()
-        withoutAnimation { applyLayout() }
+        CATransaction.withoutAnimation { applyLayout() }
     }
 
     override func viewDidChangeBackingProperties() {
@@ -138,19 +138,6 @@ final class SingleImageNSView: NSView {
             : bounds.size
         imageLayer.bounds = CGRect(origin: .zero, size: size)
         imageLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
-
-        var affine = CGAffineTransform.identity
-        if transform.mirroredHorizontally {
-            affine = affine.scaledBy(x: -1, y: 1)
-        }
-        affine = affine.rotated(by: -CGFloat(transform.rotationDegrees) * .pi / 180)
-        imageLayer.setAffineTransform(affine)
-    }
-
-    private func withoutAnimation(_ changes: () -> Void) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        changes()
-        CATransaction.commit()
+        imageLayer.setAffineTransform(transform.affineTransform)
     }
 }

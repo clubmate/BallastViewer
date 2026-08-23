@@ -10,8 +10,10 @@ struct SidebarView: View {
     let sidebar: SidebarViewModel
     let center: CenterViewModel
 
-    @State private var draggedGroupId: Int64?
-    @State private var draggedCollectionId: Int64?
+    /// One reorder session per id list (group ids and collection ids can
+    /// collide numerically).
+    @State private var groupReorder = RowReorderSession()
+    @State private var collectionReorder = RowReorderSession()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,11 +43,26 @@ struct SidebarView: View {
                         }
                     }
 
-                    ForEach(sidebar.groups) { group in
+                    ForEach(groupReorder.ordered(sidebar.groups, id: \.id)) { group in
                         groupBlock(group)
                     }
                 }
                 .padding(.vertical, 4)
+                // Drops between rows (and drags that leave the list) end the
+                // reorder session — one write per drag.
+                .onDrop(
+                    of: [UTType.plainText],
+                    delegate: RowReorderEndDelegate(
+                        flush: {
+                            groupReorder.flush()
+                            collectionReorder.flush()
+                        },
+                        end: {
+                            groupReorder.end()
+                            collectionReorder.end()
+                        }
+                    )
+                )
             }
 
             Divider()
@@ -152,21 +169,20 @@ struct SidebarView: View {
             }
         }
         .onDrag {
-            draggedGroupId = groupId
+            groupReorder.begin(
+                draggedId: groupId,
+                order: sidebar.groups.compactMap(\.id),
+                commit: { controller.reorderSmartGroups($0) }
+            )
             return NSItemProvider(object: "group:\(groupId)" as NSString)
         }
         .onDrop(
             of: [UTType.plainText],
-            delegate: RowReorderDelegate(
-                targetId: groupId,
-                draggedId: $draggedGroupId,
-                orderedIds: sidebar.groups.compactMap(\.id),
-                reorder: { controller.reorderSmartGroups($0) }
-            )
+            delegate: RowReorderDelegate(targetId: groupId, session: $groupReorder)
         )
 
         if !collapsed {
-            ForEach(sidebar.collections(inGroup: groupId)) { collection in
+            ForEach(collectionReorder.ordered(sidebar.collections(inGroup: groupId), id: \.id)) { collection in
                 collectionRow(collection, inGroup: groupId)
             }
         }
@@ -193,17 +209,16 @@ struct SidebarView: View {
                 }
             }
             .onDrag {
-                draggedCollectionId = collectionId
+                collectionReorder.begin(
+                    draggedId: collectionId,
+                    order: sidebar.collections(inGroup: groupId).compactMap(\.id),
+                    commit: { controller.reorderCollections($0, inGroup: groupId) }
+                )
                 return NSItemProvider(object: "collection:\(collectionId)" as NSString)
             }
             .onDrop(
                 of: [UTType.plainText],
-                delegate: RowReorderDelegate(
-                    targetId: collectionId,
-                    draggedId: $draggedCollectionId,
-                    orderedIds: sidebar.collections(inGroup: groupId).compactMap(\.id),
-                    reorder: { controller.reorderCollections($0, inGroup: groupId) }
-                )
+                delegate: RowReorderDelegate(targetId: collectionId, session: $collectionReorder)
             )
         }
     }
@@ -287,7 +302,7 @@ private extension View {
             )) { draft in
                 CollectionEditorSheet(
                     draft: draft,
-                    keywordGroups: controller.snapshot?.keywordGroups ?? []
+                    keywordGroups: controller.vocabulary.groups
                 ) { saved in
                     controller.saveCollection(
                         saved.collection,

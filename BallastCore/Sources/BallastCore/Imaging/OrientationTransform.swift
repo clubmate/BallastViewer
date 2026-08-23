@@ -1,3 +1,7 @@
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+
 /// How to display a bitmap that was decoded *without* EXIF transform (Q5:
 /// decode unrotated, rotate at render time — that is what makes rotation
 /// instant and keeps the thumbnail cache orientation-independent).
@@ -12,6 +16,20 @@ public struct OrientationTransform: Equatable, Sendable {
     public var swapsDimensions: Bool {
         rotationDegrees == 90 || rotationDegrees == 270
     }
+
+    #if canImport(CoreGraphics)
+    /// The layer transform that displays an unrotated bitmap per this
+    /// orientation: mirror (if any) first, then the rotation — negative in
+    /// Core Animation's counter-clockwise convention. Shared by the grid cells
+    /// and the single view so both render the same way.
+    public var affineTransform: CGAffineTransform {
+        var affine = CGAffineTransform.identity
+        if mirroredHorizontally {
+            affine = affine.scaledBy(x: -1, y: 1)
+        }
+        return affine.rotated(by: -CGFloat(rotationDegrees) * .pi / 180)
+    }
+    #endif
 
     public static func forEXIF(_ orientation: Int) -> OrientationTransform {
         switch orientation {

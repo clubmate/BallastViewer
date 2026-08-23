@@ -165,7 +165,8 @@ struct ShortcutsSettingsView: View {
 
     private var unboundKeywordPaths: [String] {
         let bound = Set(keywordBindings.map(\.keyword))
-        return (controller.snapshot?.keywordTree.allPaths() ?? []).filter { !bound.contains($0) }
+        // The vocabulary mirror, not `snapshot` — see LibraryController.vocabulary.
+        return controller.vocabulary.tree.allPaths().filter { !bound.contains($0) }
     }
 
     private func record(_ chord: KeyChord, for command: ActionCommand) {
@@ -190,8 +191,7 @@ struct ShortcutsSettingsView: View {
     }
 
     private func addKeywordShortcut() {
-        let tree = controller.snapshot?.keywordTree ?? KeywordTree(records: [])
-        guard let canonical = KeywordResolver.canonicalText(newKeywordName, tree: tree)
+        guard let canonical = KeywordResolver.canonicalText(newKeywordName, tree: controller.vocabulary.tree)
         else { return }
         if let chord = newKeywordChord {
             record(chord, for: .keyword(canonical))

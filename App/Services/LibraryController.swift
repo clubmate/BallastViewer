@@ -96,6 +96,25 @@ final class LibraryController {
     /// path strings) follow the rename instead of going stale.
     var keywordPathRenamed: (@MainActor (String, String) -> Void)?
 
+    /// The keyword vocabulary (tree + groups) as its own observable, refreshed
+    /// ONLY by vocabulary mutations and snapshot installs. Views that render
+    /// the vocabulary (Settings ▸ Keywords/Shortcuts, autocomplete) read this
+    /// instead of `snapshot`, which is mutated in place for every rating and
+    /// rotation and would re-render them at key-repeat rate.
+    struct KeywordVocabulary {
+        var tree = KeywordTree(records: [])
+        var groups: [KeywordGroupRecord] = []
+    }
+    private(set) var vocabulary = KeywordVocabulary()
+
+    /// Call after any change to `snapshot.keywordTree`/`keywordGroups`.
+    func refreshVocabulary() {
+        vocabulary = KeywordVocabulary(
+            tree: snapshot?.keywordTree ?? KeywordTree(records: []),
+            groups: snapshot?.keywordGroups ?? []
+        )
+    }
+
     /// Derived query facts per photo (resolved keyword paths + effective group
     /// ids + folded filename). Building these walks the keyword tree and
     /// joins/folds strings — cached here because counts rebuilds, collection
@@ -279,6 +298,7 @@ final class LibraryController {
         snapshot = nil
         thumbnails = nil
         rebuildPhotoIndex()
+        refreshVocabulary()
         bookmarks.clearLastOpened()
         emitCatalogEvent(.catalogReplaced)
     }
@@ -382,6 +402,7 @@ final class LibraryController {
         }
         invalidateAllFacts()
         rebuildPhotoIndex()
+        refreshVocabulary()
         startFolderAccess(for: loaded.folders)
         bookmarks.saveLastOpened(url)
         bookmarks.addKnown(url)
@@ -462,6 +483,7 @@ final class LibraryController {
         guard let library else {
             snapshot = nil
             rebuildPhotoIndex()
+            refreshVocabulary()
             emitCatalogEvent(.catalogReplaced)
             return
         }
@@ -470,6 +492,7 @@ final class LibraryController {
             snapshot = try await library.pool.read { try LibrarySnapshot.load($0) }
             invalidateAllFacts()
             rebuildPhotoIndex()
+            refreshVocabulary()
             emitCatalogEvent(.catalogReplaced)
         } catch {
             errorMessage = "Could not reload the library.\n\(error.localizedDescription)"

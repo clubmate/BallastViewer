@@ -15,6 +15,10 @@ struct PhotoGridView: NSViewRepresentable {
     let viewModel: CenterViewModel
     /// Border colour of selected cells (Settings ▸ Appearance).
     var selectionColor: NSColor = .controlAccentColor
+    /// False while single mode covers the grid: the collection view stays
+    /// alive (scroll position, realized cells) but must not prefetch, and
+    /// selection/scroll sync is deferred until it shows again.
+    var isVisible = true
 
     /// Gap and outer padding in points (Q23: one value for both) — fixed by
     /// design, no longer a preference.
@@ -87,7 +91,8 @@ struct PhotoGridView: NSViewRepresentable {
             columnCount: viewModel.columnCount,
             selectionColor: selectionColor,
             selection: viewModel.selection,
-            pipeline: pipeline
+            pipeline: pipeline,
+            isVisible: isVisible
         )
     }
 
@@ -115,6 +120,9 @@ struct PhotoGridView: NSViewRepresentable {
         private var selection = SelectionModel()
         private var selectionColor: NSColor = .controlAccentColor
         private var pipeline: ThumbnailPipeline?
+        private var isVisible = true
+        /// Selection visuals/scroll skipped while hidden — applied on reveal.
+        private var needsVisibleSync = false
 
         init(viewModel: CenterViewModel) {
             self.viewModel = viewModel
@@ -125,9 +133,17 @@ struct PhotoGridView: NSViewRepresentable {
             columnCount: Int,
             selectionColor newSelectionColor: NSColor,
             selection newSelection: SelectionModel,
-            pipeline: ThumbnailPipeline
+            pipeline: ThumbnailPipeline,
+            isVisible newIsVisible: Bool
         ) {
             self.pipeline = pipeline
+            let becameVisible = !isVisible && newIsVisible
+            if isVisible && !newIsVisible {
+                // Hidden under the single view: in-flight prefetches would
+                // decode for cells nobody sees.
+                cancelAllPrefetches()
+            }
+            isVisible = newIsVisible
 
             // Fast path first: comparing ids is a cheap Int64 sweep, while a
             // full GridPhoto array compare walks 50k strings per keystroke —
@@ -167,13 +183,32 @@ struct PhotoGridView: NSViewRepresentable {
             selection = newSelection
             if needsReload {
                 // Membership changed: queued prefetches point at stale index
-                // paths — drop them, the new visible set re-requests.
+                // paths — drop them, the new visible set re-requests. The
+                // reload itself is not deferred while hidden: the collection
+                // view's item count must never lag the data source.
                 cancelAllPrefetches()
                 collectionView?.reloadData()
-            } else if previousSelection != newSelection || colorChanged {
+            }
+            let selectionChanged = previousSelection != newSelection || colorChanged
+            let anchorChanged = previousSelection.anchorId != newSelection.anchorId
+            guard isVisible else {
+                // Every anchor move in single mode would otherwise scroll the
+                // hidden grid and realize (decode) cells for nothing.
+                if needsReload || selectionChanged || anchorChanged { needsVisibleSync = true }
+                return
+            }
+            if becameVisible && needsVisibleSync {
+                needsVisibleSync = false
+                refreshVisibleSelection()
+                scrollToAnchorIfNeeded()
+                return
+            }
+            if !needsReload && selectionChanged {
                 refreshVisibleSelection()
             }
-            if previousSelection.anchorId != newSelection.anchorId {
+            // After a reload (sort/filter change) the same anchor may sit at a
+            // new index, off-screen — the anchor-id guard alone missed that.
+            if needsReload || anchorChanged {
                 scrollToAnchorIfNeeded()
             }
         }
@@ -236,7 +271,7 @@ struct PhotoGridView: NSViewRepresentable {
         }
 
         func collectionView(_ collectionView: NSCollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
-            guard let pipeline else { return }
+            guard let pipeline, isVisible else { return }
             let bucket = currentBucket(collectionView)
             for indexPath in indexPaths where photos.indices.contains(indexPath.item) {
                 let path = photos[indexPath.item].path
