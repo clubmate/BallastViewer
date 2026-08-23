@@ -17,6 +17,10 @@ public enum MetadataWriteError: Error {
 /// The writer emits XMP (`tiff:Orientation`, `xmp:Rating`, `dc:subject`) —
 /// the industry schema (Lightroom/Bridge/Capture One). Together with the
 /// XMP-first reader this closes D1: values round-trip by construction.
+///
+/// PIXEL INVARIANT (CLAUDE.md): this is one of only two places that write an
+/// image file. Every change here must keep `PixelInvariantTests` green — it
+/// compares the compressed image data byte-for-byte before and after a write.
 public enum MetadataWriter {
     public static func write(
         rating: Int,
