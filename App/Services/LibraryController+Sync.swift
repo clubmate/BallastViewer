@@ -49,21 +49,23 @@ extension LibraryController {
         defer { isSyncing = false }
 
         let jobs = syncJobs()
-        var written = 0
+        var writtenPaths: [String] = []
         var failures: [String] = []
         var unreadable: [String] = []
 
         for outcome in await Self.performSave(jobs) {
             switch outcome {
-            case .written: written += 1
+            case .written(let path): writtenPaths.append(path)
             case .inSync: break
             case .unreadable(let path): unreadable.append(path)
             case .failed(let path): failures.append(path)
             }
         }
 
-        // The written files changed on disk — their cached mtimes are stale.
-        if written > 0 { thumbnails?.invalidateModificationTimes() }
+        // The written files changed on disk (mtime, not pixels): re-key
+        // exactly their cached thumbnails instead of re-statting the library.
+        let written = writtenPaths.count
+        if written > 0 { await thumbnails?.fileRewritten(paths: writtenPaths) }
 
         let inSync = jobs.count - written - unreadable.count - failures.count
         var message = "Saved metadata into \(written) file\(written == 1 ? "" : "s")."
@@ -207,7 +209,8 @@ extension LibraryController {
     // MARK: Helpers
 
     private enum SaveOutcome: Sendable {
-        case written, inSync
+        case inSync
+        case written(String)
         case unreadable(String)
         case failed(String)
     }
@@ -236,7 +239,7 @@ extension LibraryController {
                             keywords: job.libraryValues.keywords,
                             to: url
                         )
-                        return .written
+                        return .written(job.path)
                     } catch {
                         return .failed(job.path)
                     }

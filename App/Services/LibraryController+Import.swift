@@ -34,8 +34,20 @@ extension LibraryController {
     func importFolders(_ urls: [URL], recursive: Bool, into targetURL: URL?) async {
         guard let targetURL else { return }
         // Reentrancy guard: a drop during a running import must not start a
-        // second, interleaved `runImport` on the same pool.
-        guard !isImporting else { return }
+        // second, interleaved `runImport` on the same pool — it is queued and
+        // run by the import that is in progress once that one has finished.
+        guard !isImporting else {
+            queuedImports.append(QueuedImport(urls: urls, recursive: recursive, targetURL: targetURL))
+            return
+        }
+        await performImport(urls, recursive: recursive, into: targetURL)
+        while !queuedImports.isEmpty {
+            let next = queuedImports.removeFirst()
+            await performImport(next.urls, recursive: next.recursive, into: next.targetURL)
+        }
+    }
+
+    private func performImport(_ urls: [URL], recursive: Bool, into targetURL: URL) async {
         isImporting = true
         defer { isImporting = false }
 
@@ -292,31 +304,41 @@ extension LibraryController {
 
     func removeFolder(_ folder: FolderRecord, registerInverse: Bool = true) async {
         guard let folderId = folder.id, let pipeline = writePipeline else { return }
+        // Same modal shield as `reinsertFolder`: a rating pressed between the
+        // capture and the snapshot reload would be lost on undo (it would
+        // commit after the capture, then vanish with the delete).
+        let wasSyncing = isSyncing
+        isSyncing = true
+        defer { isSyncing = wasSyncing }
+        struct Removal: Sendable {
+            var photos: [PhotoRecord]
+            var pairs: [(photoId: Int64, keywordId: Int64)]
+            var removed: Int
+        }
         do {
-            // Capture the subtree first so removal is undoable (U8): the folder
-            // row, its photos (with ids), and their keyword assignments. Both
-            // the capture read and the delete ride the write pipeline — a
-            // rating queued just before must be in the captured rows, and a
-            // queued assignment insert must commit before (not after, into a
-            // deleted photo) the removal.
-            let captured: (photos: [PhotoRecord], pairs: [(photoId: Int64, keywordId: Int64)]) =
-                try await pipeline.submitAndWait { db in
-                    let photos = try PhotoRecord.filter(Column("folderId") == folderId).fetchAll(db)
-                    // Restricted in SQL: the full join table can hold
-                    // hundreds of thousands of pairs for other folders.
-                    let sql = "SELECT photoId, keywordId FROM photoKeyword"
-                        + " WHERE photoId IN (SELECT id FROM photo WHERE folderId = ?)"
-                    let pairs = try Row.fetchAll(db, sql: sql, arguments: [folderId])
-                        .map { (photoId: $0["photoId"] as Int64, keywordId: $0["keywordId"] as Int64) }
-                    return (photos, pairs)
-                }
-            let removed = try await pipeline.submitAndWait { db in
-                try ImportDAO.removeFolder(folderId, in: db)
+            // Capture the subtree so removal is undoable (U8): the folder row,
+            // its photos (with ids), and their keyword assignments — in the
+            // SAME transaction as the delete, on the write pipeline: a rating
+            // queued just before must be in the captured rows, a queued
+            // assignment insert must commit before (not after, into a deleted
+            // photo) the removal, and nothing can slip in between capture and
+            // delete.
+            let result = try await pipeline.submitAndWait { db -> Removal in
+                let photos = try PhotoRecord.filter(Column("folderId") == folderId).fetchAll(db)
+                // Restricted in SQL: the full join table can hold
+                // hundreds of thousands of pairs for other folders.
+                let sql = "SELECT photoId, keywordId FROM photoKeyword"
+                    + " WHERE photoId IN (SELECT id FROM photo WHERE folderId = ?)"
+                let pairs = try Row.fetchAll(db, sql: sql, arguments: [folderId])
+                    .map { (photoId: $0["photoId"] as Int64, keywordId: $0["keywordId"] as Int64) }
+                let removed = try ImportDAO.removeFolder(folderId, in: db)
+                return Removal(photos: photos, pairs: pairs, removed: removed)
             }
             if registerInverse {
-                registerRemoveFolderUndo(folder, photos: captured.photos, pairs: captured.pairs)
+                registerRemoveFolderUndo(folder, photos: result.photos, pairs: result.pairs)
             }
             await refreshSnapshot()
+            let removed = result.removed
             infoMessage = "Removed the folder and \(removed) photo\(removed == 1 ? "" : "s") from the catalog. Files on disk are untouched."
         } catch {
             errorMessage = "Could not remove the folder.\n\(error.localizedDescription)"

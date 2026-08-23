@@ -190,8 +190,11 @@ extension LibraryController {
     }
 
     func setKeywordGroupColor(_ id: Int64, color: String) {
-        guard let snapshot,
-              writeSync({ db in try KeywordDAO.setGroupColor(id, color: color, in: db) }) != nil
+        guard let snapshot else { return }
+        // The group sheet always saves name AND colour — an unchanged colour
+        // must not cost a write plus a carrier-wide event.
+        guard snapshot.keywordGroups.first(where: { $0.id == id })?.color != color else { return }
+        guard writeSync({ db in try KeywordDAO.setGroupColor(id, color: color, in: db) }) != nil
         else { return }
         // Colors are not query facts, but the grid badges derive dot colors
         // per photo — tell carriers so dots refresh immediately.

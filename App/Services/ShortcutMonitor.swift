@@ -54,20 +54,9 @@ final class ShortcutMonitor {
     init(keyMap: KeyMapStore, dispatcher: ActionDispatcher) {
         self.keyMap = keyMap
         self.dispatcher = dispatcher
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // The monitor always fires on the main thread; NSEvent is not
-            // Sendable, so it crosses into the assumeIsolated closure boxed
-            // and only the Sendable "consumed" flag comes back out.
-            let box = EventBox(event: event)
-            let consumed = MainActor.assumeIsolated {
-                self?.consume(box.event) ?? false
-            }
-            return consumed ? nil : event
+        monitor = LocalKeyDownMonitor.install { [weak self] event in
+            self?.consume(event) ?? false
         }
-    }
-
-    private struct EventBox: @unchecked Sendable {
-        let event: NSEvent
     }
 
     /// True when the event matched a binding and was dispatched.
@@ -89,9 +78,29 @@ final class ShortcutMonitor {
               window === mainWindow,
               window.attachedSheet == nil
         else { return false }
-        if window.firstResponder is NSText || window.firstResponder is NSTextView {
-            return false
+        // NSTextView is an NSText — one check covers both field editors and views.
+        return !(window.firstResponder is NSText)
+    }
+}
+
+/// Shared local key-down monitor plumbing (ShortcutMonitor, PhotoPickerModel).
+@MainActor
+enum LocalKeyDownMonitor {
+    private struct EventBox: @unchecked Sendable {
+        let event: NSEvent
+    }
+
+    /// Installs a monitor whose `consume` callback runs on the MainActor; a
+    /// consumed event is swallowed, anything else passes on to the menu
+    /// system. Returns the token for `NSEvent.removeMonitor`.
+    static func install(_ consume: @escaping @MainActor (NSEvent) -> Bool) -> Any? {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // The monitor always fires on the main thread; NSEvent is not
+            // Sendable, so it crosses into the assumeIsolated closure boxed
+            // and only the Sendable "consumed" flag comes back out.
+            let box = EventBox(event: event)
+            let consumed = MainActor.assumeIsolated { consume(box.event) }
+            return consumed ? nil : event
         }
-        return true
     }
 }

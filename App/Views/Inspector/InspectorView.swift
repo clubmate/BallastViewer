@@ -132,6 +132,10 @@ struct InspectorView: View {
             .disabled(keywordInput.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(8)
+        // Bulk transactions (import, metadata load, folder undo) shield the
+        // main window but not this field: creating an unknown keyword is a
+        // synchronous structural write — see LibraryController.writeSync.
+        .disabled(controller.isBusy)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(nsColor: .controlBackgroundColor))
@@ -190,6 +194,10 @@ struct InspectorView: View {
         let text = suggestion ?? keywordInput
         let ids = selectedIds
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty, !ids.isEmpty else { return }
+        guard !controller.isBusy else {
+            controller.errorMessage = LibraryController.busyMessage
+            return
+        }
         controller.assignKeyword(text: text, toPhotoIds: ids)
         keywordInput = ""
         highlight.reset()

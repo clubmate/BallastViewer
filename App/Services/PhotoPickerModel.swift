@@ -30,9 +30,24 @@ final class PhotoPickerModel {
     private var imageCache: [String: CGImageBox] = [:]
     private var cacheOrder: [String] = []
     private var decodeGeneration = 0
+    /// Bumped per root/folder scan so a scan that returns after the user
+    /// moved on (new root, other folder) is dropped instead of installed.
+    private var scanGeneration = 0
+    /// Photo to land on once the selected folder's scan returns (undoPick
+    /// across folders).
+    private var revealAfterLoad: URL?
     /// Undo stack of picks: (original location, location inside _auswahl).
     private var picks: [(from: URL, to: URL)] = []
-    private var monitor: Any?
+    /// `nonisolated(unsafe)`: written once in init, read once in deinit (which
+    /// is nonisolated) — never touched concurrently.
+    @ObservationIgnored nonisolated(unsafe) private var monitor: Any?
+    /// Rotation write-back runs strictly in order (one file, one writer):
+    /// independent detached writes for two quick Space presses raced and the
+    /// last *finisher* won, so file and memory could disagree.
+    private let orientationWrites = TaskQueue()
+    /// Orientation not yet written per path; a queued job writes whatever is
+    /// latest when it runs, so rapid presses coalesce into one write.
+    private var pendingOrientationWrites: [String: Int] = [:]
 
     var currentPhoto: URL? {
         photos.indices.contains(index) ? photos[index] : nil
@@ -45,17 +60,13 @@ final class PhotoPickerModel {
     var canUndo: Bool { !picks.isEmpty }
 
     init() {
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let box = EventBox(event: event)
-            let consumed = MainActor.assumeIsolated {
-                self?.consume(box.event) ?? false
-            }
-            return consumed ? nil : event
+        monitor = LocalKeyDownMonitor.install { [weak self] event in
+            self?.consume(event) ?? false
         }
     }
 
-    private struct EventBox: @unchecked Sendable {
-        let event: NSEvent
+    deinit {
+        if let monitor { NSEvent.removeMonitor(monitor) }
     }
 
     // MARK: Root & folders
@@ -71,26 +82,50 @@ final class PhotoPickerModel {
         setRoot(url)
     }
 
+    /// Directory scans are disk I/O (a slow or sleeping volume) — off the
+    /// MainActor, installed on return unless the root changed meanwhile.
     func setRoot(_ url: URL) {
         rootURL = url
         picks.removeAll()
-        folders = PhotoPickerScanner.folders(in: url)
-        selectedFolderID = folders.first?.id
+        folders = []
+        selectedFolderID = nil
+        scanGeneration += 1
+        let generation = scanGeneration
+        Task {
+            let found = await Task.detached(priority: .userInitiated) {
+                PhotoPickerScanner.folders(in: url)
+            }.value
+            guard generation == self.scanGeneration else { return }
+            self.folders = found
+            self.selectedFolderID = found.first?.id
+        }
     }
 
     private func loadSelectedFolder() {
         imageCache.removeAll()
         cacheOrder.removeAll()
         orientations.removeAll()
+        scanGeneration += 1
+        photos = []
+        index = 0
         guard let folder = selectedFolder else {
-            photos = []
-            index = 0
-            currentImage = nil
+            revealAfterLoad = nil
+            showCurrent()
             return
         }
-        photos = PhotoPickerScanner.photos(in: folder.url)
-        index = 0
-        showCurrent()
+        let generation = scanGeneration
+        let folderURL = folder.url
+        Task {
+            let found = await Task.detached(priority: .userInitiated) {
+                PhotoPickerScanner.photos(in: folderURL)
+            }.value
+            guard generation == self.scanGeneration else { return }
+            self.photos = found
+            let reveal = self.revealAfterLoad
+            self.revealAfterLoad = nil
+            self.index = reveal.flatMap { url in found.firstIndex { $0.path == url.path } } ?? 0
+            self.showCurrent()
+        }
     }
 
     // MARK: Navigation
@@ -112,17 +147,22 @@ final class PhotoPickerModel {
             decodeFailed = false
             return
         }
-        currentOrientation = orientation(of: url)
         decodeFailed = false
         if let hit = imageCache[url.path] {
+            // Orientation rides with the decode (prefetched or shown before),
+            // so a cache hit never reads metadata on the main thread.
             currentImage = hit
+            currentOrientation = orientations[url.path] ?? 1
         } else {
             Task {
-                let box = await Self.decode(url)
+                let decoded = await Self.decode(url)
                 guard generation == self.decodeGeneration else { return }
-                if let box { self.remember(box, for: url) }
-                self.currentImage = box ?? self.currentImage
-                self.decodeFailed = box == nil
+                if let decoded {
+                    self.remember(decoded, for: url)
+                    self.currentImage = decoded.image
+                    self.currentOrientation = self.orientations[url.path] ?? 1
+                }
+                self.decodeFailed = decoded == nil
             }
         }
         prefetchNeighbours()
@@ -135,38 +175,41 @@ final class PhotoPickerModel {
             let url = photos[i]
             guard imageCache[url.path] == nil else { continue }
             Task {
-                guard let box = await Self.decode(url) else { return }
-                self.remember(box, for: url)
+                guard let decoded = await Self.decode(url) else { return }
+                self.remember(decoded, for: url)
             }
         }
     }
 
-    private func remember(_ box: CGImageBox, for url: URL) {
+    private func remember(_ decoded: Decoded, for url: URL) {
+        // A rotation pressed while the decode was in flight is newer than the
+        // file's value — never overwrite a known orientation.
+        if orientations[url.path] == nil { orientations[url.path] = decoded.orientation }
         guard imageCache[url.path] == nil else { return }
-        imageCache[url.path] = box
+        imageCache[url.path] = decoded.image
         cacheOrder.append(url.path)
         while cacheOrder.count > 8 {
             imageCache.removeValue(forKey: cacheOrder.removeFirst())
         }
     }
 
+    private struct Decoded: Sendable {
+        var image: CGImageBox
+        var orientation: Int
+    }
+
     /// Q5 convention: decoded without the EXIF transform; rotation is applied
-    /// by the view layer from the stored orientation.
-    nonisolated private static func decode(_ url: URL) async -> CGImageBox? {
+    /// by the view layer from the stored orientation, which is read here —
+    /// off the MainActor, alongside the pixels.
+    nonisolated private static func decode(_ url: URL) async -> Decoded? {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
               let image = CGImageSourceCreateImageAtIndex(
                 source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
               )
         else { return nil }
-        return CGImageBox(image: image)
-    }
-
-    private func orientation(of url: URL) -> Int {
-        if let known = orientations[url.path] { return known }
-        let value = MetadataReader.readIfReadable(from: url)?.orientation ?? 1
-        orientations[url.path] = value
-        return value
+        let orientation = MetadataReader.readIfReadable(from: url)?.orientation ?? 1
+        return Decoded(image: CGImageBox(image: image), orientation: orientation)
     }
 
     // MARK: Actions
@@ -178,11 +221,18 @@ final class PhotoPickerModel {
         let next = RotationCycle.next(after: currentOrientation)
         currentOrientation = next
         orientations[url.path] = next
-        Task.detached {
-            do {
-                try MetadataWriter.writeOrientation(next, to: url)
-            } catch {
-                await MainActor.run {
+        let path = url.path
+        pendingOrientationWrites[path] = next
+        Task {
+            await orientationWrites.run { [weak self] in
+                // Latest value at execution time; nil means an earlier queued
+                // job already wrote it (presses coalesced).
+                guard let self, let latest = self.pendingOrientationWrites.removeValue(forKey: path)
+                else { return }
+                let outcome: Result<Void, any Error> = await Task.detached {
+                    Result { try MetadataWriter.writeOrientation(latest, to: url) }
+                }.value
+                if case .failure(let error) = outcome {
                     self.errorMessage = "Could not save rotation for \(url.lastPathComponent): \(error)"
                 }
             }
@@ -234,11 +284,10 @@ final class PhotoPickerModel {
             index = insertAt
             showCurrent()
         } else {
+            // The folder scan is asynchronous — the model lands on the file
+            // once the scan returns.
+            revealAfterLoad = last.from
             selectedFolderID = folderURL.path
-            if let i = photos.firstIndex(where: { $0.path == last.from.path }) {
-                index = i
-                showCurrent()
-            }
         }
     }
 

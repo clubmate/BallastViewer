@@ -38,6 +38,9 @@ struct LibrariesSettingsView: View {
             foldersSection
         }
         .formStyle(.grouped)
+        // Closing/switching/deleting the open library and removing its folders
+        // are refused while a bulk transaction runs (LibraryController.isBusy).
+        .disabled(controller.isBusy)
         .onAppear {
             if selectedURL == nil {
                 selectedPath = controller.libraryURL?.path ?? sortedLibraries.first?.path ?? ""

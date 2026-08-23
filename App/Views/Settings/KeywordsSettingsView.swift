@@ -49,6 +49,9 @@ struct KeywordsSettingsView: View {
                     }
                     .padding(12)
                 }
+                // Vocabulary edits are synchronous structural writes — refused
+                // during bulk transactions (LibraryController.writeSync).
+                .disabled(controller.isBusy)
             } else {
                 Text("No library open")
                     .foregroundStyle(.secondary)

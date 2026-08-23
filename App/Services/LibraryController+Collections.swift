@@ -175,8 +175,17 @@ extension LibraryController {
     /// write pipeline first so this commit can never overtake a queued
     /// write-through job (e.g. a keyword-subtree delete overtaking the insert
     /// of an assignment to that very keyword).
+    ///
+    /// Refused while `isBusy`: the flush barrier would then park the main
+    /// thread behind a bulk transaction (import, metadata load, folder undo)
+    /// for seconds. The modal shield covers the main window, but not the
+    /// Inspector keyword field or the Settings editors — this is the backstop.
     func writeSync<T>(_ body: (Database) throws -> T) -> T? {
         guard let library else { return nil }
+        guard !isBusy else {
+            errorMessage = Self.busyMessage
+            return nil
+        }
         writePipeline?.flushSync()
         do {
             return try library.pool.write(body)

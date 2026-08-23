@@ -85,7 +85,17 @@ extension LibraryController {
     /// Async write-through, strictly in submission order via the library's
     /// write pipeline. A failure means memory and DB diverged for the affected
     /// rows — surfaced loudly; the next snapshot load resyncs.
+    ///
+    /// A nil pipeline is only legitimate while terminating (`drainWrites`
+    /// spent it); any other caller has mutated memory with nothing to persist
+    /// it — a bug, never silent.
     func persist(_ write: @escaping @Sendable (Database) throws -> Void) {
-        writePipeline?.submit(write)
+        guard let writePipeline else {
+            guard !isTerminating else { return }
+            assertionFailure("persist() without an open write pipeline")
+            errorMessage = "Could not save changes to the library.\nNo library is open for writing."
+            return
+        }
+        writePipeline.submit(write)
     }
 }

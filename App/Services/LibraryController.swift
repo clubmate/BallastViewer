@@ -29,6 +29,14 @@ final class LibraryController {
     // MARK: Import state (used by LibraryController+Import)
 
     var isImporting = false
+    struct QueuedImport {
+        var urls: [URL]
+        var recursive: Bool
+        var targetURL: URL
+    }
+    /// Drops/panel requests that arrived while an import was running; the
+    /// running import drains them in order when it finishes.
+    var queuedImports: [QueuedImport] = []
     /// A metadata sync command is running (used by LibraryController+Sync).
     var isSyncing = false
     /// A bulk transaction (import, metadata sync, folder undo) is replacing
@@ -36,7 +44,13 @@ final class LibraryController {
     /// ActionDispatcher drops keyboard/MIDI/menu actions while this is set —
     /// a rating pressed mid-transaction would otherwise commit behind it and
     /// leave memory and DB disagreeing without an event.
-    var isBusy: Bool { isImporting || isSyncing }
+    var isBusy: Bool { isImporting || isSyncing || isTerminating }
+    /// `drainWrites` ran: the pipeline is spent and the process is exiting.
+    /// Part of the shield so no late mutation lands on a nil pipeline.
+    private(set) var isTerminating = false
+    /// Shown by the paths the shield cannot cover (structural writes, library
+    /// close/switch) when they are refused mid-transaction.
+    static let busyMessage = "The library is busy — try again when the import/sync has finished."
 
     // MARK: Undo (U8)
 
@@ -116,6 +130,7 @@ final class LibraryController {
     /// app-termination path (AppDelegate). The pipeline is spent afterwards,
     /// which is fine: the process is about to exit.
     func drainWrites() async {
+        isTerminating = true
         guard let pipeline = writePipeline else { return }
         writePipeline = nil
         await pipeline.shutdown()
@@ -211,16 +226,22 @@ final class LibraryController {
 
     func createLibrary(at url: URL) async {
         await openQueue.run {
+            guard self.refuseIfBusy() else { return }
             do {
-                // The save panel already asked "Replace?" — honour that answer,
-                // but only ever remove something that is a library package.
-                if FileManager.default.fileExists(atPath: url.path) {
-                    guard url.pathExtension == LibraryDatabase.packageExtension else {
-                        throw LibraryDatabaseError.alreadyExists(url)
+                // Package removal + creation + migration is disk I/O — off
+                // the MainActor, mirroring `openThrowing`.
+                let database = try await Task.detached(priority: .userInitiated) {
+                    // The save panel already asked "Replace?" — honour that
+                    // answer, but only ever remove something that is a
+                    // library package.
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        guard url.pathExtension == LibraryDatabase.packageExtension else {
+                            throw LibraryDatabaseError.alreadyExists(url)
+                        }
+                        try FileManager.default.removeItem(at: url)
                     }
-                    try FileManager.default.removeItem(at: url)
-                }
-                let database = try LibraryDatabase.create(at: url)
+                    return try LibraryDatabase.create(at: url)
+                }.value
                 try await self.openLoaded(database, at: url, didStartAccess: false)
             } catch {
                 self.errorMessage = "Could not create the library.\n\(error.localizedDescription)"
@@ -230,6 +251,7 @@ final class LibraryController {
 
     func openLibrary(at url: URL) async {
         await openQueue.run {
+            guard self.refuseIfBusy() else { return }
             do {
                 try await self.openThrowing(at: url)
             } catch {
@@ -238,8 +260,19 @@ final class LibraryController {
         }
     }
 
+    /// Releasing or replacing the open library flushes the write lane
+    /// synchronously (`releaseCurrent`) — refused mid-transaction, where that
+    /// barrier would freeze the main thread. Returns false when refused.
+    @discardableResult
+    private func refuseIfBusy() -> Bool {
+        guard isBusy else { return true }
+        errorMessage = Self.busyMessage
+        return false
+    }
+
     /// Releases the library and prevents auto-reopen; the recents list stays (spec §4.4).
     func closeLibrary() {
+        guard refuseIfBusy() else { return }
         releaseCurrent()
         library = nil
         libraryURL = nil
@@ -261,6 +294,8 @@ final class LibraryController {
     /// photo files are never inside the package — and drops it from the list.
     func deleteLibrary(at url: URL) {
         if url.path == libraryURL?.path {
+            // Never trash a library whose close was refused (busy).
+            guard refuseIfBusy() else { return }
             closeLibrary()
         }
         let didStartAccess = url.startAccessingSecurityScopedResource()

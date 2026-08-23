@@ -34,8 +34,11 @@ actor ThumbnailPipeline {
     /// mtime per path, cached for the session: the cache key needs it, and a
     /// per-request `stat` made even 100%-memory-hits pay a syscall (a real
     /// I/O round trip on network volumes). The app itself only rewrites files
-    /// in the metadata save — which calls `invalidateModificationTimes()`.
+    /// in the metadata save — which calls `fileRewritten(paths:)`.
     private let modificationTimes = OSAllocatedUnfairLock<[String: TimeInterval]>(initialState: [:])
+    /// Every long edge requested this session — NSCache cannot be enumerated,
+    /// so re-keying a path's entries needs the key space spelled out.
+    private let knownEdges = OSAllocatedUnfairLock<Set<Int>>(initialState: [])
     private let counterLock = OSAllocatedUnfairLock<Stats>(initialState: Stats())
     private let maxConcurrentDecodes = 8
     private var activeDecodes = 0
@@ -90,10 +93,49 @@ actor ThumbnailPipeline {
 
     nonisolated func stats() -> Stats { counterLock.withLock { $0 } }
 
-    /// Wipes the session mtime cache — after the metadata save rewrites files
-    /// on disk, their cache keys must re-stat.
-    nonisolated func invalidateModificationTimes() {
-        modificationTimes.withLock { $0.removeAll() }
+    /// The metadata save rewrote these files in place: their mtime — and so
+    /// their cache key — changed, but the pixels did not (metadata-only
+    /// writes by design). Re-stats only those paths and carries the existing
+    /// thumbnails over to the new keys, in memory and on disk, instead of
+    /// decoding the whole library again and stranding the old cache files.
+    /// Nonisolated async: stats and renames are disk I/O, off the actor and
+    /// off the MainActor.
+    nonisolated func fileRewritten(paths: [String]) async {
+        let edges = knownEdges.withLock { $0 }
+        for path in paths {
+            let fresh = Self.modificationTime(atPath: path)
+            let previous = modificationTimes.withLock { cached -> TimeInterval? in
+                let previous = cached[path]
+                cached[path] = fresh
+                return previous
+            }
+            // Never stat'ed this session → nothing cached under an old key.
+            guard let previous, Int(previous) != Int(fresh) else { continue }
+            for edge in edges {
+                let oldKey = "\(path)|\(Int(previous))|\(edge)"
+                let newKey = "\(path)|\(Int(fresh))|\(edge)"
+                if let image = memory.object(forKey: oldKey as NSString) {
+                    memory.setObject(
+                        image, forKey: newKey as NSString, cost: image.bytesPerRow * image.height
+                    )
+                    memory.removeObject(forKey: oldKey as NSString)
+                }
+                // rename(2) replaces atomically; a miss (never written, or
+                // pruned) just fails silently.
+                _ = rename(
+                    cacheDirectory.appendingPathComponent(Self.hash(oldKey) + ".jpg").path,
+                    cacheDirectory.appendingPathComponent(Self.hash(newKey) + ".jpg").path
+                )
+            }
+            let oldOriginal = "\(path)|\(Int(previous))|original" as NSString
+            if let image = originalsMemory.object(forKey: oldOriginal) {
+                originalsMemory.setObject(
+                    image, forKey: "\(path)|\(Int(fresh))|original" as NSString,
+                    cost: image.bytesPerRow * image.height
+                )
+                originalsMemory.removeObject(forKey: oldOriginal)
+            }
+        }
     }
 
     /// Synchronous, hop-free memory lookup. Returns nil when the image is not
@@ -121,6 +163,7 @@ actor ThumbnailPipeline {
     /// would serialise every thumbnail request (including pure memory hits)
     /// behind a syscall.
     nonisolated func thumbnail(forPath path: String, longEdge: Int) async -> CGImageBox? {
+        knownEdges.withLock { _ = $0.insert(longEdge) }
         let modificationTime = resolvedModificationTime(atPath: path)
         let key = "\(path)|\(Int(modificationTime))|\(longEdge)"
         return await cachedThumbnail(key: key, path: path, longEdge: longEdge)
