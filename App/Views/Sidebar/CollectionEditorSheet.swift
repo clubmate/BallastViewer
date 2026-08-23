@@ -19,18 +19,24 @@ struct CollectionEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Name")
-                TextField("Name", text: $draft.collection.name)
-                    .textFieldStyle(.roundedBorder)
+            // Labels share one column so the controls line up.
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                GridRow {
+                    Text("Name")
+                    TextField("Name", text: $draft.collection.name)
+                        .textFieldStyle(.roundedBorder)
+                }
+                GridRow {
+                    Text("Match")
+                    Picker("Match", selection: $draft.collection.matchAll) {
+                        Text("All").tag(true)
+                        Text("Any").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 160)
+                }
             }
-
-            Picker("Match", selection: $draft.collection.matchAll) {
-                Text("All").tag(true)
-                Text("Any").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 220)
 
             if draft.rules.isEmpty {
                 // U10 hint — Q6 makes an empty list match every photo.
@@ -48,10 +54,12 @@ struct CollectionEditorSheet: View {
             List {
                 ForEach($draft.rules) { $rule in
                     ruleRow($rule)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                 }
                 .onDelete { draft.rules.remove(atOffsets: $0) }
             }
-            .listStyle(.inset)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .frame(minHeight: 150)
 
             HStack {
