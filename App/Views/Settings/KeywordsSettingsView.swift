@@ -9,9 +9,9 @@ let keywordGroupPalette: [String] = [
 ]
 
 /// Settings ▸ Keywords — the vocabulary tree editor (spec §8.6).
-/// Ad-hoc keywords (no group) are deliberately not listed, reproducing the
-/// original's vocabulary/index split. Group order is drag-editable and drives
-/// chip sort priority (Q18).
+/// Ad-hoc keywords (no effective group) are listed last under the UNGROUPED
+/// pseudo-group (U-deviation: the original hid them, which made them
+/// undeletable). Group order is drag-editable and drives chip sort priority (Q18).
 struct KeywordsSettingsView: View {
     @Environment(LibraryController.self) private var controller
 
@@ -42,6 +42,7 @@ struct KeywordsSettingsView: View {
                             ForEach(groupReorder.ordered(vocabulary.groups, id: \.id)) { group in
                                 groupSection(group, tree: vocabulary.tree)
                             }
+                            ungroupedSection(tree: vocabulary.tree)
                         }
                         .padding(12)
                     }
@@ -244,6 +245,52 @@ struct KeywordsSettingsView: View {
         }
     }
 
+    // MARK: UNGROUPED pseudo-group (always last; not colourable/renamable/
+    // deletable/reorderable, no "+" — it only exposes what already exists)
+
+    /// Sentinel for `collapsedGroups`; never collides with a real group id.
+    private static let ungroupedSentinel: Int64 = -1
+
+    @ViewBuilder
+    private func ungroupedSection(tree: KeywordTree) -> some View {
+        let topLevel = tree.rootIds.filter { tree.effectiveGroupId(of: $0) == nil }
+        if !topLevel.isEmpty {
+            let sentinel = Self.ungroupedSentinel
+            let collapsed = collapsedGroups.contains(sentinel)
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .foregroundStyle(.secondary)
+                Circle()
+                    .strokeBorder(Color.gray, lineWidth: 1)
+                    .frame(width: 12, height: 12)
+                Text("UNGROUPED (\(topLevel.count))")
+                    .fontWeight(.bold)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.top, 8)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .help("Ad-hoc keywords without a group. Use “Move to Group” on a keyword to file it.")
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    if collapsed {
+                        collapsedGroups.remove(sentinel)
+                    } else {
+                        collapsedGroups.insert(sentinel)
+                    }
+                }
+            }
+            if !collapsed {
+                ForEach(visibleRows(startingAt: topLevel, tree: tree), id: \.id) { row in
+                    keywordRow(row.id, depth: row.depth, hasChildren: row.hasChildren, tree: tree)
+                }
+            }
+        }
+    }
+
     // MARK: Keyword rows (outline)
 
     private struct KeywordRowInfo: Hashable {
@@ -306,6 +353,37 @@ struct KeywordsSettingsView: View {
             Button("Rename") { beginRename(id, tree: tree) }
             Button("Add Sub-keyword") {
                 addKeyword(parentId: id, groupId: nil, base: "NEW SUB-KEYWORD")
+            }
+            // Only top-level nodes own a group; nested ones inherit it (C2).
+            if depth == 1 {
+                Menu("Move to Group") {
+                    let current = tree.node(id)?.groupId
+                    ForEach(controller.vocabulary.groups) { group in
+                        if let groupId = group.id {
+                            Button {
+                                controller.setKeywordGroup(id, groupId: groupId)
+                            } label: {
+                                if groupId == current {
+                                    Label(group.name, systemImage: "checkmark")
+                                } else {
+                                    Text(group.name)
+                                }
+                            }
+                            .disabled(groupId == current)
+                        }
+                    }
+                    Divider()
+                    Button {
+                        controller.setKeywordGroup(id, groupId: nil)
+                    } label: {
+                        if current == nil {
+                            Label("UNGROUPED", systemImage: "checkmark")
+                        } else {
+                            Text("UNGROUPED")
+                        }
+                    }
+                    .disabled(current == nil)
+                }
             }
             Button("Delete", role: .destructive) { pendingKeywordDeletion = id }
         }

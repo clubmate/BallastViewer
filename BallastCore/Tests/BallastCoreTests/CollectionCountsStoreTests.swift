@@ -21,6 +21,20 @@ import Testing
         CollectionRuleRecord(collectionId: collectionId, type: type, operation: op, value: value, sortOrder: 0)
     }
 
+    @Test func rebuildSkipsIdLessPhotosLikeUpdate() {
+        var store = CollectionCountsStore()
+        var unsaved = photo(99, rating: 2)
+        unsaved.id = nil
+        let photos = [photo(1, rating: 3), unsaved, photo(2, rating: 3)]
+        store.rebuild(
+            photos: photos, collections: [collection(10)], rulesByCollection: [:],
+            lastImportBatchId: nil, facts: { _ in PhotoQueryFacts() }
+        )
+        #expect(store.counts.allPhotos == 2)
+        #expect(store.counts.ratings[2] == 0 && store.counts.ratings[3] == 2)
+        #expect(store.counts.collections[10] == 2)
+    }
+
     @Test func rebuildCountsEverything() {
         var store = CollectionCountsStore()
         let photos = [

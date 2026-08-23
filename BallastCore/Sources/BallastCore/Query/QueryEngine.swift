@@ -72,7 +72,10 @@ public struct CompiledRules: Sendable {
         let type: RuleType
         /// nil = known type with unknown operator → evaluates false (§7.3).
         let op: RuleOperator?
-        let value: String
+        /// Trimmed value, empty = "rule not configured yet" → matches every
+        /// photo regardless of type and operator.
+        let isEmpty: Bool
+        /// Case-folded, trimmed value.
         let foldedValue: String
         let intValue: Int?
         let dateValue: Date?
@@ -82,28 +85,35 @@ public struct CompiledRules: Sendable {
 
     let rules: [Rule]
     public let matchAll: Bool
+    /// True when the record list had rules but every one was of an unknown
+    /// type (D6): such a collection matches nothing, as opposed to a
+    /// genuinely empty rule list, which matches everything (Q6).
+    let allRulesUnknown: Bool
 
     public init(_ records: [CollectionRuleRecord], matchAll: Bool) {
         self.matchAll = matchAll
         // Unknown types are skipped entirely (D6), like the interpreter.
         rules = records.compactMap { record in
             guard let type = RuleType(rawValue: record.type) else { return nil }
-            let trimmed = record.value.trimmingCharacters(in: .whitespaces)
+            let trimmed = record.value.trimmingCharacters(in: .whitespacesAndNewlines)
             return Rule(
                 type: type,
                 op: RuleOperator(rawValue: record.operation),
-                value: record.value,
-                foldedValue: CaseInsensitiveMatch.fold(record.value),
+                isEmpty: trimmed.isEmpty,
+                foldedValue: CaseInsensitiveMatch.fold(trimmed),
                 intValue: Int(trimmed),
                 dateValue: Double(trimmed).map { Date(timeIntervalSince1970: $0) },
                 groupIdValue: Int64(trimmed),
                 batchIdValue: Int64(trimmed)
             )
         }
+        allRulesUnknown = rules.isEmpty && !records.isEmpty
     }
 
-    /// Empty rule list matches everything (Q6).
+    /// Empty rule list matches everything (Q6); a list whose rules were all
+    /// dropped as unknown types matches nothing (D6).
     public func matches(_ photo: PhotoRecord, facts: PhotoQueryFacts) -> Bool {
+        if allRulesUnknown { return false }
         guard !rules.isEmpty else { return true }
         if matchAll {
             return rules.allSatisfy { evaluate($0, photo: photo, facts: facts) }
@@ -112,6 +122,14 @@ public struct CompiledRules: Sendable {
     }
 
     private func evaluate(_ rule: Rule, photo: PhotoRecord, facts: PhotoQueryFacts) -> Bool {
+        // An empty value is an unconfigured rule: it constrains nothing.
+        if rule.isEmpty { return true }
+        // importBatch ignores the operator (§7.3); everything else needs one.
+        if rule.type == .importBatch {
+            // Integer compare: an unparsable value (nil) never equals a batch.
+            guard let batchId = rule.batchIdValue else { return false }
+            return photo.importBatchId == batchId
+        }
         guard let op = rule.op else { return false }
         switch rule.type {
         case .keyword:
@@ -134,9 +152,7 @@ public struct CompiledRules: Sendable {
             guard let captureDate = photo.captureDate else { return false }
             return Self.dateRule(captureDate, op, rule.dateValue)
         case .importBatch:
-            // Integer compare: an unparsable value (nil) never equals a batch.
-            guard let batchId = rule.batchIdValue else { return false }
-            return photo.importBatchId == batchId
+            preconditionFailure("handled above")
         }
     }
 
@@ -192,8 +208,10 @@ public struct CompiledRules: Sendable {
 /// single implementation of the semantics.
 public enum QueryEngine {
     /// Empty rule list matches everything (Q6). Rules with an unknown *type*
-    /// are skipped entirely (D6); a known type with an unsupported operator
-    /// returns false per the §7.3 contract.
+    /// are skipped entirely (D6) — and if every rule was unknown the
+    /// collection matches nothing; a known type with an unsupported operator
+    /// returns false per the §7.3 contract. A rule with an empty (trimmed)
+    /// value is "not configured yet" and matches everything.
     public static func matches(
         _ photo: PhotoRecord,
         facts: PhotoQueryFacts,

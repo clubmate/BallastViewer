@@ -399,42 +399,8 @@ enum TestHooks {
         await pause()
         controller.toggleKeyword(text: "anna", forPhotoIds: [center.selection.anchorId!])
         await pause()
-        print("BVS10 before-save \(anchorState())")
-        dumpAll("before-save")
-
-        // Save → the file carries the library's values (D1 via app path).
-        await controller.saveMetadataToFiles()
-        print("BVS10 save info=\(quoted(controller.infoMessage))")
-        controller.infoMessage = nil
-        if let id = center.selection.anchorId, let record = controller.photo(withId: id) {
-            let fileValues = MetadataReader.read(from: URL(fileURLWithPath: record.path))
-            print("BVS10 file rating=\(fileValues.rating) orientation=\(fileValues.orientation) keywords=\(fileValues.keywords)")
-        }
-
-        // Diverge the library, prepare unused vocabulary, then Load.
-        dispatcher.dispatch(.app(.rate2))
-        await pause()
-        print("BVS10 stack after-rate2 top=\(controller.undoManager?.undoActionName ?? "-") canUndo=\(controller.undoManager?.canUndo ?? false)")
-        dumpAll("after-rate2")
-        controller.createKeyword(baseName: "UNUSED", parentId: nil, groupId: nil)
-        await pause()
-        await controller.loadMetadataFromFiles()
-        print("BVS10 stack after-load top=\(controller.undoManager?.undoActionName ?? "-")")
-        print("BVS10 load info=\(quoted(controller.infoMessage)) \(anchorState())")
-        controller.infoMessage = nil
-        let hasUnused = controller.snapshot?.keywordTree.allPaths().contains("UNUSED") ?? false
-        print("BVS10 d2 unusedSurvivesLoad=\(hasUnused)")
-
-        // Undo the load (one step) → rating back to 2; redo → 4 again.
-        // Undo groups close per runloop turn — pause so the group is closed
-        // before undoing (real usage: one gesture per event).
-        await pause()
-        controller.undoManager?.undo()
-        print("BVS10 undo-load \(anchorState())")
-        await pause()
-        controller.undoManager?.redo()
-        print("BVS10 redo-load \(anchorState())")
-        await pause()
+        print("BVS10 state \(anchorState())")
+        dumpAll("after-setup")
 
         // Batch rating: three photos → one ⌘Z reverts all three (U8).
         let ids = center.visiblePhotos.prefix(3).map(\.id)

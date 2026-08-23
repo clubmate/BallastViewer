@@ -19,9 +19,12 @@ public struct OrientationTransform: Equatable, Sendable {
 
     #if canImport(CoreGraphics)
     /// The layer transform that displays an unrotated bitmap per this
-    /// orientation: mirror (if any) first, then the rotation — negative in
-    /// Core Animation's counter-clockwise convention. Shared by the grid cells
-    /// and the single view so both render the same way.
+    /// orientation. CGAffineTransform pre-multiplies: `identity.scaledBy(-1)
+    /// .rotated(by:)` applies the rotation to the bitmap FIRST and the mirror
+    /// to the rotated result, matching the struct's "rotate, then flip
+    /// horizontally" convention. The angle is negated for Core Animation's
+    /// counter-clockwise convention. Shared by the grid cells and the single
+    /// view so both render the same way.
     public var affineTransform: CGAffineTransform {
         var affine = CGAffineTransform.identity
         if mirroredHorizontally {

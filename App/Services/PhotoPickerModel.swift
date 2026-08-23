@@ -21,6 +21,16 @@ final class PhotoPickerModel {
     private(set) var currentOrientation = 1
     private(set) var decodeFailed = false
     var errorMessage: String?
+    /// Non-blocking inline notice (U16 guard): the chosen folder belongs to
+    /// the open library and was refused. Cleared on the next successful load.
+    private(set) var blockedMessage: String?
+    /// Injected by the app: asks the open library whether it catalogs `url`
+    /// (a registered folder or a subfolder of a recursive one). The picker
+    /// stays decoupled from the controller — it only sees this predicate.
+    var isFolderInOpenLibrary: (URL) -> Bool = { _ in false }
+
+    private static let libraryFolderNotice =
+        "This folder is part of the open library — BallastPicker moves files and would break the catalog."
 
     /// The window whose key events drive the picker (registered by the view),
     /// mirroring the ShortcutMonitor whitelist pattern for the main window.
@@ -85,11 +95,17 @@ final class PhotoPickerModel {
     /// Directory scans are disk I/O (a slow or sleeping volume) — off the
     /// MainActor, installed on return unless the root changed meanwhile.
     func setRoot(_ url: URL) {
-        rootURL = url
         picks.removeAll()
         folders = []
         selectedFolderID = nil
         scanGeneration += 1
+        guard !isFolderInOpenLibrary(url) else {
+            rootURL = nil
+            blockedMessage = Self.libraryFolderNotice
+            return
+        }
+        blockedMessage = nil
+        rootURL = url
         let generation = scanGeneration
         Task {
             let found = await Task.detached(priority: .userInitiated) {
@@ -115,6 +131,13 @@ final class PhotoPickerModel {
             revealAfterLoad = nil
             return
         }
+        // A root outside the library can still contain registered folders.
+        guard !isFolderInOpenLibrary(folder.url) else {
+            revealAfterLoad = nil
+            blockedMessage = Self.libraryFolderNotice
+            return
+        }
+        blockedMessage = nil
         let generation = scanGeneration
         let folderURL = folder.url
         Task {
@@ -171,13 +194,18 @@ final class PhotoPickerModel {
     }
 
     private func prefetchNeighbours() {
+        // A prefetch that returns after a folder/root change must not land in
+        // the cleared cache (or carry a stale orientation into `orientations`).
+        let generation = scanGeneration
         for offset in [1, -1, 2] {
             let i = index + offset
             guard photos.indices.contains(i) else { continue }
             let url = photos[i]
             guard imageCache[url.path] == nil else { continue }
             Task {
-                guard let decoded = await Self.decode(url) else { return }
+                guard let decoded = await Self.decode(url),
+                      generation == self.scanGeneration
+                else { return }
                 self.remember(decoded, for: url)
             }
         }
@@ -225,76 +253,102 @@ final class PhotoPickerModel {
         orientations[url.path] = next
         let path = url.path
         pendingOrientationWrites[path] = next
-        Task {
-            await orientationWrites.run { [weak self] in
-                // Latest value at execution time; nil means an earlier queued
-                // job already wrote it (presses coalesced).
-                guard let self, let latest = self.pendingOrientationWrites.removeValue(forKey: path)
-                else { return }
-                let outcome: Result<Void, any Error> = await Task.detached {
-                    Result { try MetadataWriter.writeOrientation(latest, to: url) }
-                }.value
-                if case .failure(let error) = outcome {
-                    self.errorMessage = "Could not save rotation for \(url.lastPathComponent): \(error)"
-                }
+        orientationWrites.enqueue { [weak self] in
+            // Latest value at execution time; nil means an earlier queued
+            // job already wrote it (presses coalesced).
+            guard let self, let latest = self.pendingOrientationWrites.removeValue(forKey: path)
+            else { return }
+            let outcome: Result<Void, any Error> = await Task.detached {
+                Result { try MetadataWriter.writeOrientation(latest, to: url) }
+            }.value
+            if case .failure(let error) = outcome {
+                self.errorMessage = "Could not save rotation for \(url.lastPathComponent): \(error)"
             }
         }
     }
 
     /// Enter: move the current file into `_auswahl` next to it and show the
-    /// next photo.
+    /// next photo. Memory updates instantly; the move itself runs as a job on
+    /// the same serial queue as the rotation writes, so a Space still queued
+    /// for this file reaches it BEFORE it moves (a write after the move would
+    /// hit a dead path). A failed move puts the photo back where it was.
     func pick() {
         guard let url = currentPhoto, let folder = selectedFolder else { return }
         let target = PhotoPickerScanner.selectionFolder(for: folder.url)
         let destination = target.appendingPathComponent(url.lastPathComponent)
-        do {
-            // Space then Enter: a rotation still queued for this file must
-            // reach it before it moves, or the queued write hits a dead path.
-            if let pending = pendingOrientationWrites.removeValue(forKey: url.path) {
-                try MetadataWriter.writeOrientation(pending, to: url)
-            }
-            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-            guard !FileManager.default.fileExists(atPath: destination.path) else {
-                errorMessage = "\(url.lastPathComponent) already exists in \(PhotoPickerScanner.selectionFolderName)."
-                return
-            }
-            try FileManager.default.moveItem(at: url, to: destination)
-        } catch {
-            errorMessage = "Could not move \(url.lastPathComponent): \(error.localizedDescription)"
-            return
-        }
+        let removedIndex = index
         picks.append((from: url, to: destination))
         photos.remove(at: index)
         imageCache.removeValue(forKey: url.path)
         adjustCounts(for: folder.id, photos: -1, picked: 1)
         if index >= photos.count { index = max(photos.count - 1, 0) }
         showCurrent()
+        orientationWrites.enqueue { [weak self] in
+            guard let self else { return }
+            let outcome: Result<Void, any Error> = await Task.detached {
+                Result {
+                    try FileManager.default.createDirectory(
+                        at: target, withIntermediateDirectories: true
+                    )
+                    guard !FileManager.default.fileExists(atPath: destination.path) else {
+                        throw PickError.alreadyExists
+                    }
+                    try FileManager.default.moveItem(at: url, to: destination)
+                }
+            }.value
+            guard case .failure(let error) = outcome else { return }
+            if case PickError.alreadyExists = error {
+                self.errorMessage = "\(url.lastPathComponent) already exists in \(PhotoPickerScanner.selectionFolderName)."
+            } else {
+                self.errorMessage = "Could not move \(url.lastPathComponent): \(error.localizedDescription)"
+            }
+            self.revertPick(of: url, folderID: folder.id, at: removedIndex)
+        }
+    }
+
+    private enum PickError: Error { case alreadyExists }
+
+    /// Undoes the optimistic memory update of a pick whose move failed.
+    private func revertPick(of url: URL, folderID: PickerFolder.ID, at removedIndex: Int) {
+        if let i = picks.lastIndex(where: { $0.from.path == url.path }) { picks.remove(at: i) }
+        adjustCounts(for: folderID, photos: 1, picked: -1)
+        if selectedFolder?.id == folderID, !photos.contains(where: { $0.path == url.path }) {
+            let at = min(removedIndex, photos.count)
+            photos.insert(url, at: at)
+            index = at
+            showCurrent()
+        }
     }
 
     /// Backspace: move the most recently picked file back and show it again.
+    /// Queued behind any pending pick move / rotation write for ordering.
     func undoPick() {
         guard let last = picks.popLast() else { return }
-        do {
-            try FileManager.default.moveItem(at: last.to, to: last.from)
-        } catch {
-            errorMessage = "Could not move \(last.from.lastPathComponent) back: \(error.localizedDescription)"
-            return
-        }
-        let folderURL = last.from.deletingLastPathComponent()
-        adjustCounts(for: folderURL.path, photos: 1, picked: -1)
-        if selectedFolder?.url.path == folderURL.path {
-            let insertAt = photos.firstIndex {
-                $0.lastPathComponent.localizedStandardCompare(last.from.lastPathComponent)
-                    == .orderedDescending
-            } ?? photos.count
-            photos.insert(last.from, at: insertAt)
-            index = insertAt
-            showCurrent()
-        } else {
-            // The folder scan is asynchronous — the model lands on the file
-            // once the scan returns.
-            revealAfterLoad = last.from
-            selectedFolderID = folderURL.path
+        orientationWrites.enqueue { [weak self] in
+            guard let self else { return }
+            let outcome: Result<Void, any Error> = await Task.detached {
+                Result { try FileManager.default.moveItem(at: last.to, to: last.from) }
+            }.value
+            if case .failure(let error) = outcome {
+                self.errorMessage = "Could not move \(last.from.lastPathComponent) back: \(error.localizedDescription)"
+                return
+            }
+            let folderURL = last.from.deletingLastPathComponent()
+            self.adjustCounts(for: folderURL.path, photos: 1, picked: -1)
+            if self.selectedFolder?.url.path == folderURL.path {
+                let insertAt = self.photos.firstIndex {
+                    $0.lastPathComponent.localizedStandardCompare(last.from.lastPathComponent)
+                        == .orderedDescending
+                } ?? self.photos.count
+                self.photos.insert(last.from, at: insertAt)
+                self.index = insertAt
+                self.showCurrent()
+            } else {
+                // The folder scan is asynchronous — the model lands on the
+                // file once the scan returns.
+                self.revealAfterLoad = last.from
+                self.selectedFolderID = folderURL.path
+            }
         }
     }
 

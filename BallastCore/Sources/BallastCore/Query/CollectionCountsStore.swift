@@ -50,10 +50,13 @@ public struct CollectionCountsStore: Sendable {
         compiled = Self.compile(collections, rulesByCollection)
         var matched: Set<Int64> = []
         for photo in photos {
+            // Unsaved photos have no identity to count under — skip them,
+            // exactly like `update` does, instead of piling them onto one id.
+            guard let photoId = photo.id else { continue }
             let membership = membership(
                 of: photo, lastImportBatchId: lastImportBatchId, facts: facts, scratch: &matched
             )
-            add(membership, photoId: photo.id ?? -1)
+            add(membership, photoId: photoId)
         }
     }
 

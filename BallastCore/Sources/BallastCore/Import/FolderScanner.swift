@@ -1,10 +1,10 @@
 import Foundation
 
 public enum FolderScanner {
-    /// Exactly the eleven extensions of spec §5.3. RAW formats rely on the OS
-    /// image framework for decoding; there is no RAW-specific handling.
+    /// Spec §5.3 minus the RAW formats (U15: the image profile is preview
+    /// scans ≤2K; RAW files are never catalogued).
     public static let acceptedExtensions: Set<String> = [
-        "jpg", "jpeg", "png", "heic", "tiff", "tif", "raw", "cr2", "nef", "arw", "dng",
+        "jpg", "jpeg", "png", "heic", "tiff", "tif",
     ]
 
     /// Lists image files in `folderURL`. Recursive by default (fixes C1);

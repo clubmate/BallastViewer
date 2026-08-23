@@ -4,6 +4,61 @@ import Testing
 @testable import BallastCore
 
 @Suite struct KeywordTreeTests {
+    @Test func ensurePathWithOnlyBlankComponentsThrowsEmptyName() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            #expect(throws: KeywordDAOError.emptyName) {
+                try KeywordDAO.ensurePath(["  ", "", "\n"], groupId: nil, in: db)
+            }
+            #expect(throws: KeywordDAOError.emptyName) {
+                try KeywordDAO.ensurePath([], groupId: nil, in: db)
+            }
+            let count = try KeywordRecord.fetchCount(db)
+            #expect(count == 0)
+        }
+    }
+
+    @Test func deltaDerivationsNormaliseNamesLikeTheDAO() {
+        var people = KeywordRecord(parentId: nil, groupId: nil, name: "PEOPLE")
+        people.id = 1
+        let tree = KeywordTree(records: [people])
+        let renamed = tree.renaming(1, to: "  folks\u{0308} ")  // decomposed diaeresis
+        #expect(renamed.node(1)?.name == "FOLKS\u{0308}".precomposedStringWithCanonicalMapping)
+        #expect(renamed.node(1)?.name == KeywordDAO.normalize("folks\u{0308}"))
+
+        var anna = KeywordRecord(parentId: 1, groupId: nil, name: " anna ")
+        anna.id = 2
+        var bob = KeywordRecord(parentId: 1, groupId: nil, name: "bob\n")
+        bob.id = 3
+        let grown = tree.inserting(anna).inserting(contentsOf: [bob])
+        #expect(grown.node(2)?.name == "ANNA")
+        #expect(grown.node(3)?.name == "BOB")
+        #expect(grown.path(of: 2) == "PEOPLE > ANNA")
+        #expect(grown.find(pathComponents: ["people", "bob"]) == 3)
+    }
+
+    @Test func settingGroupMovesNodeAndInheritingDescendants() {
+        var people = KeywordRecord(parentId: nil, groupId: nil, name: "PEOPLE")
+        people.id = 1
+        var anna = KeywordRecord(parentId: 1, groupId: nil, name: "ANNA")
+        anna.id = 2
+        var bob = KeywordRecord(parentId: 1, groupId: 9, name: "BOB")
+        bob.id = 3
+        let ungrouped = KeywordTree(records: [people, anna, bob])
+        #expect(ungrouped.effectiveGroupId(of: 1) == nil)
+        #expect(ungrouped.rootIds.filter { ungrouped.effectiveGroupId(of: $0) == nil } == [1])
+
+        let grouped = ungrouped.settingGroup(7, of: 1)
+        #expect(grouped.node(1)?.groupId == 7)
+        #expect(grouped.effectiveGroupId(of: 2) == 7)  // inherits
+        #expect(grouped.effectiveGroupId(of: 3) == 9)  // own group wins
+        #expect(grouped.path(of: 2) == "PEOPLE > ANNA")  // paths untouched
+
+        let freed = grouped.settingGroup(nil, of: 1)
+        #expect(freed.effectiveGroupId(of: 1) == nil)
+        #expect(freed.effectiveGroupId(of: 2) == nil)
+    }
+
     @Test func ensurePathCreatesChainOnceAndReturnsLeaf() throws {
         let dbQueue = try makeTestDatabase()
         try dbQueue.write { db in
@@ -45,7 +100,8 @@ import Testing
             let peopleId = tree.find(pathComponents: ["PEOPLE"])!
             try KeywordDAO.deleteSubtree(peopleId, in: db)
 
-            #expect(try KeywordRecord.fetchCount(db) == 0)
+            let count = try KeywordRecord.fetchCount(db)
+            #expect(count == 0)
             #expect(try PhotoKeywordRecord.fetchCount(db) == 0)
             #expect(try PhotoRecord.fetchCount(db) == 1)
         }

@@ -187,11 +187,20 @@ struct CollectionEditorSheet: View {
         }
     }
 
+    /// Day-granular: the picker offers only a date, so the stored timestamp
+    /// is local midnight of that day (`QueryEngine.dateRule` compares raw
+    /// timestamps). "After 23 May" therefore starts at 00:00 of the 23rd and
+    /// "Before 23 May" ends at that same instant — not at the wall-clock time
+    /// the rule happened to be created.
     private func dateBinding(_ value: Binding<String>) -> Binding<Date> {
         Binding(
             get: { Double(value.wrappedValue).map { Date(timeIntervalSince1970: $0) } ?? Date() },
-            set: { value.wrappedValue = "\(Int($0.timeIntervalSince1970))" }
+            set: { value.wrappedValue = Self.dayTimestamp($0) }
         )
+    }
+
+    private static func dayTimestamp(_ date: Date) -> String {
+        "\(Int(Calendar.current.startOfDay(for: date).timeIntervalSince1970))"
     }
 
     // MARK: Vocabulary
@@ -245,7 +254,7 @@ struct CollectionEditorSheet: View {
     private func defaultValue(for type: RuleType) -> String {
         switch type {
         case .rating: "0"
-        case .captureDate, .dateRange: "\(Int(Date().timeIntervalSince1970))"
+        case .captureDate, .dateRange: Self.dayTimestamp(Date())
         default: ""
         }
     }

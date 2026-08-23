@@ -173,7 +173,13 @@ extension LibraryController {
                 let scanned = Set(files.map(\.path))
                 let newFiles = files.filter { !existing.contains($0.path) }
                 skipped += files.count - newFiles.count
-                missing += inFolder.lazy.filter { !scanned.contains($0) }.count
+                // Only paths inside the scanned scope can be judged missing:
+                // after a recursive → non-recursive rescan, photos in
+                // subfolders were simply not looked at, not lost on disk.
+                missing += inFolder.lazy.filter { path in
+                    !scanned.contains(path)
+                        && (recursive || (path as NSString).deletingLastPathComponent == folderPath)
+                }.count
 
                 let items = await Self.readMetadata(for: newFiles, maxConcurrent: 12)
                 let result = try await writer.write { db in
@@ -229,6 +235,25 @@ extension LibraryController {
             defer { try? database.pool.close() }
             return try? body(database.pool)
         }.value
+    }
+
+    /// Whether `url` is catalogued by the open library: a registered folder
+    /// itself, or a descendant of a recursive one. Read-only; used by the
+    /// BallastPicker guard (U16) — the picker moves files, which would break
+    /// the catalog's paths.
+    func isFolderInOpenLibrary(_ url: URL) -> Bool {
+        guard let folders = snapshot?.folders, !folders.isEmpty else { return false }
+        let components = url.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        for folder in folders {
+            let registered = URL(fileURLWithPath: folder.path, isDirectory: true)
+                .standardizedFileURL.resolvingSymlinksInPath().pathComponents
+            if registered == components { return true }
+            if folder.recursive, components.count > registered.count,
+               Array(components.prefix(registered.count)) == registered {
+                return true
+            }
+        }
+        return false
     }
 
     /// Folder list of any known library, without opening it into the UI.
@@ -298,18 +323,14 @@ extension LibraryController {
 
     // MARK: Remove folder (U7 confirmation, D4 by-membership)
 
-    func confirmRemoveFolder(_ pending: PendingFolderRemoval) {
-        Task { await removeFolder(pending.folder) }
-    }
-
     func removeFolder(_ folder: FolderRecord, registerInverse: Bool = true) async {
         guard let folderId = folder.id, let pipeline = writePipeline else { return }
         // Same modal shield as `reinsertFolder`: a rating pressed between the
         // capture and the snapshot reload would be lost on undo (it would
         // commit after the capture, then vanish with the delete).
-        let wasSyncing = isSyncing
-        isSyncing = true
-        defer { isSyncing = wasSyncing }
+        let wasBulkUpdating = isBulkUpdating
+        isBulkUpdating = true
+        defer { isBulkUpdating = wasBulkUpdating }
         struct Removal: Sendable {
             var photos: [PhotoRecord]
             var pairs: [(photoId: Int64, keywordId: Int64)]
@@ -349,7 +370,7 @@ extension LibraryController {
     /// registered synchronously inside each other's handler — while the undo
     /// manager is in `isUndoing`/`isRedoing`, which is what routes the inverse
     /// to the redo stack. Registering from the async applier after an `await`
-    /// broke redo (see `registerMetadataUndo`).
+    /// broke redo (the inverse landed on the undo stack instead).
     private func registerRemoveFolderUndo(
         _ folder: FolderRecord, photos: [PhotoRecord], pairs: [(photoId: Int64, keywordId: Int64)]
     ) {
@@ -381,9 +402,9 @@ extension LibraryController {
         // The bulk transaction sits in the write lane: raise the modal shield
         // so a structural edit right after the undo cannot flushSync-block the
         // main thread behind thousands of INSERTs.
-        let wasSyncing = isSyncing
-        isSyncing = true
-        defer { isSyncing = wasSyncing }
+        let wasBulkUpdating = isBulkUpdating
+        isBulkUpdating = true
+        defer { isBulkUpdating = wasBulkUpdating }
         do {
             try await pipeline.submitAndWait { db in
                 var folderRecord = folder

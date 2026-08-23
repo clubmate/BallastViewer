@@ -13,8 +13,16 @@ public protocol BindingKey: Sendable {
 public struct BindingMap<Key: BindingKey>: Equatable, Sendable {
     public private(set) var bindings: [String: String]
 
+    /// Persisted maps may carry the same action under several keys (older
+    /// versions, hand edits); the 1:1 invariant is restored here by keeping,
+    /// per action, the smallest binding string — deterministic across loads.
     public init(bindings: [String: String] = [:]) {
-        self.bindings = bindings
+        var keyByAction: [String: String] = [:]
+        for (key, action) in bindings {
+            if let existing = keyByAction[action], existing <= key { continue }
+            keyByAction[action] = key
+        }
+        self.bindings = Dictionary(uniqueKeysWithValues: keyByAction.map { ($0.value, $0.key) })
     }
 
     public func command(for key: Key) -> ActionCommand? {
@@ -24,8 +32,10 @@ public struct BindingMap<Key: BindingKey>: Equatable, Sendable {
     /// The key bound to a command (for menu display) — nil when unbound.
     public func key(for command: ActionCommand) -> Key? {
         let action = command.actionString
-        return bindings.first { $0.value == action }
-            .flatMap { Key(bindingString: $0.key) }
+        // The map is 1:1, but pick the minimum anyway so the answer never
+        // depends on dictionary iteration order.
+        return bindings.lazy.filter { $0.value == action }.map(\.key).min()
+            .flatMap { Key(bindingString: $0) }
     }
 
     /// Spec §12.4: assigning K → A first removes any existing binding of K,

@@ -29,6 +29,20 @@ struct PhotoPickerWindow: View {
             panelHandle
                 .offset(x: showFolders ? panelWidth - 10 : 0)
         }
+        // U16 guard notice: inline, non-blocking — the user just picks
+        // another folder.
+        .overlay(alignment: .top) {
+            if let notice = model.blockedMessage {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.top, 12)
+                    .padding(.leading, showFolders ? panelWidth : 0)
+                    .transition(.opacity)
+            }
+        }
         .frame(minWidth: 700, minHeight: 450)
         .background(PickerWindowRegistrar(model: model))
         .task {
@@ -106,12 +120,14 @@ struct PhotoPickerWindow: View {
     private var photoPane: some View {
         ZStack {
             Color.black
-            if let box = model.currentImage, model.currentPhoto != nil {
-                SingleImageSurface(image: box.image, orientation: model.currentOrientation)
-            } else if model.decodeFailed {
+            // Failure first: a broken file must show the indicator, not the
+            // previous photo's still-cached image.
+            if model.decodeFailed {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.largeTitle)
                     .foregroundStyle(.red)
+            } else if let box = model.currentImage, model.currentPhoto != nil {
+                SingleImageSurface(image: box.image, orientation: model.currentOrientation)
             } else if model.currentPhoto == nil {
                 Text(model.selectedFolder == nil ? "No Folder Selected" : "No Photos Left")
                     .font(.title)

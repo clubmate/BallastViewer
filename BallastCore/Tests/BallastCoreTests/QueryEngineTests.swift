@@ -123,10 +123,46 @@ private func photo(
         let known = rule("rating", "equals", "3")
         let subject = photo(rating: 3)
         #expect(QueryEngine.matches(subject, facts: facts, rules: [unknown, known], matchAll: true))
-        // All rules unknown → behaves like an empty rule list.
-        #expect(QueryEngine.matches(subject, facts: facts, rules: [unknown], matchAll: true))
+        // All rules unknown → the collection matches NOTHING (D6); only a
+        // genuinely empty rule list matches everything (Q6).
+        #expect(!QueryEngine.matches(subject, facts: facts, rules: [unknown], matchAll: true))
+        #expect(!QueryEngine.matches(subject, facts: facts, rules: [unknown], matchAll: false))
         // Unknown *operator* on a known type is false, not skipped (§7.3).
         #expect(!QueryEngine.matches(subject, facts: facts, rules: [rule("rating", "matchesRegex", "3")], matchAll: true))
+    }
+
+    /// An empty (after trimming) value is "rule not configured yet": it
+    /// constrains nothing, whatever the type or operator.
+    @Test func emptyValueMatchesEverythingForEveryRuleType() {
+        let subject = photo(rating: 3, added: 1000, captured: 500, batch: 42)
+        let ops = ["contains", "equals", "doesNotContain", "doesNotEqual", "greaterThan", "lessThan", "bogus"]
+        for type in RuleType.allCases {
+            for op in ops {
+                for value in ["", "   ", "\t\n"] {
+                    #expect(matches(rule(type.rawValue, op, value), subject), "\(type) \(op) '\(value)'")
+                    #expect(matches(rule(type.rawValue, op, value), photo(rating: 0), PhotoQueryFacts()), "\(type) \(op)")
+                }
+            }
+        }
+        // …but an empty value does not rescue a rule whose type is unknown.
+        #expect(!QueryEngine.matches(subject, facts: facts, rules: [rule("faceCount", "equals", "")], matchAll: true))
+    }
+
+    @Test func valuesAreTrimmedBeforeFolding() {
+        let subject = photo(filename: "IMG_0042.JPG", rating: 3)
+        #expect(matches(rule("keyword", "contains", "  Anna "), subject))
+        #expect(matches(rule("keyword", "equals", " people > anna\n"), subject))
+        #expect(matches(rule("filename", "equals", "  img_0042.jpg "), subject))
+        #expect(matches(rule("filename", "contains", " 0042 "), subject))
+        #expect(!matches(rule("keyword", "doesNotContain", " anna "), subject))
+    }
+
+    @Test func importBatchIgnoresOperatorEvenWhenUnknown() {
+        let subject = photo(batch: 42)
+        #expect(matches(rule("importBatch", "matchesRegex", "42"), subject))
+        #expect(matches(rule("importBatch", "", "42"), subject))
+        #expect(!matches(rule("importBatch", "", "41"), subject))
+        #expect(!matches(rule("importBatch", "equals", "forty-two"), subject))
     }
 
     @Test func matchAllVersusMatchAny() {

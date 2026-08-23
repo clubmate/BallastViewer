@@ -6,8 +6,8 @@ import Observation
 /// The CoreMIDI bridge (spec §13): connects every source (with hot-plug, C10),
 /// parses input through the length-based core parser (C9), dispatches through
 /// the shared ActionDispatcher with per-action debounce (§13.4), and drives
-/// pad LEDs — on = NoteOn velocity 127, off = NoteOn velocity 0, re-asserted
-/// on every Note Off (Q3, §13.7).
+/// pad LEDs — on = NoteOn velocity 127, off = NoteOn velocity 0; lit pads are
+/// re-asserted on their Note Off (Q3, §13.7).
 @MainActor @Observable
 final class MidiService {
     @ObservationIgnored private let midiMap: MidiMapStore
@@ -196,9 +196,11 @@ final class MidiService {
             dispatcher.dispatch(command, source: .midi)
         case .off(let address):
             // Q3: many controllers extinguish a released pad themselves —
-            // immediately re-send its correct state so lit pads stay lit.
-            guard midiMap.map.bindings[address.noteString] != nil else { return }
-            send(address, on: litAddresses.contains(address))
+            // immediately re-assert a LIT pad so it stays lit. Pads that are
+            // off are left alone: a velocity-0 "off" echoed for every Note
+            // Off would flood the device (and some surfaces flash on it).
+            guard litAddresses.contains(address) else { return }
+            send(address, on: true)
         }
     }
 
@@ -259,6 +261,11 @@ final class MidiService {
         let selected = appearance.midiOutputDestination
         for destination in destinations {
             if !selected.isEmpty, destination.name != selected { continue }
+            // Never drive IAC (Inter-Application Communication) buses: they
+            // loop back into our own input as Note On/Off, so every LED
+            // update would re-enter `handle` as a pad press/release and
+            // dispatch actions (or re-assert LEDs in an endless echo).
+            if destination.name.contains("IAC") { continue }
             MIDISend(outputPort, destination.endpoint, &packetList)
         }
     }

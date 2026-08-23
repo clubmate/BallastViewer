@@ -10,6 +10,15 @@ struct SuggestionDropdown: View {
     var rowHeight: CGFloat = 28
     let onPick: (String) -> Void
 
+    static let defaultRowHeight: CGFloat = 28
+    static let maxHeight: CGFloat = 150
+
+    /// The rendered height for `count` rows — callers that position the
+    /// dropdown (offset above a field) need the same number the body uses.
+    static func height(forCount count: Int, rowHeight: CGFloat = defaultRowHeight) -> CGFloat {
+        min(CGFloat(count) * rowHeight, maxHeight)
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -34,7 +43,7 @@ struct SuggestionDropdown: View {
                     }
                 }
             }
-            .frame(height: min(CGFloat(suggestions.count) * rowHeight, 150))
+            .frame(height: Self.height(forCount: suggestions.count, rowHeight: rowHeight))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             .shadow(radius: 4)
             .onChange(of: highlightIndex) {

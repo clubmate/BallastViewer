@@ -18,6 +18,9 @@ public struct PhotoRecord: Codable, Hashable, Sendable, FetchableRecord, Mutable
     public var captureDate: Date?
     public var dateAdded: Date
     public var importBatchId: Int64?
+    /// Rating/keywords changed since the file was last written — the
+    /// metadata write-through's persistent queue (see `MetadataWriteThrough`).
+    public var needsFileWrite: Bool
 
     public init(
         id: Int64? = nil,
@@ -27,7 +30,8 @@ public struct PhotoRecord: Codable, Hashable, Sendable, FetchableRecord, Mutable
         orientation: Int = 1,
         captureDate: Date? = nil,
         dateAdded: Date = Date(),
-        importBatchId: Int64? = nil
+        importBatchId: Int64? = nil,
+        needsFileWrite: Bool = false
     ) {
         self.id = id
         self.folderId = folderId
@@ -38,6 +42,7 @@ public struct PhotoRecord: Codable, Hashable, Sendable, FetchableRecord, Mutable
         self.captureDate = captureDate
         self.dateAdded = dateAdded
         self.importBatchId = importBatchId
+        self.needsFileWrite = needsFileWrite
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {

@@ -21,6 +21,7 @@ extension LibraryController {
         let updates = changed.map { (photoId: $0.id!, rating: $0.rating) }
         persist { db in try PhotoDAO.setRatings(updates, in: db) }
         emitCatalogEvent(.photosUpdated(updates.map(\.photoId)))
+        markNeedsFileWrite(updates.map(\.photoId))
     }
 
     /// Restores absolute per-photo ratings — the undo/redo path.
@@ -38,11 +39,12 @@ extension LibraryController {
         let updates = changed.map { (photoId: $0.id!, rating: $0.rating) }
         persist { db in try PhotoDAO.setRatings(updates, in: db) }
         emitCatalogEvent(.photosUpdated(updates.map(\.photoId)))
+        markNeedsFileWrite(updates.map(\.photoId))
     }
 
     /// Advances each photo's stored orientation through the spec §6.6 cycle.
-    /// Library-only until Save Metadata; display rotates in the view layer
-    /// (Q5), so this is instant. One batch = one undo step (U8).
+    /// Library-only — orientation is never written to files (U17); display
+    /// rotates in the view layer (Q5), so this is instant. One batch = one undo step (U8).
     func rotatePhotos(ids: [Int64]) {
         let before = captureOrientations(of: ids)
         let changed = mutatePhotos(ids: ids) { photo in
@@ -72,6 +74,28 @@ extension LibraryController {
         let updates = changed.map { (photoId: $0.id!, orientation: $0.orientation) }
         persist { db in try PhotoDAO.setOrientations(updates, in: db) }
         emitCatalogEvent(.photosUpdated(updates.map(\.photoId)))
+    }
+
+    // MARK: Metadata write-through bookkeeping
+
+    /// Every rating/keyword mutation ends here: flag the photos (memory + DB,
+    /// so the write survives a crash) and hand them to the debounced writer.
+    /// Undo/redo of such a change goes through the same mutation functions
+    /// and therefore marks again — nothing special to do.
+    func markNeedsFileWrite(_ ids: [Int64]) {
+        guard !ids.isEmpty else { return }
+        let newlyDirty = mutatePhotos(ids: ids) { $0.needsFileWrite = true }.map(\.id!)
+        if !newlyDirty.isEmpty {
+            persist { db in try PhotoDAO.setNeedsFileWrite(true, forPhotoIds: newlyDirty, in: db) }
+        }
+        fileWriteThrough?.schedule(ids)
+    }
+
+    /// The writer confirmed the file carries the current values.
+    func clearNeedsFileWrite(_ ids: [Int64]) {
+        let cleared = mutatePhotos(ids: ids) { $0.needsFileWrite = false }.map(\.id!)
+        guard !cleared.isEmpty else { return }
+        persist { db in try PhotoDAO.setNeedsFileWrite(false, forPhotoIds: cleared, in: db) }
     }
 
     private func captureRatings(of ids: [Int64]) -> [(photoId: Int64, rating: Int)] {

@@ -39,7 +39,11 @@ final class CenterViewModel {
                 hasAnchor = selection.anchorId != nil
             }
             rebuildSelectionSummary()
-            if oldValue.anchorId != selection.anchorId { updateControlSurface() }
+            if oldValue.anchorId != selection.anchorId {
+                updateControlSurface()
+                // Leaving a photo writes its pending metadata now, not in 2 s.
+                if let left = oldValue.anchorId { controller.fileWriteThrough?.flush(left) }
+            }
         }
     }
     /// Stable "is anything selected" for menu enablement — written only when

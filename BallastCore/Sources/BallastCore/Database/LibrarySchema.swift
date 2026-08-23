@@ -125,6 +125,15 @@ public enum LibrarySchema {
             try db.drop(index: "photo_rating")
         }
 
+        migrator.registerMigration("v4-needsFileWrite") { db in
+            // Dirty flag of the automatic metadata write-through: set with
+            // every rating/keyword change, cleared once the file carries the
+            // values. Survives a crash so the next open finishes the writes.
+            try db.alter(table: "photo") { t in
+                t.add(column: "needsFileWrite", .boolean).notNull().defaults(to: false)
+            }
+        }
+
         return migrator
     }
 

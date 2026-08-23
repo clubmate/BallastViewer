@@ -30,14 +30,23 @@ struct MainWindow: View {
     /// hide/show round-trips and relaunches keep the exact width. Persisted
     /// on drag end.
     @State private var sidebarWidth: CGFloat = Self.storedPanelWidth(
-        "sidebarPanelWidth", fallback: 300
+        "sidebarPanelWidth", range: Self.sidebarWidthRange, fallback: 300
     )
     @State private var inspectorWidth: CGFloat = Self.storedPanelWidth(
-        "inspectorPanelWidth", fallback: 350
+        "inspectorPanelWidth", range: Self.inspectorWidthRange, fallback: 350
     )
-    private static func storedPanelWidth(_ key: String, fallback: CGFloat) -> CGFloat {
+    /// The PaneDivider ranges (spec §9.1) — persisted widths are clamped to
+    /// them so a stale or hand-edited default cannot open a pane at a width
+    /// the divider could never produce.
+    private static let sidebarWidthRange: ClosedRange<CGFloat> = 200...300
+    private static let inspectorWidthRange: ClosedRange<CGFloat> = 250...350
+
+    private static func storedPanelWidth(
+        _ key: String, range: ClosedRange<CGFloat>, fallback: CGFloat
+    ) -> CGFloat {
         let stored = UserDefaults.standard.double(forKey: key)
-        return stored > 0 ? stored : fallback
+        guard stored > 0 else { return fallback }
+        return min(range.upperBound, max(range.lowerBound, CGFloat(stored)))
     }
 
     /// Titlebar-separator tone: soft black over the dark chrome, fainter in
@@ -103,10 +112,10 @@ struct MainWindow: View {
         // A real modal shield: while a bulk transaction runs, clicks and
         // keyboard/MIDI actions (guarded in ShortcutMonitor/ActionDispatcher)
         // must not queue mutations behind it, or memory and DB diverge.
-        .allowsHitTesting(!(controller.isImporting || controller.isSyncing))
+        .allowsHitTesting(!controller.isBusy)
         .overlay {
-            if controller.isImporting || controller.isSyncing {
-                ProgressView(controller.isImporting ? "Importing…" : "Syncing metadata…")
+            if controller.isBusy {
+                ProgressView(controller.isImporting ? "Importing…" : "Working…")
                     .padding(20)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
@@ -133,21 +142,6 @@ struct MainWindow: View {
         } message: {
             Text(controller.infoMessage ?? "")
         }
-        .alert(
-            "Remove Folder",
-            isPresented: Binding(
-                get: { controller.pendingFolderRemoval != nil },
-                set: { if !$0 { controller.pendingFolderRemoval = nil } }
-            ),
-            presenting: controller.pendingFolderRemoval
-        ) { pending in
-            Button("Remove \(pending.photoCount) Photo\(pending.photoCount == 1 ? "" : "s")", role: .destructive) {
-                controller.confirmRemoveFolder(pending)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { pending in
-            Text("Remove “\(pending.folder.path)” and its \(pending.photoCount) photo\(pending.photoCount == 1 ? "" : "s") from the catalog?\nYour files on disk are not touched.")
-        }
     }
 
     /// Folder drop imports into the open library, or offers to create one first (U1/U2).
@@ -173,14 +167,14 @@ struct MainWindow: View {
             if center.showLeftPanel {
                 SidebarView(sidebar: sidebar, center: center)
                     .frame(width: sidebarWidth)
-                PaneDivider(width: $sidebarWidth, range: 200...300, direction: 1) {
+                PaneDivider(width: $sidebarWidth, range: Self.sidebarWidthRange, direction: 1) {
                     UserDefaults.standard.set(Double(sidebarWidth), forKey: "sidebarPanelWidth")
                 }
             }
             centerPane
                 .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
             if center.showRightPanel {
-                PaneDivider(width: $inspectorWidth, range: 250...350, direction: -1) {
+                PaneDivider(width: $inspectorWidth, range: Self.inspectorWidthRange, direction: -1) {
                     UserDefaults.standard.set(Double(inspectorWidth), forKey: "inspectorPanelWidth")
                 }
                 InspectorView()
@@ -208,23 +202,28 @@ struct MainWindow: View {
     @ViewBuilder
     private var centerContent: some View {
         let photos = center.visiblePhotos
-        if let pipeline = controller.thumbnails, !photos.isEmpty {
+        if let pipeline = controller.thumbnails {
             let isGrid = center.viewMode == .grid
-            // Both modes live in one ZStack and the grid is only HIDDEN in
-            // single mode: swapping the views rebuilt the NSCollectionView
-            // (new coordinator, full reloadData, O(n) layout) on every
-            // grid⇄single toggle and lost the scroll position. The single
-            // view is cheap to recreate and would otherwise keep decoding
-            // originals for every anchor move while hidden, so it is swapped.
+            // The grid lives for as long as the pipeline does and is only
+            // HIDDEN — in single mode and while the visible list is empty.
+            // Swapping it out rebuilt the NSCollectionView (new coordinator,
+            // full reloadData, O(n) layout) on every grid⇄single toggle and
+            // on every filter that briefly matched nothing, and lost the
+            // scroll position. The single view is cheap to recreate and
+            // would otherwise keep decoding originals for every anchor move
+            // while hidden, so it IS swapped. The empty-state text is an
+            // overlay on top of the (empty) grid.
             ZStack {
                 PhotoGridView(
                     photos: photos, pipeline: pipeline, viewModel: center,
                     selectionColor: NSColor(appearance.selectionColor),
-                    isVisible: isGrid
+                    isVisible: isGrid && !photos.isEmpty
                 )
-                .opacity(isGrid ? 1 : 0)
-                .allowsHitTesting(isGrid)
-                if !isGrid {
+                .opacity(isGrid && !photos.isEmpty ? 1 : 0)
+                .allowsHitTesting(isGrid && !photos.isEmpty)
+                if photos.isEmpty {
+                    emptyStateForCurrentFilter
+                } else if !isGrid {
                     SingleView(
                         photo: center.anchorPhoto,
                         neighbors: center.anchorNeighbors,
@@ -233,12 +232,20 @@ struct MainWindow: View {
                 }
             }
             .task(id: photos.count) {
+                guard !photos.isEmpty else { return }
                 await PerfProbe.runIfRequested(
                     photos: photos, viewModel: center, pipeline: pipeline,
                     controller: controller
                 )
             }
-        } else if controller.snapshot?.photos.isEmpty ?? true {
+        } else {
+            emptyStateForCurrentFilter
+        }
+    }
+
+    @ViewBuilder
+    private var emptyStateForCurrentFilter: some View {
+        if controller.snapshot?.photos.isEmpty ?? true {
             emptyState(
                 title: "No Photos",
                 message: "Add a folder to import photos."
@@ -497,7 +504,7 @@ private struct SearchField: View {
                 if !suggestions.isEmpty {
                     // Dropdown above the field (spec §11.3): clicking a
                     // suggestion replaces the search text with the full path.
-                    let height = min(CGFloat(suggestions.count) * 28, 150)
+                    let height = SuggestionDropdown.height(forCount: suggestions.count)
                     SuggestionDropdown(suggestions: suggestions) { path in
                         suppressNextSuggestionOpen = true
                         center.searchText = path

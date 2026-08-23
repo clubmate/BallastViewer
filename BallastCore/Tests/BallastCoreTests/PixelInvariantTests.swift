@@ -127,7 +127,7 @@ struct PixelInvariantTests {
         #expect(try Self.decodedPixels(of: url) == pixelsBefore, "decoded pixels changed")
     }
 
-    // MARK: Library write path (Save Metadata into Files)
+    // MARK: Library write path (automatic write-through, Lightroom format)
 
     @Test(arguments: [UTType.jpeg, UTType.png])
     func libraryWriteKeepsImageData(type: UTType) throws {
@@ -137,11 +137,44 @@ struct PixelInvariantTests {
         // Two passes with different values: the second rewrites an already
         // patched file, which is the common case after the first sync.
         try assertPixelsUntouched(url) {
-            try MetadataWriter.write(rating: 5, orientation: 6, keywords: ["PEOPLE > ANNA", "TRIP"], to: url)
+            try MetadataWriter.write(rating: 5, keywordPaths: [["PEOPLE", "ANNA"], ["TRIP"]], to: url)
         }
         try assertPixelsUntouched(url) {
-            try MetadataWriter.write(rating: 0, orientation: 1, keywords: [], to: url)
+            try MetadataWriter.write(rating: 0, keywordPaths: [], to: url)
         }
+    }
+
+    /// Hierarchical keywords exercise the `lr:` namespace registration and
+    /// the `rdf:Bag` tag creation — a distinct ImageIO code path from the
+    /// plain `dc:subject` patch, so it gets its own gate.
+    @Test(arguments: [UTType.jpeg, UTType.png])
+    func hierarchicalKeywordWriteKeepsImageData(type: UTType) throws {
+        let url = try writeFixture(type: type)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let deep: [[String]] = [
+            ["PLACES", "EUROPE", "BERLIN", "MITTE"],
+            ["PEOPLE", "FAMILY", "ANNA"],
+            ["PEOPLE", "FAMILY", "BEN"],
+            ["EVENT", "WEDDING 2024"],
+        ]
+        try assertPixelsUntouched(url) {
+            try MetadataWriter.write(rating: 3, keywordPaths: deep, to: url)
+        }
+        // The format landed (not a silent no-op write).
+        let read = MetadataReader.read(from: url)
+        #expect(read.keywords.contains("PLACES > EUROPE > BERLIN > MITTE"))
+        #expect(read.keywords.count == 4)
+        // Re-keying the hierarchy on an already-hierarchical file.
+        try assertPixelsUntouched(url) {
+            try MetadataWriter.write(rating: 1, keywordPaths: [["PEOPLE", "FAMILY", "ANNA"]], to: url)
+        }
+        #expect(MetadataReader.read(from: url).keywords == ["PEOPLE > FAMILY > ANNA"])
+        // Back to an empty set — empty arrays, not a tag deletion.
+        try assertPixelsUntouched(url) {
+            try MetadataWriter.write(rating: 0, keywordPaths: [], to: url)
+        }
+        #expect(MetadataReader.read(from: url).keywords.isEmpty)
     }
 
     // MARK: BallastPicker write path (rotation written straight to the file)

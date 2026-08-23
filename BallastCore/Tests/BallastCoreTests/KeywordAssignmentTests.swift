@@ -58,6 +58,21 @@ import Testing
         #expect(KeywordAutocomplete.suggestions(for: "", tree: tree).isEmpty)
     }
 
+    @Test func suggestionsUseLocalizedStandardOrderLikeSiblings() throws {
+        // Same ordering as tree siblings and chips: "ÄPFEL" next to "APFEL"
+        // (not after "ZEBRA"), and numbers in natural order (2 before 10).
+        let dbQueue = try makeTestDatabase()
+        let tree = try dbQueue.write { db in
+            for name in ["ZEBRA", "ÄPFEL", "APFEL", "LOT 10", "LOT 2"] {
+                try KeywordDAO.ensurePath([name], groupId: nil, in: db)
+            }
+            return KeywordTree(records: try KeywordDAO.fetchAll(db))
+        }
+        #expect(KeywordAutocomplete.suggestions(for: "l", tree: tree) == [
+            "APFEL", "ÄPFEL", "LOT 2", "LOT 10",
+        ])
+    }
+
     @Test func highlightArrowSemantics() {
         // Spec §9.8 table: ↓ wraps; ↑ exits at the first entry, enters at the last.
         var highlight = AutocompleteHighlight()

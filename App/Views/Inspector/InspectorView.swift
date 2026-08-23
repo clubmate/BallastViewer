@@ -3,7 +3,7 @@ import BallastCore
 import SwiftUI
 
 /// Right panel per spec §9.8: filename, rating stars, ADD KEYWORD with
-/// autocomplete, assigned chips (intersection, Q14), Reveal/Share footer.
+/// autocomplete, assigned chips (intersection, Q14), Reveal in Finder footer.
 struct InspectorView: View {
     @Environment(LibraryController.self) private var controller
     @Environment(CenterViewModel.self) private var center
@@ -132,10 +132,11 @@ struct InspectorView: View {
             .disabled(keywordInput.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(8)
+        // No selection: nothing to assign to, so the field and "+" are dead.
         // Bulk transactions (import, metadata load, folder undo) shield the
         // main window but not this field: creating an unknown keyword is a
         // synchronous structural write — see LibraryController.writeSync.
-        .disabled(controller.isBusy)
+        .disabled(!hasSelection || controller.isBusy)
         .roundedFieldChrome()
         .overlay(alignment: .topLeading) {
             // Dropdown overlays below the field (spec §9.8: offset 45).
@@ -210,7 +211,7 @@ struct InspectorView: View {
         )
     }
 
-    // MARK: Footer (Reveal in Finder + Share)
+    // MARK: Footer (Reveal in Finder)
 
     private func footer(hasSelection: Bool) -> some View {
         HStack(spacing: 12) {

@@ -23,7 +23,10 @@ public struct KeyChord: Hashable, Sendable {
 
     public init?(modifiers: Modifiers = [], key: String) {
         let isSpecial = Self.specialKeys.contains(key)
+        // Whitespace is never a plain key: the space bar is "Space", and a
+        // literal " " would be a second, non-canonical spelling of it.
         let isPlain = key.count == 1 && key == key.lowercased()
+            && key.unicodeScalars.allSatisfy { !$0.properties.isWhitespace }
         guard isSpecial || isPlain else { return nil }
         self.modifiers = modifiers
         self.key = key

@@ -39,6 +39,7 @@ extension LibraryController {
         registerUndo("Add Keyword") { $0.removeKeyword(id: keywordId, fromPhotoIds: photoIds) }
         persist { db in try PhotoDAO.assignKeyword(keywordId, toPhotoIds: photoIds, in: db) }
         emitCatalogEvent(.photosUpdated(photoIds))
+        markNeedsFileWrite(photoIds)
     }
 
     func removeKeyword(id keywordId: Int64, fromPhotoIds photoIds: [Int64]) {
@@ -56,6 +57,7 @@ extension LibraryController {
         registerUndo("Remove Keyword") { $0.assignKeyword(id: keywordId, toPhotoIds: photoIds) }
         persist { db in try PhotoDAO.removeKeyword(keywordId, fromPhotoIds: photoIds, in: db) }
         emitCatalogEvent(.photosUpdated(photoIds))
+        markNeedsFileWrite(photoIds)
     }
 
     /// Assigned to every photo → remove from all; otherwise assign to all
@@ -139,6 +141,8 @@ extension LibraryController {
             keywordPathRenamed?(oldPath, newPath)
         }
         emitCatalogEvent(.photosUpdated(carriers))
+        // The file-facing paths of every carrier changed.
+        markNeedsFileWrite(carriers)
     }
 
     /// U7 confirmation numbers for the editor's delete alert.
@@ -160,6 +164,23 @@ extension LibraryController {
                 snapshot.keywordIdsByPhoto[photoId]?.subtract(removedIds)
             }
         }
+        refreshVocabulary()
+        invalidateFacts(forPhotoIds: carriers)
+        emitCatalogEvent(.photosUpdated(carriers))
+        markNeedsFileWrite(carriers)
+    }
+
+    /// Re-homes a top-level keyword into a group (nil = ad-hoc/UNGROUPED).
+    /// Effective groups change for the whole subtree, so carriers get an event
+    /// (chip colours, group rules, counts).
+    func setKeywordGroup(_ id: Int64, groupId: Int64?) {
+        guard let snapshot, let node = snapshot.keywordTree.node(id),
+              node.groupId != groupId else { return }
+        if let groupId, !snapshot.keywordGroups.contains(where: { $0.id == groupId }) { return }
+        guard writeSync({ db in try KeywordDAO.setGroup(groupId, forKeywordId: id, in: db) }) != nil
+        else { return }
+        let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
+        mutateSnapshot { $0.keywordTree = $0.keywordTree.settingGroup(groupId, of: id) }
         refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)
         emitCatalogEvent(.photosUpdated(carriers))
@@ -222,8 +243,10 @@ extension LibraryController {
     /// matching — the spec §8.3 fix asks for this warning).
     func groupDeletionImpact(_ id: Int64) -> (keywordCount: Int, ruleCount: Int) {
         guard let snapshot else { return (0, 0) }
+        // Same predicate as `deleteKeywordGroup`: inherited membership counts,
+        // since those keywords lose their effective group too.
         let members = snapshot.keywordTree.allIdsDepthFirst()
-            .filter { snapshot.keywordTree.node($0)?.groupId == id }
+            .filter { snapshot.keywordTree.effectiveGroupId(of: $0) == id }
         let rules = snapshot.rules.filter {
             RuleType(rawValue: $0.type) == .keywordGroup && $0.value == String(id)
         }

@@ -37,20 +37,25 @@ final class LibraryController {
     /// Drops/panel requests that arrived while an import was running; the
     /// running import drains them in order when it finishes.
     var queuedImports: [QueuedImport] = []
-    /// A metadata sync command is running (used by LibraryController+Sync).
-    var isSyncing = false
-    /// A bulk transaction (import, metadata sync, folder undo) is replacing
+    /// A bulk transaction (folder removal / reinsert-on-undo) is replacing
+    /// catalog state — see `removeFolder` / `reinsertFolder`.
+    var isBulkUpdating = false
+    /// A library snapshot is being loaded off the main thread (`openLoaded`):
+    /// the UI stays live, so mutations must be shielded or they would be
+    /// lost when the freshly loaded snapshot replaces memory.
+    private(set) var isOpening = false
+    /// A bulk transaction (import, folder undo, library open) is replacing
     /// catalog state. The modal shield: MainWindow blocks hit-testing and
     /// ActionDispatcher drops keyboard/MIDI/menu actions while this is set —
     /// a rating pressed mid-transaction would otherwise commit behind it and
     /// leave memory and DB disagreeing without an event.
-    var isBusy: Bool { isImporting || isSyncing || isTerminating }
+    var isBusy: Bool { isImporting || isBulkUpdating || isOpening || isTerminating }
     /// `drainWrites` ran: the pipeline is spent and the process is exiting.
     /// Part of the shield so no late mutation lands on a nil pipeline.
     private(set) var isTerminating = false
     /// Shown by the paths the shield cannot cover (structural writes, library
     /// close/switch) when they are refused mid-transaction.
-    static let busyMessage = "The library is busy — try again when the import/sync has finished."
+    static let busyMessage = "The library is busy — try again when the current operation has finished."
 
     // MARK: Undo (U8)
 
@@ -76,13 +81,6 @@ final class LibraryController {
         undoManager.endUndoGrouping()
     }
 
-    struct PendingFolderRemoval: Identifiable {
-        let folder: FolderRecord
-        let photoCount: Int
-        var id: Int64 { folder.id ?? 0 }
-    }
-    /// Non-nil presents the folder-removal confirmation (U7).
-    var pendingFolderRemoval: PendingFolderRemoval?
     /// Folders dropped while no library was open — imported after creation (U1).
     private var pendingImportFolders: [URL] = []
 
@@ -90,6 +88,10 @@ final class LibraryController {
     /// WritePipeline for why unstructured Tasks are not enough. Internal so
     /// the mutation extensions can submit.
     var writePipeline: WritePipeline?
+    /// Automatic metadata write-through for the open library (rating and
+    /// keywords → image files, Lightroom format). Mutations call
+    /// `markNeedsFileWrite`; the selection flushes the photo it leaves.
+    private(set) var fileWriteThrough: MetadataWriteThrough?
 
     /// Called with (old derived path, new derived path) after a keyword rename
     /// — wired by BallastViewerApp so key/MIDI keyword bindings (stored as
@@ -118,7 +120,7 @@ final class LibraryController {
     /// Derived query facts per photo (resolved keyword paths + effective group
     /// ids + folded filename). Building these walks the keyword tree and
     /// joins/folds strings — cached here because counts rebuilds, collection
-    /// filters, search and metadata sync all hammer the same lookups.
+    /// filters and search all hammer the same lookups.
     /// Invalidated on assignment changes (per photo) and vocabulary changes
     /// (wholesale); filenames never change, so they need no invalidation.
     @ObservationIgnored private var factsCache: [Int64: PhotoQueryFacts] = [:]
@@ -150,6 +152,9 @@ final class LibraryController {
     /// which is fine: the process is about to exit.
     func drainWrites() async {
         isTerminating = true
+        // Files first: clearing a dirty flag is itself a pipeline write, so
+        // the pipeline must still be open while the writer finishes.
+        await fileWriteThrough?.drainForTermination()
         guard let pipeline = writePipeline else { return }
         writePipeline = nil
         await pipeline.shutdown()
@@ -373,6 +378,11 @@ final class LibraryController {
     private func openLoaded(
         _ database: LibraryDatabase, at url: URL, didStartAccess: Bool
     ) async throws {
+        // The UI stays live during the load: raise the modal shield so no
+        // mutation can land on the outgoing catalog and be lost when the
+        // loaded snapshot replaces it (same-URL reopen included).
+        isOpening = true
+        defer { isOpening = false }
         // Reopening the SAME library: queued writes must commit before the
         // new snapshot reads, or they would silently overtake it.
         await writePipeline?.flush()
@@ -404,6 +414,10 @@ final class LibraryController {
         rebuildPhotoIndex()
         refreshVocabulary()
         startFolderAccess(for: loaded.folders)
+        let writeThrough = MetadataWriteThrough(controller: self)
+        fileWriteThrough = writeThrough
+        // Writes an earlier session did not finish (crash, timeout on quit).
+        writeThrough.enqueueAll(loaded.photos.compactMap { $0.needsFileWrite ? $0.id : nil })
         bookmarks.saveLastOpened(url)
         bookmarks.addKnown(url)
         knownLibraries = bookmarks.knownURLs()
@@ -411,6 +425,8 @@ final class LibraryController {
     }
 
     private func releaseCurrent() {
+        fileWriteThrough?.shutdown()
+        fileWriteThrough = nil
         if let pipeline = writePipeline {
             // Drain pending writes BEFORE closing, synchronously: reopening the
             // same library must never load a snapshot that queued writes then
@@ -468,7 +484,7 @@ final class LibraryController {
         if !inaccessible.isEmpty {
             errorMessage = "No access to \(inaccessible.count) photo folder\(inaccessible.count == 1 ? "" : "s") (moved or renamed?):\n"
                 + inaccessible.prefix(8).map { "• " + $0 }.joined(separator: "\n")
-                + "\n\nRe-add the folder\(inaccessible.count == 1 ? "" : "s") to restore thumbnails and metadata sync."
+                + "\n\nRe-add the folder\(inaccessible.count == 1 ? "" : "s") to restore thumbnails."
         }
     }
 
@@ -480,13 +496,7 @@ final class LibraryController {
     /// in-memory authority, so it must not miss a commit that is still queued
     /// (a rating pressed just before an import finishing would visibly revert).
     func refreshSnapshot() async {
-        guard let library else {
-            snapshot = nil
-            rebuildPhotoIndex()
-            refreshVocabulary()
-            emitCatalogEvent(.catalogReplaced)
-            return
-        }
+        guard let library else { return }
         await writePipeline?.flush()
         do {
             snapshot = try await library.pool.read { try LibrarySnapshot.load($0) }
@@ -556,12 +566,20 @@ final class TaskQueue {
     nonisolated init() {}
 
     func run(_ body: @escaping @MainActor () async -> Void) async {
+        await enqueue(body).value
+    }
+
+    /// Appends a job synchronously — the chain position is fixed at the call,
+    /// not when some wrapping Task happens to start, so two synchronous
+    /// callers (Space, then Enter) are ordered exactly as pressed.
+    @discardableResult
+    func enqueue(_ body: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
         let previous = tail
         let task = Task { @MainActor in
             await previous?.value
             await body()
         }
         tail = task
-        await task.value
+        return task
     }
 }

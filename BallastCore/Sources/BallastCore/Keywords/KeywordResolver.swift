@@ -57,7 +57,9 @@ public enum KeywordAutocomplete {
         return tree.allFoldedPaths()
             .filter { $0.folded.contains(foldedNeedle) }
             .map(\.path)
-            .sorted()
+            // Same ordering as tree siblings and chips (Q19): "ÄPFEL" next to
+            // "APFEL", numbers in natural order.
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 }
 

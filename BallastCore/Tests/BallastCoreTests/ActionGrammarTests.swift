@@ -22,6 +22,11 @@ import Testing
     @Test func caseIsSignificant() {
         // Uppercase single chars are invalid; special names must match exactly.
         #expect(KeyChord(key: "A") == nil)
+        // Whitespace is not a plain key — the space bar is spelled "Space".
+        #expect(KeyChord(key: " ") == nil)
+        #expect(KeyChord(key: "\t") == nil)
+        #expect(KeyChord(keyString: "cmd+ ") == nil)
+        #expect(KeyChord(keyString: " ") == nil)
         #expect(KeyChord(keyString: "space") == nil)
         #expect(KeyChord(keyString: "Space") != nil)
         #expect(KeyChord(keyString: "UPARROW") == nil)
@@ -63,6 +68,15 @@ import Testing
 }
 
 @Suite struct KeyMapTests {
+    @Test func initDedupesToOneKeyPerActionDeterministically() {
+        let rate = ActionCommand.app(.rate1).actionString
+        let map = KeyMap(bindings: ["z": rate, "b": rate, "m": rate, "a": ActionCommand.app(.rate2).actionString])
+        #expect(map.bindings == ["b": rate, "a": ActionCommand.app(.rate2).actionString])
+        #expect(map.key(for: .app(.rate1)) == KeyChord(key: "b"))
+        #expect(map.key(for: .app(.rate2)) == KeyChord(key: "a"))
+        #expect(map.key(for: .app(.rate3)) == nil)
+    }
+
     @Test func renameKeywordPathRewritesSubtreeBindings() {
         var map = KeyMap(bindings: [
             "a": ActionCommand.keyword("PEOPLE").actionString,

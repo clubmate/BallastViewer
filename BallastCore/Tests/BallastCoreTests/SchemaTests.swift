@@ -67,6 +67,26 @@ func insertPhoto(_ db: Database, folderId: Int64, path: String, rating: Int = 0)
         }
     }
 
+    @Test func v4AddsDirtyFlagAndDAOHelpersRoundTrip() throws {
+        let dbQueue = try DatabaseQueue()
+        try LibrarySchema.migrator.migrate(dbQueue, upTo: "v3-drop-rating-index")
+        try LibrarySchema.migrator.migrate(dbQueue)
+        try dbQueue.write { db in
+            try LibrarySchema.seed(db)
+            let folderId = try insertFolder(db)
+            var a = PhotoRecord(folderId: folderId, path: "/tmp/photos/a.jpg")
+            var b = PhotoRecord(folderId: folderId, path: "/tmp/photos/b.jpg")
+            try a.insert(db)
+            try b.insert(db)
+            #expect(try PhotoDAO.photoIdsNeedingFileWrite(db).isEmpty)
+            try PhotoDAO.setNeedsFileWrite(true, forPhotoIds: [a.id!, b.id!], in: db)
+            #expect(try PhotoDAO.photoIdsNeedingFileWrite(db) == [a.id!, b.id!])
+            #expect(try PhotoRecord.fetchOne(db, key: a.id!)?.needsFileWrite == true)
+            try PhotoDAO.setNeedsFileWrite(false, forPhotoIds: [a.id!], in: db)
+            #expect(try PhotoDAO.photoIdsNeedingFileWrite(db) == [b.id!])
+        }
+    }
+
     @Test func seedCreatesMetaAndSixDefaultGroups() throws {
         let dbQueue = try makeTestDatabase()
         try dbQueue.read { db in

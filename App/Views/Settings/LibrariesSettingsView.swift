@@ -32,6 +32,12 @@ struct LibrariesSettingsView: View {
         controller.knownLibraries.first { $0.path == selectedPath }
     }
 
+    /// What to manage when nothing valid is selected: the open library,
+    /// else the first by name, else nothing.
+    private var defaultSelectionPath: String {
+        controller.libraryURL?.path ?? sortedLibraries.first?.path ?? ""
+    }
+
     var body: some View {
         Form {
             librarySection
@@ -42,16 +48,12 @@ struct LibrariesSettingsView: View {
         // are refused while a bulk transaction runs (LibraryController.isBusy).
         .disabled(controller.isBusy)
         .onAppear {
-            if selectedURL == nil {
-                selectedPath = controller.libraryURL?.path ?? sortedLibraries.first?.path ?? ""
-            }
+            if selectedURL == nil { selectedPath = defaultSelectionPath }
             reloadFolders()
         }
         .onChange(of: selectedPath) { reloadFolders() }
         .onChange(of: controller.knownLibraries.map(\.path)) {
-            if selectedURL == nil {
-                selectedPath = sortedLibraries.first?.path ?? ""
-            }
+            if selectedURL == nil { selectedPath = defaultSelectionPath }
             reloadFolders()
         }
         // Imports finish asynchronously — refresh the folder list afterwards.

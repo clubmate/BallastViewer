@@ -102,7 +102,8 @@ public struct KeywordTree: Sendable {
         childIdsByParent[id] ?? []
     }
 
-    func pathComponents(of id: Int64) -> [String] {
+    /// Root-first name chain of a node — the file-facing keyword path.
+    public func pathComponents(of id: Int64) -> [String] {
         var components: [String] = []
         var visited: Set<Int64> = []
         var current = nodesById[id]
@@ -197,27 +198,47 @@ public struct KeywordTree: Sendable {
     /// without a DB round-trip after a vocabulary mutation.
     public var allRecords: [KeywordRecord] { Array(nodesById.values) }
 
+    /// Names are normalised (`KeywordDAO.normalize`) on the way in so the
+    /// in-memory tree can never diverge from the DB's storage invariant.
     public func inserting(_ record: KeywordRecord) -> KeywordTree {
-        KeywordTree(records: allRecords + [record])
+        inserting(contentsOf: [record])
     }
 
     public func inserting(contentsOf records: [KeywordRecord]) -> KeywordTree {
-        KeywordTree(records: allRecords + records)
+        KeywordTree(records: allRecords + records.map(Self.normalized))
     }
 
     public func renaming(_ id: Int64, to name: String) -> KeywordTree {
-        KeywordTree(records: allRecords.map { record in
+        let normalized = KeywordDAO.normalize(name)
+        return KeywordTree(records: allRecords.map { record in
             guard record.id == id else { return record }
             var renamed = record
-            renamed.name = name
+            renamed.name = normalized
             return renamed
         })
+    }
+
+    private static func normalized(_ record: KeywordRecord) -> KeywordRecord {
+        var copy = record
+        copy.name = KeywordDAO.normalize(record.name)
+        return copy
     }
 
     public func deletingSubtree(_ id: Int64) -> KeywordTree {
         let removed = Set([id] + descendants(of: id))
         return KeywordTree(records: allRecords.filter { record in
             record.id.map { !removed.contains($0) } ?? false
+        })
+    }
+
+    /// Mirrors `KeywordDAO.setGroup`: re-homes one node into `groupId`
+    /// (nil = ad-hoc). Descendants follow through effective-group inheritance.
+    public func settingGroup(_ groupId: Int64?, of id: Int64) -> KeywordTree {
+        KeywordTree(records: allRecords.map { record in
+            guard record.id == id else { return record }
+            var moved = record
+            moved.groupId = groupId
+            return moved
         })
     }
 

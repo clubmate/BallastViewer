@@ -10,8 +10,11 @@ struct ShortcutsSettingsView: View {
     @Environment(KeyMapStore.self) private var keyMap
     @Environment(MidiMapStore.self) private var midiMap
 
-    /// U11: per-row "was: …" hint, keyed by the row's action string.
-    @State private var conflictHints: [String: String] = [:]
+    /// U11: per-row "was: …" hints, keyed by the row's action string — one
+    /// map per recorder kind so a MIDI overwrite does not erase (or get
+    /// erased by) the key hint on the same row.
+    @State private var keyConflictHints: [String: String] = [:]
+    @State private var midiConflictHints: [String: String] = [:]
     @State private var newKeywordName = ""
     @State private var newKeywordChord: KeyChord?
     @State private var newKeywordAddress: MidiAddress?
@@ -45,13 +48,18 @@ struct ShortcutsSettingsView: View {
         HStack {
             title
             Spacer()
-            if let hint = conflictHints[command.actionString] {
-                Text(hint)
+            if let hint = keyConflictHints[command.actionString] {
+                Text("key \(hint)")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
             KeyRecorderView(chord: keyMap.map.chord(for: command)) { chord in
                 record(chord, for: command)
+            }
+            if let hint = midiConflictHints[command.actionString] {
+                Text("MIDI \(hint)")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
             MidiRecorderView(
                 address: midiMap.map.address(for: command),
@@ -79,7 +87,9 @@ struct ShortcutsSettingsView: View {
                 if let address = binding.address {
                     midiMap.removeBinding(for: address)
                 }
-                conflictHints[ActionCommand.keyword(binding.keyword).actionString] = nil
+                let key = ActionCommand.keyword(binding.keyword).actionString
+                keyConflictHints[key] = nil
+                midiConflictHints[key] = nil
             } label: {
                 Image(systemName: "trash")
             }
@@ -127,7 +137,8 @@ struct ShortcutsSettingsView: View {
                 // entirely — there are no MIDI defaults (spec §9.9/§13.1).
                 keyMap.resetToDefaults()
                 midiMap.clearAll()
-                conflictHints = [:]
+                keyConflictHints = [:]
+                midiConflictHints = [:]
             }
         }
         .padding(12)
@@ -173,9 +184,9 @@ struct ShortcutsSettingsView: View {
         // U11: name the binding this key is taken from instead of silently
         // stealing it. The 1:1 map semantics themselves stay per §12.4.
         if let previous = keyMap.map.command(for: chord), previous != command {
-            conflictHints[command.actionString] = "was: \(displayName(of: previous))"
+            keyConflictHints[command.actionString] = "was: \(displayName(of: previous))"
         } else {
-            conflictHints[command.actionString] = nil
+            keyConflictHints[command.actionString] = nil
         }
         keyMap.assign(chord, to: command)
     }
@@ -183,9 +194,9 @@ struct ShortcutsSettingsView: View {
     private func recordMidi(_ address: MidiAddress, for command: ActionCommand) {
         // Same overwrite hint as keys (U11), same 1:1 semantics (§13.1).
         if let previous = midiMap.map.command(for: address), previous != command {
-            conflictHints[command.actionString] = "was: \(displayName(of: previous))"
+            midiConflictHints[command.actionString] = "was: \(displayName(of: previous))"
         } else {
-            conflictHints[command.actionString] = nil
+            midiConflictHints[command.actionString] = nil
         }
         midiMap.assign(address, to: command)
     }

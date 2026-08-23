@@ -49,6 +49,20 @@ public enum PhotoDAO {
         }
     }
 
+    /// Metadata write-through dirty flag (single-row UPDATEs, one cached
+    /// statement, caller's transaction — same shape as the rating writes).
+    public static func setNeedsFileWrite(_ flag: Bool, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(sql: "UPDATE photo SET needsFileWrite = ? WHERE id = ?")
+        for id in ids {
+            try statement.execute(arguments: [flag, id])
+        }
+    }
+
+    /// Photos whose files still lag behind the library — re-queued on open.
+    public static func photoIdsNeedingFileWrite(_ db: Database) throws -> [Int64] {
+        try Int64.fetchAll(db, sql: "SELECT id FROM photo WHERE needsFileWrite = 1 ORDER BY id")
+    }
+
     /// Idempotent: assigning an already-assigned keyword is a no-op.
     public static func assignKeyword(_ keywordId: Int64, toPhotoIds ids: [Int64], in db: Database) throws {
         for photoId in ids {

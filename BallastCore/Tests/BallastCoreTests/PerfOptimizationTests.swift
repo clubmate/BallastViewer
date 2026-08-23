@@ -43,8 +43,10 @@ import Testing
             #expect(compiled.matches(empty, facts: PhotoQueryFacts()) == expectEmpty,
                     "empty: \(singleRule.type)/\(singleRule.operation)/\(singleRule.value)")
         }
-        // Unknown types are skipped (D6): alone → matches everything (Q6).
-        #expect(CompiledRules([rule("unknownType", "equals", "x")], matchAll: true).matches(empty, facts: PhotoQueryFacts()))
+        // Unknown types are skipped (D6): alone → matches nothing (only a
+        // genuinely empty rule list matches everything, Q6).
+        #expect(!CompiledRules([rule("unknownType", "equals", "x")], matchAll: true).matches(empty, facts: PhotoQueryFacts()))
+        #expect(CompiledRules([], matchAll: true).matches(empty, facts: PhotoQueryFacts()))
         // QueryEngine is a one-shot wrapper with identical results.
         #expect(QueryEngine.matches(photo, facts: facts, rules: table.map(\.0), matchAll: false))
         #expect(!QueryEngine.matches(empty, facts: PhotoQueryFacts(), rules: table.map(\.0), matchAll: true))

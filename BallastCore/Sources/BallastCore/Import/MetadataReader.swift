@@ -5,7 +5,10 @@ public struct PhotoFileMetadata: Equatable, Sendable {
     /// Clamped to 0…5 on read (fixes D5).
     public var rating = 0
     public var orientation = 1
-    /// Uppercased, de-duplicated, sorted ascending (spec §6.1).
+    /// Keyword PATHS in the app's canonical form — components joined with
+    /// `KeywordTree.separator` (`"PEOPLE > ANNA"`) — uppercased,
+    /// de-duplicated, sorted ascending (spec §6.1). Parsed from Lightroom's
+    /// `lr:hierarchicalSubject` (`PEOPLE|ANNA`) when present.
     public var keywords: [String] = []
     /// EXIF DateTimeOriginal.
     public var captureDate: Date?
@@ -20,9 +23,14 @@ public struct PhotoFileMetadata: Equatable, Sendable {
 
 /// Reads the three attributes the app cares about, plus capture date.
 ///
-/// Read order fixes D1's read half: XMP (`xmp:Rating`, `dc:subject`) first —
-/// that is what Lightroom/Bridge/Capture One write — falling back to IPTC
-/// (`StarRating`, `Keywords`). The step-10 writer emits XMP, so round trips hold.
+/// Keywords (Lightroom-compatible, fixes D1's read half):
+/// 1. `lr:hierarchicalSubject` — one path per entry, `|`-separated;
+/// 2. otherwise `dc:subject`, where each entry may itself be a path using
+///    `|` (Lightroom), `" > "` (this app's legacy writer) or be flat;
+/// 3. IPTC `Keywords` ONLY when the file has no XMP packet at all — a packet
+///    with an empty `dc:subject` means "no keywords", and the stale IPTC
+///    block ImageIO keeps in step must not resurrect them.
+/// Rating: `xmp:Rating`, falling back to IPTC `StarRating`.
 public enum MetadataReader {
     /// An unreadable file yields the defaults — an *empty success*, matching the
     /// original (spec §6.1 [QUIRK]): import keeps defaults instead of failing.
@@ -58,29 +66,61 @@ public enum MetadataReader {
         }
 
         var rating: Int?
-        var keywords: [String]?
+        var keywordPaths: [[String]]?
+        var hasXMP = false
         if let metadata = CGImageSourceCopyMetadataAtIndex(source, 0, nil) {
+            hasXMP = true
             if let tag = CGImageMetadataCopyTagWithPath(metadata, nil, "xmp:Rating" as CFString) {
                 rating = intValue(of: tag)
             }
-            if let tag = CGImageMetadataCopyTagWithPath(metadata, nil, "dc:subject" as CFString) {
-                keywords = stringArray(of: tag)
+            let hierarchicalPath = "\(MetadataWriter.lightroomPrefix):hierarchicalSubject" as CFString
+            if let tag = CGImageMetadataCopyTagWithPath(metadata, nil, hierarchicalPath) {
+                keywordPaths = stringArray(of: tag).map(Self.parsePath)
+            } else if let tag = CGImageMetadataCopyTagWithPath(metadata, nil, "dc:subject" as CFString) {
+                keywordPaths = stringArray(of: tag).map(Self.parsePath)
             }
         }
         if rating == nil {
             rating = iptc?[kCGImagePropertyIPTCStarRating] as? Int
         }
-        if keywords == nil {
+        if keywordPaths == nil, !hasXMP {
             if let array = iptc?[kCGImagePropertyIPTCKeywords] as? [String] {
-                keywords = array
+                keywordPaths = array.map(Self.parsePath)
             } else if let single = iptc?[kCGImagePropertyIPTCKeywords] as? String {
-                keywords = [single]
+                keywordPaths = [Self.parsePath(single)]
             }
         }
 
         result.rating = min(5, max(0, rating ?? 0))
-        result.keywords = normalizeKeywords(keywords ?? [])
+        result.keywords = normalizeKeywordPaths(keywordPaths ?? [])
         return result
+    }
+
+    /// Splits one file entry into path components: `|` (Lightroom) wins,
+    /// then the legacy `" > "`; a flat entry is a single component. Components
+    /// are normalised individually so `"people|anna"` and `"PEOPLE > ANNA"`
+    /// both become `["PEOPLE", "ANNA"]`.
+    public static func parsePath(_ entry: String) -> [String] {
+        let pieces: [String]
+        if entry.contains(MetadataWriter.hierarchySeparator) {
+            pieces = entry.components(separatedBy: MetadataWriter.hierarchySeparator)
+        } else if entry.contains(KeywordTree.separator) {
+            pieces = entry.components(separatedBy: KeywordTree.separator)
+        } else {
+            // Tolerate `PEOPLE>ANNA` / `PEOPLE >ANNA` from hand-edited files.
+            pieces = entry.components(separatedBy: ">")
+        }
+        return pieces.map(KeywordDAO.normalize).filter { !$0.isEmpty }
+    }
+
+    /// Canonical path strings from component arrays: joined with
+    /// `KeywordTree.separator`, de-duplicated, sorted.
+    public static func normalizeKeywordPaths(_ paths: [[String]]) -> [String] {
+        let joined = paths
+            .map { $0.map(KeywordDAO.normalize).filter { !$0.isEmpty } }
+            .filter { !$0.isEmpty }
+            .map { $0.joined(separator: KeywordTree.separator) }
+        return Array(Set(joined)).sorted()
     }
 
     /// Uppercase, trim, NFC, de-duplicate, sort — the normalisation the whole

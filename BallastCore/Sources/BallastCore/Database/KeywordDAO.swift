@@ -66,7 +66,7 @@ public enum KeywordDAO {
         // Malformed input like "A >  > B" must not create a node with an empty
         // name mid-path (KeywordResolver filters the same way).
         let names = components.map(normalize).filter { !$0.isEmpty }
-        precondition(!names.isEmpty, "ensurePath needs at least one non-empty component")
+        guard !names.isEmpty else { throw KeywordDAOError.emptyName }
         var created: [KeywordRecord] = []
         var parentId: Int64? = nil
         var currentId: Int64 = 0

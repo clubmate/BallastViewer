@@ -137,10 +137,12 @@ struct SidebarView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer()
-            // Collapsing hides the + button too (Q25).
-            if !collapsed {
+            // Collapsing hides the + button too (Q25). An unsaved group
+            // (nil id) cannot parent a collection — no button rather than a
+            // bogus -1 parent.
+            if !collapsed, let parentId = group.id {
                 Button {
-                    sidebar.namePrompt = .init(target: .newCollection(groupId: groupId))
+                    sidebar.namePrompt = .init(target: .newCollection(groupId: parentId))
                 } label: {
                     Image(systemName: "plus")
                         .font(.caption)

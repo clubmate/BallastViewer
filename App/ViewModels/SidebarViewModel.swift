@@ -12,9 +12,19 @@ final class SidebarViewModel {
     private(set) var counts = SidebarCounts()
     var collapsedGroups: Set<Int64> = [] {
         didSet {
-            guard oldValue != collapsedGroups else { return }
+            guard oldValue != collapsedGroups, !isRestoringCollapsedGroups else { return }
             controller.setCollapsedGroups(collapsedGroups)
         }
+    }
+    /// Set while `collapsedGroups` is loaded FROM the library: a restore is
+    /// not a user edit and must not be written back (the DB already holds
+    /// it; persisting from `.catalogReplaced` would also race the reload).
+    @ObservationIgnored private var isRestoringCollapsedGroups = false
+
+    private func restoreCollapsedGroups() {
+        isRestoringCollapsedGroups = true
+        defer { isRestoringCollapsedGroups = false }
+        collapsedGroups = controller.storedCollapsedGroups
     }
 
     /// Non-nil presents the rule editor sheet with a *copy* (spec §9.7).
@@ -54,7 +64,7 @@ final class SidebarViewModel {
         controller.addCatalogObserver { [weak self] event in
             self?.handle(event)
         }
-        collapsedGroups = controller.storedCollapsedGroups
+        restoreCollapsedGroups()
         refreshLists()
         rebuildCounts()
     }
@@ -94,7 +104,7 @@ final class SidebarViewModel {
         switch event {
         case .catalogReplaced, .collectionsChanged:
             if case .catalogReplaced = event {
-                collapsedGroups = controller.storedCollapsedGroups
+                restoreCollapsedGroups()
             }
             refreshLists()
             rebuildCounts()

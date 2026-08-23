@@ -40,6 +40,10 @@ struct BallastViewerApp: App {
             midiMap.renameKeywordPath(from: oldPath, to: newPath)
         }
         AppDelegate.controller = controller
+        // U16: the picker moves files — refuse folders the open library catalogs.
+        photoPicker.isFolderInOpenLibrary = { [weak controller] url in
+            controller?.isFolderInOpenLibrary(url) ?? false
+        }
     }
 
     var body: some Scene {

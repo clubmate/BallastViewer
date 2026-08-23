@@ -56,7 +56,8 @@ func writeXMPJPEG(to url: URL, rating: String?, subjects: [String]?) throws {
         let sub = root.appendingPathComponent("sub")
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
 
-        for name in ["a.jpg", "B.JPG", "c.txt", ".hidden.jpg"] {
+        // RAW extensions are deliberately not accepted (U15).
+        for name in ["a.jpg", "B.JPG", "c.txt", ".hidden.jpg", "e.cr2", "f.dng", "g.nef", "h.arw", "i.raw"] {
             FileManager.default.createFile(atPath: root.appendingPathComponent(name).path, contents: Data())
         }
         FileManager.default.createFile(atPath: sub.appendingPathComponent("d.png").path, contents: Data())

@@ -33,8 +33,9 @@ actor ThumbnailPipeline {
     nonisolated(unsafe) private let originalsMemory = NSCache<NSString, CGImage>()
     /// mtime per path, cached for the session: the cache key needs it, and a
     /// per-request `stat` made even 100%-memory-hits pay a syscall (a real
-    /// I/O round trip on network volumes). The app itself only rewrites files
-    /// in the metadata save — which calls `fileRewritten(paths:)`.
+    /// I/O round trip on network volumes). The only in-app rewrite of a
+    /// library file is the metadata write-through, which calls
+    /// `fileRewritten(paths:)` so the cached mtime follows.
     private let modificationTimes = OSAllocatedUnfairLock<[String: TimeInterval]>(initialState: [:])
     /// Every long edge requested this session — NSCache cannot be enumerated,
     /// so re-keying a path's entries needs the key space spelled out.
@@ -77,29 +78,31 @@ actor ThumbnailPipeline {
         originalsMemory.countLimit = 12
         originalsMemory.totalCostLimit = 768 * 1024 * 1024
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        cacheDirectory = caches
-            .appendingPathComponent("Thumbnails", isDirectory: true)
-            .appendingPathComponent(libraryUUID, isDirectory: true)
+        let thumbnailsRoot = caches.appendingPathComponent("Thumbnails", isDirectory: true)
+        cacheDirectory = thumbnailsRoot.appendingPathComponent(libraryUUID, isDirectory: true)
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         // The disk cache has no other eviction: stale entries (changed mtime)
-        // and closed-forever libraries would grow it without bound. Delayed so
-        // the ~100k directory stats don't compete with the first visible
-        // thumbnails for disk bandwidth right at library open.
-        Task.detached(priority: .utility) { [cacheDirectory] in
+        // and closed-forever libraries would grow it without bound. The prune
+        // walks the whole `Thumbnails/` root — every library's subdirectory —
+        // against one global budget, oldest files first, so a library that is
+        // never opened again is evicted too. Delayed so the ~100k directory
+        // stats don't compete with the first visible thumbnails for disk
+        // bandwidth right at library open.
+        Task.detached(priority: .utility) {
             try? await Task.sleep(for: .seconds(30))
-            Self.pruneDiskCache(at: cacheDirectory, budgetBytes: 2 * 1024 * 1024 * 1024)
+            Self.pruneDiskCache(root: thumbnailsRoot, budgetBytes: 2 * 1024 * 1024 * 1024)
         }
     }
 
     nonisolated func stats() -> Stats { counterLock.withLock { $0 } }
 
-    /// The metadata save rewrote these files in place: their mtime — and so
-    /// their cache key — changed, but the pixels did not (metadata-only
+    /// The metadata write-through rewrote these files in place: their mtime —
+    /// and so their cache key — changed, but the pixels did not (metadata-only
     /// writes by design). Re-stats only those paths and carries the existing
     /// thumbnails over to the new keys, in memory and on disk, instead of
-    /// decoding the whole library again and stranding the old cache files.
-    /// Nonisolated async: stats and renames are disk I/O, off the actor and
-    /// off the MainActor.
+    /// decoding them again and stranding the old cache files. Nonisolated
+    /// async: stats and renames are disk I/O, off the actor and off the
+    /// MainActor.
     nonisolated func fileRewritten(paths: [String]) async {
         let edges = knownEdges.withLock { $0 }
         for path in paths {
@@ -163,8 +166,8 @@ actor ThumbnailPipeline {
     /// would serialise every thumbnail request (including pure memory hits)
     /// behind a syscall.
     nonisolated func thumbnail(forPath path: String, longEdge: Int) async -> CGImageBox? {
-        knownEdges.withLock { _ = $0.insert(longEdge) }
         let modificationTime = resolvedModificationTime(atPath: path)
+        knownEdges.withLock { _ = $0.insert(longEdge) }
         let key = "\(path)|\(Int(modificationTime))|\(longEdge)"
         return await cachedThumbnail(key: key, path: path, longEdge: longEdge)
     }
@@ -425,21 +428,22 @@ actor ThumbnailPipeline {
         return TimeInterval(status.st_mtimespec.tv_sec)
     }
 
-    /// Oldest-first prune to a byte budget. Access times are not tracked
-    /// (touching on every hit would cost more than it saves); creation order is
-    /// a good-enough proxy for a regenerable cache.
-    nonisolated private static func pruneDiskCache(at directory: URL, budgetBytes: Int) {
+    /// Oldest-first prune of the whole `Thumbnails/` root (all library
+    /// subdirectories) to one global byte budget. Access times are not
+    /// tracked (touching on every hit would cost more than it saves);
+    /// creation order is a good-enough proxy for a regenerable cache.
+    nonisolated private static func pruneDiskCache(root: URL, budgetBytes: Int) {
         let fileManager = FileManager.default
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
-            options: .skipsHiddenFiles
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
+        guard let enumerator = fileManager.enumerator(
+            at: root, includingPropertiesForKeys: keys, options: .skipsHiddenFiles
         ) else { return }
-        var files: [(url: URL, size: Int, date: Date)] = entries.compactMap { url in
-            guard let values = try? url.resourceValues(
-                forKeys: [.fileSizeKey, .contentModificationDateKey]
-            ) else { return nil }
-            return (url, values.fileSize ?? 0, values.contentModificationDate ?? .distantPast)
+        var files: [(url: URL, size: Int, date: Date)] = []
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true
+            else { continue }
+            files.append((url, values.fileSize ?? 0, values.contentModificationDate ?? .distantPast))
         }
         var total = files.reduce(0) { $0 + $1.size }
         guard total > budgetBytes else { return }
