@@ -62,6 +62,7 @@ struct BallastviewerApp: App {
                 }
         }
         .commands {
+            AboutCommands()
             // The Window scene drops the automatic File menu entirely — bring
             // back ⌘W, which also closes the Settings window.
             CommandGroup(replacing: .saveItem) {

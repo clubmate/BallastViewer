@@ -17,7 +17,8 @@ targets:
     info:
       path: App/Resources/Info.plist
       properties:
-        CFBundleIconFile: AppIcon
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.photography
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSPrincipalClass: NSApplication
@@ -40,8 +41,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bolliboll.ballastviewer
         PRODUCT_NAME: ballastviewer
+        # Overridden by scripts/build.sh with the git commit count.
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: App/Resources/ballastviewer.entitlements
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"

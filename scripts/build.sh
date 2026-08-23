@@ -7,11 +7,20 @@ cd "$(dirname "$0")/.."
 # xcode-select on this machine points at CommandLineTools; xcodebuild needs the full Xcode.
 export DEVELOPER_DIR=/Applications/Xcode.app
 
+# Version = number of commits; a dirty tree counts as the commit it is about
+# to become, so every change bumps the number shown in About.
+BUILD_NUMBER=$(git rev-list --count HEAD)
+if [[ -n "$(git status --porcelain)" ]]; then
+  BUILD_NUMBER=$((BUILD_NUMBER + 1))
+fi
+
 xcodegen generate
 xcodebuild -project ballastviewer.xcodeproj \
   -scheme ballastviewer \
   -configuration Debug \
   -derivedDataPath build \
+  MARKETING_VERSION="0.1.$BUILD_NUMBER" \
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   -quiet build
 
 echo "Built: build/Build/Products/Debug/ballastviewer.app"
