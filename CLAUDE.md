@@ -1,11 +1,11 @@
-# ballastviewer
+# BallastViewer
 
 macOS photo culling & keywording app (SwiftUI, Swift 6, GRDB/SQLite). Never modifies pixels. Clean-room rebuild of "BALLASTVIEW" — the behavioral contract is `docs/BALLASTVIEW-SPEC.md`, the roadmap and deliberate deviations are `docs/PLAN.md`.
 
 ## Build & test
 
 - **Logic tests (fast, preferred):** `./scripts/test.sh` — runs `swift test --package-path BallastCore`. Works without a full Xcode build.
-- **App build:** `./scripts/build.sh` — runs `xcodegen generate` then `xcodebuild`. App lands at `build/Build/Products/Debug/ballastviewer.app`.
+- **App build:** `./scripts/build.sh` — runs `xcodegen generate` then `xcodebuild`. App lands at `build/Build/Products/Debug/BallastViewer.app`.
 - `xcode-select` on this machine points at a broken CommandLineTools install (SDK/compiler mismatch); **every** `xcodebuild` AND `swift` invocation needs `DEVELOPER_DIR=/Applications/Xcode.app` (both scripts set it). SourceKit diagnostics in the editor showing "SDK is not supported by the compiler" are this same issue — ignore them; trust the scripts.
 - **After adding/removing/renaming files in `App/`:** run `xcodegen generate`. The `.xcodeproj` is generated from `project.yml` and gitignored — edit `project.yml`, never the xcodeproj. (`BallastCore/` is a plain SPM package; no regeneration needed there.)
 
@@ -20,7 +20,7 @@ macOS photo culling & keywording app (SwiftUI, Swift 6, GRDB/SQLite). Never modi
 ## Conventions
 
 - Swift 6 strict concurrency; `@Observable` (Observation framework), no Combine.
-- UI text in English. App name is "ballastviewer" (the spec's "BALLASTVIEW" is the old name).
+- UI text in English. App name is "BallastViewer" (bundle id, `.ballastlib` extension and the repo stay lowercase) (the spec's "BALLASTVIEW" is the old name).
 - Before touching behavior, read spec §16: tables of bugs to fix (D1–D6, C1–C14) and quirks to keep (Q1–Q28). Deviations U1–U13 are listed in `docs/PLAN.md` and win over the spec.
 - Sacred interactions (never regress): Q1 neighbour rule, Q2 stable random order, Q5 instant rotation via stored orientation, Q21 shortcut suppression while search is focused.
 

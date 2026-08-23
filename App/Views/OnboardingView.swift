@@ -9,7 +9,7 @@ struct OnboardingView: View {
             Image(systemName: "photo.stack")
                 .font(.system(size: 56))
                 .foregroundStyle(.secondary)
-            Text("Welcome to ballastviewer")
+            Text("Welcome to BallastViewer")
                 .font(.title)
             Text("A library catalogs your photos for fast culling and keywording.\nYour image files are never modified or moved.")
                 .multilineTextAlignment(.center)

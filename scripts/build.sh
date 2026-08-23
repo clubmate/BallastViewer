@@ -15,12 +15,12 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 xcodegen generate
-xcodebuild -project ballastviewer.xcodeproj \
-  -scheme ballastviewer \
+xcodebuild -project BallastViewer.xcodeproj \
+  -scheme BallastViewer \
   -configuration Debug \
   -derivedDataPath build \
   MARKETING_VERSION="0.1.$BUILD_NUMBER" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   -quiet build
 
-echo "Built: build/Build/Products/Debug/ballastviewer.app"
+echo "Built: build/Build/Products/Debug/BallastViewer.app"

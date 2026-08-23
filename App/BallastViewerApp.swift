@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct BallastviewerApp: App {
+struct BallastViewerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     @State private var controller: LibraryController
@@ -47,7 +47,7 @@ struct BallastviewerApp: App {
         // state (controller, selection, shortcut monitor, undo manager) is
         // strictly single-window — File ▸ New Window would show a second view
         // of the same selection and steal the shortcut whitelist.
-        Window("ballastviewer", id: "main") {
+        Window("BallastViewer", id: "main") {
             MainWindow()
                 .environment(controller)
                 .environment(center)

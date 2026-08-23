@@ -70,7 +70,7 @@ final class MidiService {
                 }
             }
         }
-        MIDIClientCreateWithBlock("ballastviewer" as CFString, &client, notify)
+        MIDIClientCreateWithBlock("BallastViewer" as CFString, &client, notify)
         // Input uses the protocol API (the legacy packet-list input port stops
         // receiving on current macOS); events arrive as MIDI-1.0-in-UMP words
         // and are flattened back to a plain byte stream for the core parser.

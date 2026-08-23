@@ -10,7 +10,7 @@ public enum LibraryDatabaseError: Error, LocalizedError, Equatable {
         case .alreadyExists(let url):
             "A file or folder already exists at \(url.path)."
         case .notALibrary(let url):
-            "\(url.lastPathComponent) is not a ballastviewer library."
+            "\(url.lastPathComponent) is not a BallastViewer library."
         }
     }
 }

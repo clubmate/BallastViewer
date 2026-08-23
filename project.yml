@@ -1,4 +1,4 @@
-name: ballastviewer
+name: BallastViewer
 options:
   createIntermediateGroups: true
   deploymentTarget:
@@ -7,7 +7,7 @@ packages:
   BallastCore:
     path: BallastCore
 targets:
-  ballastviewer:
+  BallastViewer:
     type: application
     platform: macOS
     sources:
@@ -24,14 +24,14 @@ targets:
         NSPrincipalClass: NSApplication
         NSHighResolutionCapable: true
         CFBundleDocumentTypes:
-          - CFBundleTypeName: ballastviewer Library
+          - CFBundleTypeName: BallastViewer Library
             CFBundleTypeRole: Editor
             LSHandlerRank: Owner
             LSItemContentTypes:
               - com.bolliboll.ballastviewer.library
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: com.bolliboll.ballastviewer.library
-            UTTypeDescription: ballastviewer Library
+            UTTypeDescription: BallastViewer Library
             UTTypeConformsTo:
               - com.apple.package
             UTTypeTagSpecification:
@@ -40,12 +40,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bolliboll.ballastviewer
-        PRODUCT_NAME: ballastviewer
+        PRODUCT_NAME: BallastViewer
         # Overridden by scripts/build.sh with the git commit count.
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        CODE_SIGN_ENTITLEMENTS: App/Resources/ballastviewer.entitlements
+        CODE_SIGN_ENTITLEMENTS: App/Resources/BallastViewer.entitlements
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
         SWIFT_VERSION: "6.0"

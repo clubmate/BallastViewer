@@ -6,7 +6,7 @@ import AppKit
 /// silently lose its commit.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Injected by BallastviewerApp at startup.
+    /// Injected by BallastViewerApp at startup.
     static weak var controller: LibraryController?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

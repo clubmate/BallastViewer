@@ -1,4 +1,4 @@
-# ballastviewer — Roadmap
+# BallastViewer — Roadmap
 
 Rebuild of BALLASTVIEW per `docs/BALLASTVIEW-SPEC.md`. One step per Claude Code session; each step ends buildable and testable. Check off steps as they complete and add notes future steps need.
 

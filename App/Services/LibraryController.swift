@@ -78,7 +78,7 @@ final class LibraryController {
     var writePipeline: WritePipeline?
 
     /// Called with (old derived path, new derived path) after a keyword rename
-    /// — wired by BallastviewerApp so key/MIDI keyword bindings (stored as
+    /// — wired by BallastViewerApp so key/MIDI keyword bindings (stored as
     /// path strings) follow the rename instead of going stale.
     var keywordPathRenamed: (@MainActor (String, String) -> Void)?
 
