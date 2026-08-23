@@ -2,7 +2,7 @@ import AppKit
 import BallastCore
 import ImageIO
 
-/// State of the Photo Picker utility window — a first-pass selection tool
+/// State of the BallastPicker utility window — a first-pass selection tool
 /// for freshly developed scans. Deliberately decoupled from the library: no
 /// database, no catalog, no key map, no MIDI. It works straight on the file
 /// system: folders inside a chosen root, one photo at a time, Enter moves the

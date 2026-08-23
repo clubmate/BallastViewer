@@ -2,7 +2,7 @@ import AppKit
 import BallastCore
 import SwiftUI
 
-/// The Photo Picker utility window: folder list left (photos waiting, picks
+/// The BallastPicker utility window: folder list left (photos waiting, picks
 /// in `_auswahl` highlighted; collapsed via a grab-handle at its edge),
 /// current photo right. The root is chosen once per window session (reopen
 /// the picker to change it). Keys: ← → step, Space rotate, Return move to
@@ -42,7 +42,7 @@ struct PhotoPickerWindow: View {
             #endif
         }
         .alert(
-            "Photo Picker",
+            "BallastPicker",
             isPresented: Binding(
                 get: { model.errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }

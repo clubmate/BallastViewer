@@ -72,12 +72,11 @@ struct BallastViewerApp: App {
             LibraryCommands(controller: controller, settingsRouter: settingsRouter)
             PhotoCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
             ViewCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
-            PhotoPickerCommands()
         }
 
         // Standalone first-pass selection utility — shares nothing with the
         // library window except the image surface.
-        Window("Photo Picker", id: "photoPicker") {
+        Window("BallastPicker", id: "photoPicker") {
             PhotoPickerWindow(model: photoPicker)
         }
         .defaultSize(width: 1100, height: 750)

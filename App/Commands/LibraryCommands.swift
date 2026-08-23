@@ -3,12 +3,14 @@ import SwiftUI
 /// The Library menu, U14: a plain switcher — one entry per known library with
 /// a checkmark on the open one, plus a jump into Settings ▸ Libraries. All
 /// management (create, open, folders) lives in Settings; day-to-day import
-/// still works via folder drag & drop and the sidebar button.
+/// still works via folder drag & drop and the sidebar button. BallastPicker
+/// (U16) sits here too: it is the tool used before a folder joins a library.
 struct LibraryCommands: Commands {
     let controller: LibraryController
     let settingsRouter: SettingsRouter
 
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandMenu("Library") {
@@ -32,6 +34,9 @@ struct LibraryCommands: Commands {
                 openSettings()
             }
             .keyboardShortcut("l", modifiers: [.shift, .command])
+            Divider()
+            Button("BallastPicker") { openWindow(id: "photoPicker") }
+                .keyboardShortcut("p", modifiers: [.shift, .command])
         }
     }
 }
