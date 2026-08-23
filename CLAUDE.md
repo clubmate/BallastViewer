@@ -17,6 +17,14 @@ macOS photo culling & keywording app (SwiftUI, Swift 6, GRDB/SQLite). Never modi
 - A library on disk is a document package `Name.ballastlib/` containing `library.sqlite`. Thumbnails live in `~/Library/Caches/` (regenerable), keyed by path+mtime+size-bucket — **not** by orientation; rotation happens in the view layer.
 - Keywords are rows with identity (`keyword` table, `parent_id` tree); photos reference them by id via `photo_keyword`. Path strings like `PEOPLE > ANNA` are derived, never stored. At UI/metadata boundaries keywords are ALWAYS UPPERCASE.
 
+## Pixel invariant (non-negotiable)
+
+The app NEVER alters image data. Assigning keywords/ratings/rotation in the library touches only `library.sqlite`. Only two code paths write image files — `MetadataWriter.write` (Library ▸ Save Metadata into Files) and `MetadataWriter.writeOrientation` (BallastPicker rotation) — and both copy the compressed image data byte-for-byte (`CGImageDestinationCopyImageSource`), patching metadata only, via temp file + atomic replace.
+
+- **Any change that touches file writing** (MetadataWriter, a new write path, new formats, ImageIO options) MUST keep `PixelInvariantTests` green and MUST extend that suite for the new path. The suite checks the *compressed* image data (JPEG scan / PNG IDAT) byte-for-byte on a gradient+noise fixture, not just decoded pixels — flat test images can hide a recompression. Never weaken it.
+- No other code may write into an image file. Thumbnails go to the cache directory only.
+- Before claiming "pixels untouched", run `./scripts/test.sh` and say so explicitly in the summary.
+
 ## Conventions
 
 - Swift 6 strict concurrency; `@Observable` (Observation framework), no Combine.
