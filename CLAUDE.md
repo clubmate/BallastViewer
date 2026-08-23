@@ -27,4 +27,4 @@ macOS photo culling & keywording app (SwiftUI, Swift 6, GRDB/SQLite). Never modi
 ## Workflow
 
 - `docs/PLAN.md` has 12 steps with checkboxes. Work **one step per session**; the user is token-conscious — do not run ahead into later steps. When a step is done: check it off in `docs/PLAN.md`, note anything a later step must know, and verify its acceptance criteria.
-- **When a step is complete, commit and push** (standing instruction from the user): `git add -A`, commit with a descriptive message + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`, push to `origin master` (github.com/clubmate/ballastviewer — HTTPS credentials are in the keychain; there is no `gh` CLI).
+- **When a step is complete, commit and push** (standing instruction from the user): `git add -A`, commit with a descriptive message + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`, push to `origin master` (github.com/clubmate/BallastViewer — HTTPS credentials are in the keychain; there is no `gh` CLI).
