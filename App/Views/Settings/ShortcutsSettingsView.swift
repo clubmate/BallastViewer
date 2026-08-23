@@ -88,14 +88,19 @@ struct ShortcutsSettingsView: View {
         }
     }
 
-    /// New keyword shortcuts run through the same normalise-and-resolve pipeline
-    /// as the panel (C7): binding `anna` stores `keyword:PEOPLE > ANNA` when the
-    /// node exists, uppercased text otherwise.
+    /// The add row offers the library's vocabulary as a menu (full paths, Q16
+    /// order) instead of free text, so a binding can only target an existing
+    /// node. Keywords that already have a row are left out.
     private var addKeywordRow: some View {
         HStack {
-            TextField("Keyword", text: $newKeywordName)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 180)
+            Picker("Keyword", selection: $newKeywordName) {
+                Text("Choose Keyword…").tag("")
+                ForEach(unboundKeywordPaths, id: \.self) { path in
+                    Text(path).tag(path)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 220)
             Spacer()
             KeyRecorderView(chord: newKeywordChord) { newKeywordChord = $0 }
             MidiRecorderView(
@@ -159,6 +164,11 @@ struct ShortcutsSettingsView: View {
                 address: midiMap.map.address(for: .keyword(keyword))
             )
         }
+    }
+
+    private var unboundKeywordPaths: [String] {
+        let bound = Set(keywordBindings.map(\.keyword))
+        return (controller.snapshot?.keywordTree.allPaths() ?? []).filter { !bound.contains($0) }
     }
 
     private func record(_ chord: KeyChord, for command: ActionCommand) {

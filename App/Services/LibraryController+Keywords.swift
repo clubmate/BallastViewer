@@ -163,6 +163,19 @@ extension LibraryController {
 
     // MARK: Groups
 
+    /// Appends a group (end of the Q18 order) and returns it — the editor opens
+    /// the group sheet right after, mirroring `createKeyword`.
+    @discardableResult
+    func createKeywordGroup(name: String, color: String) -> KeywordGroupRecord? {
+        guard snapshot != nil,
+              let created: KeywordGroupRecord = writeSync({ db in
+                  try KeywordDAO.createGroup(name: name, color: color, in: db)
+              })
+        else { return nil }
+        mutateSnapshot { $0.keywordGroups.append(created) }
+        return created
+    }
+
     func renameKeywordGroup(_ id: Int64, to newName: String) {
         let name = KeywordDAO.normalize(newName)
         guard !name.isEmpty else { return }

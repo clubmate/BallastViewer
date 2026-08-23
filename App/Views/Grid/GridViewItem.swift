@@ -1,8 +1,8 @@
 import AppKit
 import BallastCore
 
-/// One reusable grid item: transparent while loading (spec §9.3), 3 pt accent
-/// border with radius 4 when selected. The bitmap is decoded unrotated and
+/// One reusable grid item: transparent while loading (spec §9.3), 3 pt border
+/// in the Settings ▸ Appearance selection colour with radius 4 when selected. The bitmap is decoded unrotated and
 /// transformed at the layer level (Q5), so rotation never re-decodes.
 final class GridViewItem: NSCollectionViewItem {
     static let identifier = NSUserInterfaceItemIdentifier("GridViewItem")
@@ -19,6 +19,7 @@ final class GridViewItem: NSCollectionViewItem {
         photo: GridPhoto,
         bucket: Int,
         isSelected: Bool,
+        selectionColor: NSColor,
         pipeline: ThumbnailPipeline,
         onClick: @escaping (Int64, NSEvent.ModifierFlags, Int) -> Void
     ) {
@@ -26,7 +27,7 @@ final class GridViewItem: NSCollectionViewItem {
         photoId = photo.id
         itemView.onClick = { modifiers, clickCount in onClick(photo.id, modifiers, clickCount) }
         itemView.setOrientation(photo.orientation)
-        setSelected(isSelected)
+        setSelected(isSelected, color: selectionColor)
         loadTask?.cancel()
 
         // Synchronous memory hit: the cached bitmap lands in the SAME frame
@@ -49,8 +50,8 @@ final class GridViewItem: NSCollectionViewItem {
         }
     }
 
-    func setSelected(_ selected: Bool) {
-        itemView.setSelectedVisual(selected)
+    func setSelected(_ selected: Bool, color: NSColor) {
+        itemView.setSelectedVisual(selected, color: color)
     }
 
     /// Value-only refresh for an already-configured item — rotation updates the
@@ -106,22 +107,11 @@ final class GridItemView: NSView {
         }
     }
 
-    func setSelectedVisual(_ selected: Bool) {
+    func setSelectedVisual(_ selected: Bool, color: NSColor) {
         withoutAnimation {
             layer?.borderWidth = selected ? 3 : 0
-            layer?.borderColor = NSColor.controlAccentColor.cgColor
+            layer?.borderColor = color.cgColor
             layer?.cornerRadius = selected ? 4 : 0
-        }
-    }
-
-    /// CGColor snapshots do not follow the system accent colour or light/
-    /// dark switches; re-resolve so selected cells do not keep the old tint.
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            withoutAnimation {
-                layer?.borderColor = NSColor.controlAccentColor.cgColor
-            }
         }
     }
 

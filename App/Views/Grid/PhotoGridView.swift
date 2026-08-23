@@ -13,8 +13,12 @@ struct PhotoGridView: NSViewRepresentable {
     let photos: [GridPhoto]
     let pipeline: ThumbnailPipeline
     let viewModel: CenterViewModel
-    /// Settings ▸ Appearance "Spacing between images" (0–50, Q23).
-    var spacing: Double = 12
+    /// Border colour of selected cells (Settings ▸ Appearance).
+    var selectionColor: NSColor = .controlAccentColor
+
+    /// Gap and outer padding in points (Q23: one value for both) — fixed by
+    /// design, no longer a preference.
+    static let spacing: Double = 10
 
     func makeCoordinator() -> Coordinator {
         Coordinator(viewModel: viewModel)
@@ -81,7 +85,7 @@ struct PhotoGridView: NSViewRepresentable {
         context.coordinator.apply(
             photos: photos,
             columnCount: viewModel.columnCount,
-            spacing: spacing,
+            selectionColor: selectionColor,
             selection: viewModel.selection,
             pipeline: pipeline
         )
@@ -109,6 +113,7 @@ struct PhotoGridView: NSViewRepresentable {
         private var orderedIds: [Int64] = []
         private var indexById: [Int64: Int] = [:]
         private var selection = SelectionModel()
+        private var selectionColor: NSColor = .controlAccentColor
         private var pipeline: ThumbnailPipeline?
 
         init(viewModel: CenterViewModel) {
@@ -118,7 +123,7 @@ struct PhotoGridView: NSViewRepresentable {
         func apply(
             photos newPhotos: [GridPhoto],
             columnCount: Int,
-            spacing: Double,
+            selectionColor newSelectionColor: NSColor,
             selection newSelection: SelectionModel,
             pipeline: ThumbnailPipeline
         ) {
@@ -151,12 +156,13 @@ struct PhotoGridView: NSViewRepresentable {
             }
 
             if let layout = collectionView?.collectionViewLayout as? GridFlowLayout,
-               layout.columnCount != columnCount || layout.spacing != spacing {
+               layout.columnCount != columnCount {
                 layout.columnCount = columnCount
-                layout.spacing = spacing
                 layout.invalidateLayout()
             }
 
+            let colorChanged = selectionColor != newSelectionColor
+            selectionColor = newSelectionColor
             let previousSelection = selection
             selection = newSelection
             if needsReload {
@@ -164,7 +170,7 @@ struct PhotoGridView: NSViewRepresentable {
                 // paths — drop them, the new visible set re-requests.
                 cancelAllPrefetches()
                 collectionView?.reloadData()
-            } else if previousSelection != newSelection {
+            } else if previousSelection != newSelection || colorChanged {
                 refreshVisibleSelection()
             }
             if previousSelection.anchorId != newSelection.anchorId {
@@ -183,7 +189,7 @@ struct PhotoGridView: NSViewRepresentable {
         private func refreshVisibleSelection() {
             guard let collectionView else { return }
             for case let item as GridViewItem in collectionView.visibleItems() {
-                item.setSelected(selection.isSelected(item.photoId))
+                item.setSelected(selection.isSelected(item.photoId), color: selectionColor)
             }
         }
 
@@ -286,6 +292,7 @@ struct PhotoGridView: NSViewRepresentable {
                 photo: photo,
                 bucket: bucket,
                 isSelected: selection.isSelected(photo.id),
+                selectionColor: selectionColor,
                 pipeline: pipeline
             ) { [weak self] id, modifiers, clickCount in
                 self?.viewModel.handleClick(on: id, modifiers: modifiers, clickCount: clickCount)
@@ -299,7 +306,7 @@ struct PhotoGridView: NSViewRepresentable {
 /// cell = (width − (N+1)·spacing) / N, floored at 10 (spec §9.3/Q23).
 final class GridFlowLayout: NSCollectionViewFlowLayout {
     var columnCount = 5
-    var spacing: CGFloat = 12
+    let spacing = CGFloat(PhotoGridView.spacing)
     /// The viewport width the current layout was prepared for — the guard that
     /// keeps scrolling and height-only changes from re-preparing O(photos).
     private(set) var lastLayoutWidth: CGFloat = 0

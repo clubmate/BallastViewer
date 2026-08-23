@@ -31,13 +31,24 @@ struct KeywordsSettingsView: View {
     var body: some View {
         Group {
             if let snapshot = controller.snapshot {
-                ScrollView {
-                    // Lazy: a large vocabulary must not lay out every row on
-                    // each snapshot change.
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(snapshot.keywordGroups) { group in
-                            groupSection(group, tree: snapshot.keywordTree)
+                VStack(spacing: 0) {
+                    ScrollView {
+                        // Lazy: a large vocabulary must not lay out every row on
+                        // each snapshot change.
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(snapshot.keywordGroups) { group in
+                                groupSection(group, tree: snapshot.keywordTree)
+                            }
                         }
+                        .padding(12)
+                    }
+                    Divider()
+                    HStack {
+                        Text("“+” on a group adds a keyword to it; right-click a keyword for sub-keywords.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("New Group") { addGroup() }
                     }
                     .padding(12)
                 }
@@ -180,6 +191,7 @@ struct KeywordsSettingsView: View {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderless)
+                .help("Add keyword to \(group.name)")
             }
             .padding(.vertical, 4)
             .contentShape(Rectangle())
@@ -291,6 +303,16 @@ struct KeywordsSettingsView: View {
         else { return }
         if let parentId { collapsedKeywords.remove(parentId) }
         beginRename(id, tree: controller.snapshot?.keywordTree)
+    }
+
+    /// Same create-then-edit flow as keywords: the group exists immediately
+    /// (next free palette colour), the sheet lets the user name it.
+    private func addGroup() {
+        let used = Set((controller.snapshot?.keywordGroups ?? []).map { $0.color.uppercased() })
+        let color = keywordGroupPalette.first { !used.contains($0.uppercased()) } ?? keywordGroupPalette[0]
+        if let group = controller.createKeywordGroup(name: "NEW GROUP", color: color) {
+            editingGroup = group
+        }
     }
 
     private func beginRename(_ id: Int64, tree: KeywordTree?) {

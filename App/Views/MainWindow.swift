@@ -254,7 +254,7 @@ struct MainWindow: View {
                 case .grid:
                     PhotoGridView(
                         photos: photos, pipeline: pipeline, viewModel: center,
-                        spacing: appearance.gridSpacing
+                        selectionColor: NSColor(appearance.selectionColor)
                     )
                 case .single:
                     SingleView(

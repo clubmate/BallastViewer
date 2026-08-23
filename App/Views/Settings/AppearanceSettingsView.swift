@@ -1,32 +1,52 @@
 import SwiftUI
 
-/// Settings ▸ Appearance (spec §9.9): grid spacing, centre background color,
-/// MIDI debounce. All values live in `AppearanceStore` (UserDefaults).
+/// Settings ▸ Appearance: centre background and selection colours. Grid
+/// spacing is fixed in code (`PhotoGridView.spacing`). Values live in
+/// `AppearanceStore` (UserDefaults).
 struct AppearanceSettingsView: View {
+    @Environment(AppearanceStore.self) private var appearance
+
+    var body: some View {
+        Form {
+            Section("Color") {
+                ColorPicker(
+                    "Background Color",
+                    selection: colorBinding(\.backgroundHex),
+                    supportsOpacity: true
+                )
+                ColorPicker(
+                    "Selection Color",
+                    selection: colorBinding(\.selectionHex),
+                    supportsOpacity: false
+                )
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Round-trips through the canonical `#RRGGBBAA` codec (C8).
+    private func colorBinding(
+        _ keyPath: ReferenceWritableKeyPath<AppearanceStore, String>
+    ) -> Binding<Color> {
+        Binding(
+            get: { Color(hex: appearance[keyPath: keyPath]) ?? .clear },
+            set: { newColor in
+                if let hex = newColor.canonicalHex {
+                    appearance[keyPath: keyPath] = hex
+                }
+            }
+        )
+    }
+}
+
+/// Settings ▸ MIDI: debounce and LED output device (spec §9.9, U12).
+struct MidiSettingsView: View {
     @Environment(AppearanceStore.self) private var appearance
     @Environment(MidiService.self) private var midi
 
     var body: some View {
         @Bindable var appearance = appearance
         Form {
-            Section("Grid") {
-                HStack {
-                    Slider(value: $appearance.gridSpacing, in: 0...50, step: 1) {
-                        Text("Spacing between images")
-                    }
-                    Text("\(Int(appearance.gridSpacing)) pt")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, alignment: .trailing)
-                }
-            }
-            Section("Background") {
-                ColorPicker(
-                    "Background Color",
-                    selection: backgroundBinding,
-                    supportsOpacity: true
-                )
-            }
             Section("MIDI") {
                 TextField(
                     "Debounce Time (ms)",
@@ -45,19 +65,5 @@ struct AppearanceSettingsView: View {
             }
         }
         .formStyle(.grouped)
-    }
-
-    /// Round-trips through the canonical `#RRGGBBAA` codec (C8).
-    private var backgroundBinding: Binding<Color> {
-        Binding(
-            get: {
-                appearance.backgroundColor
-            },
-            set: { newColor in
-                if let hex = newColor.canonicalHex {
-                    appearance.backgroundHex = hex
-                }
-            }
-        )
     }
 }

@@ -14,6 +14,9 @@ struct SettingsView: View {
             AppearanceSettingsView()
                 .tabItem { Label("Appearance", systemImage: "paintpalette") }
                 .tag(SettingsRouter.Tab.appearance)
+            MidiSettingsView()
+                .tabItem { Label("MIDI", systemImage: "pianokeys") }
+                .tag(SettingsRouter.Tab.midi)
             KeywordsSettingsView()
                 .tabItem { Label("Keywords", systemImage: "tag") }
                 .tag(SettingsRouter.Tab.keywords)
