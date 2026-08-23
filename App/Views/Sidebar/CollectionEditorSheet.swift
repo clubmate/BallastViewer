@@ -74,7 +74,7 @@ struct CollectionEditorSheet: View {
         .frame(minWidth: 500, minHeight: 400)
     }
 
-    // MARK: Rule row: type (130) · operator (120) · value control
+    // MARK: Rule row: type · operator · value, three equal columns
 
     private func ruleRow(_ rule: Binding<CollectionDraft.DraftRule>) -> some View {
         HStack(spacing: 8) {
@@ -84,7 +84,7 @@ struct CollectionEditorSheet: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 130)
+            .frame(maxWidth: .infinity)
 
             Picker("", selection: rule.operation) {
                 ForEach(operators(for: rule.wrappedValue.type, including: rule.wrappedValue.operation), id: \.self) { op in
@@ -92,10 +92,10 @@ struct CollectionEditorSheet: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 120)
+            .frame(maxWidth: .infinity)
 
-            // The value takes whatever is left so the delete button always
-            // sits at the right edge, whatever control the type uses.
+            // Equal-width columns keep the delete button at the right edge,
+            // whatever control the type uses.
             valueControl(rule)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
