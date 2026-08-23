@@ -178,7 +178,7 @@ struct SidebarView: View {
         }
         .onDrop(
             of: [UTType.plainText],
-            delegate: RowReorderDelegate(targetId: groupId, session: $groupReorder)
+            delegate: RowReorderDelegate(targetId: groupId, session: groupReorder)
         )
 
         if !collapsed {
@@ -218,7 +218,7 @@ struct SidebarView: View {
             }
             .onDrop(
                 of: [UTType.plainText],
-                delegate: RowReorderDelegate(targetId: collectionId, session: $collectionReorder)
+                delegate: RowReorderDelegate(targetId: collectionId, session: collectionReorder)
             )
         }
     }

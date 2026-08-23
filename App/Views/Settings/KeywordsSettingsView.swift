@@ -230,7 +230,7 @@ struct KeywordsSettingsView: View {
             }
             .onDrop(
                 of: [UTType.plainText],
-                delegate: RowReorderDelegate(targetId: groupId, session: $groupReorder)
+                delegate: RowReorderDelegate(targetId: groupId, session: groupReorder)
             )
 
             if !collapsed {

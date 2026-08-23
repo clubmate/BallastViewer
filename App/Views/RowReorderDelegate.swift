@@ -6,17 +6,22 @@ import SwiftUI
 /// reorder (sync write + event) for every row crossed. Reordering within one
 /// id list only; each list keeps its own session so ids of different tables
 /// never collide.
-struct RowReorderSession {
+///
+/// A class (not a struct in `@State`): the debounced flush needs a stable
+/// reference to cancel, and the delegates are value types created per row.
+@MainActor @Observable
+final class RowReorderSession {
     private(set) var draggedId: Int64?
     /// The visual order while a drag is in flight; nil = render the model.
     private(set) var order: [Int64]?
     /// The last order handed to `commit` — a repeated `flush` is a no-op.
-    private var committed: [Int64] = []
-    private var commit: (([Int64]) -> Void)?
+    @ObservationIgnored private var committed: [Int64] = []
+    @ObservationIgnored private var commit: (([Int64]) -> Void)?
+    @ObservationIgnored private var scheduledFlush: Task<Void, Never>?
 
     /// Starts a session from the row's `onDrag`. A session still open from a
     /// drag that was cancelled outside the list is flushed first.
-    mutating func begin(draggedId: Int64, order: [Int64], commit: @escaping ([Int64]) -> Void) {
+    func begin(draggedId: Int64, order: [Int64], commit: @escaping ([Int64]) -> Void) {
         flush()
         self.draggedId = draggedId
         self.order = order
@@ -25,7 +30,7 @@ struct RowReorderSession {
     }
 
     /// Moves the dragged row before/after `targetId` in the local copy.
-    mutating func move(over targetId: Int64) {
+    func move(over targetId: Int64) {
         guard let draggedId, draggedId != targetId, var ids = order,
               let from = ids.firstIndex(of: draggedId),
               let to = ids.firstIndex(of: targetId)
@@ -37,15 +42,30 @@ struct RowReorderSession {
     /// Persists the local order if it changed. Safe to call mid-drag (the
     /// session stays open), so a drag leaving the list commits what the user
     /// saw without breaking the shuffle if it comes back.
-    mutating func flush() {
+    func flush() {
+        scheduledFlush?.cancel()
+        scheduledFlush = nil
         if let order, order != committed {
             commit?(order)
             committed = order
         }
     }
 
+    /// Flush once the pointer has rested — rows fire `dropExited` for every
+    /// row crossed, and a cancelled drag (Esc, release outside) ends with an
+    /// exit too, so this is what keeps the model in step without one write
+    /// per row.
+    func scheduleFlush() {
+        scheduledFlush?.cancel()
+        scheduledFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            self?.flush()
+        }
+    }
+
     /// Flush and end the session (the drop landed).
-    mutating func end() {
+    func end() {
         flush()
         draggedId = nil
         order = nil
@@ -69,10 +89,14 @@ struct RowReorderSession {
 /// commits on drop.
 struct RowReorderDelegate: DropDelegate {
     let targetId: Int64
-    @Binding var session: RowReorderSession
+    let session: RowReorderSession
 
     func dropEntered(info: DropInfo) {
         session.move(over: targetId)
+    }
+
+    func dropExited(info: DropInfo) {
+        session.scheduleFlush()
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {

@@ -108,9 +108,11 @@ final class PhotoPickerModel {
         scanGeneration += 1
         photos = []
         index = 0
+        // Blank now and bump the decode generation, so a decode still in
+        // flight for the previous folder cannot land in the cleared cache.
+        showCurrent()
         guard let folder = selectedFolder else {
             revealAfterLoad = nil
-            showCurrent()
             return
         }
         let generation = scanGeneration
@@ -246,6 +248,11 @@ final class PhotoPickerModel {
         let target = PhotoPickerScanner.selectionFolder(for: folder.url)
         let destination = target.appendingPathComponent(url.lastPathComponent)
         do {
+            // Space then Enter: a rotation still queued for this file must
+            // reach it before it moves, or the queued write hits a dead path.
+            if let pending = pendingOrientationWrites.removeValue(forKey: url.path) {
+                try MetadataWriter.writeOrientation(pending, to: url)
+            }
             try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
             guard !FileManager.default.fileExists(atPath: destination.path) else {
                 errorMessage = "\(url.lastPathComponent) already exists in \(PhotoPickerScanner.selectionFolderName)."
