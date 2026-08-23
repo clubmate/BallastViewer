@@ -100,7 +100,7 @@ struct ShortcutsSettingsView: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 220)
+            .frame(width: 220, alignment: .leading)
             Spacer()
             KeyRecorderView(chord: newKeywordChord) { newKeywordChord = $0 }
             MidiRecorderView(
@@ -121,9 +121,6 @@ struct ShortcutsSettingsView: View {
 
     private var footer: some View {
         HStack {
-            Text("Click 'None' or the existing key to record a new shortcut.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             Spacer()
             Button("Reset Defaults") {
                 // Restores the spec §12.3 key map and clears the MIDI map

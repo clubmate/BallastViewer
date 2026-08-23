@@ -44,9 +44,6 @@ struct KeywordsSettingsView: View {
                     }
                     Divider()
                     HStack {
-                        Text("“+” adds a keyword to a group or a sub-keyword to a keyword.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                         Spacer()
                         Button("New Group") { addGroup() }
                     }
