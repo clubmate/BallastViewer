@@ -63,10 +63,10 @@ struct BallastViewerApp: App {
         }
         .commands {
             AboutCommands()
-            // The Window scene drops the automatic File menu entirely — bring
-            // back ⌘W, which also closes the Settings window.
-            CommandGroup(replacing: .saveItem) {
-                Button("Close") { NSApp.keyWindow?.performClose(nil) }
+            // No File menu by design: the single Window scene has nothing to
+            // put there. ⌘W lives in the app menu so Settings can still be closed.
+            CommandGroup(after: .appSettings) {
+                Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
                     .keyboardShortcut("w")
             }
             LibraryCommands(controller: controller, settingsRouter: settingsRouter)
