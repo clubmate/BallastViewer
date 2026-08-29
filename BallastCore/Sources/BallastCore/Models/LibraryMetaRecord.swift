@@ -17,6 +17,8 @@ public struct LibraryMetaRecord: Codable, Hashable, Sendable, FetchableRecord, P
     public var selectedCollection: String?
     /// JSON array of collapsed smart-group ids.
     public var collapsedGroups: String
+    /// User-editable display name; nil/empty falls back to the package filename.
+    public var name: String?
 
     public init(
         id: Int64 = 1,
@@ -24,7 +26,8 @@ public struct LibraryMetaRecord: Codable, Hashable, Sendable, FetchableRecord, P
         createdAt: Date = Date(),
         lastImportBatchId: Int64? = nil,
         selectedCollection: String? = nil,
-        collapsedGroups: String = "[]"
+        collapsedGroups: String = "[]",
+        name: String? = nil
     ) {
         self.id = id
         self.libraryUUID = libraryUUID
@@ -32,5 +35,6 @@ public struct LibraryMetaRecord: Codable, Hashable, Sendable, FetchableRecord, P
         self.lastImportBatchId = lastImportBatchId
         self.selectedCollection = selectedCollection
         self.collapsedGroups = collapsedGroups
+        self.name = name
     }
 }

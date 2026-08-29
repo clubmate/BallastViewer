@@ -19,7 +19,7 @@ struct LibraryCommands: Commands {
             }
             ForEach(controller.knownLibraries, id: \.path) { url in
                 Toggle(
-                    url.lastPathComponent,
+                    controller.displayName(for: url),
                     isOn: Binding(
                         get: { url.path == controller.libraryURL?.path },
                         set: { selected in

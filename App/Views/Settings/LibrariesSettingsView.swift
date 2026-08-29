@@ -10,6 +10,11 @@ struct LibrariesSettingsView: View {
 
     @State private var selectedPath = ""
     @State private var managedFolders: [FolderRecord] = []
+    /// The name field's text plus the library it belongs to — captured at load
+    /// so a commit racing a selection switch never renames the wrong library.
+    @State private var editedName = ""
+    @State private var editedNamePath = ""
+    @FocusState private var nameFieldFocused: Bool
     /// Pending "delete library" confirmation — the package goes to the Trash.
     @State private var pendingDelete: URL?
     /// Pending folder-removal confirmation (U7, with photo count).
@@ -23,7 +28,8 @@ struct LibrariesSettingsView: View {
 
     private var sortedLibraries: [URL] {
         controller.knownLibraries.sorted {
-            $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent)
+            controller.displayName(for: $0)
+                .localizedCaseInsensitiveCompare(controller.displayName(for: $1))
                 == .orderedAscending
         }
     }
@@ -50,11 +56,19 @@ struct LibrariesSettingsView: View {
         .onAppear {
             if selectedURL == nil { selectedPath = defaultSelectionPath }
             reloadFolders()
+            loadEditedName()
         }
-        .onChange(of: selectedPath) { reloadFolders() }
+        .onChange(of: selectedPath) {
+            // A rename typed just before switching still belongs to the
+            // previous selection — commit it before the field is reloaded.
+            commitName()
+            reloadFolders()
+            loadEditedName()
+        }
         .onChange(of: controller.knownLibraries.map(\.path)) {
             if selectedURL == nil { selectedPath = defaultSelectionPath }
             reloadFolders()
+            loadEditedName()
         }
         // Imports finish asynchronously — refresh the folder list afterwards.
         .onChange(of: controller.isImporting) { _, importing in
@@ -73,7 +87,7 @@ struct LibrariesSettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { url in
-            Text("Move “\(url.lastPathComponent)” to the Trash?\nYour photo files on disk are not touched — only the library catalog is deleted.")
+            Text("Move “\(controller.displayName(for: url))” to the Trash?\nYour photo files on disk are not touched — only the library catalog is deleted.")
         }
         .alert(
             "Remove Folder",
@@ -109,8 +123,18 @@ struct LibrariesSettingsView: View {
             } else {
                 Picker("Library", selection: $selectedPath) {
                     ForEach(sortedLibraries, id: \.path) { url in
-                        Text(url.lastPathComponent).tag(url.path)
+                        Text(controller.displayName(for: url)).tag(url.path)
                     }
+                }
+                TextField(
+                    "Name",
+                    text: $editedName,
+                    prompt: Text(selectedURL?.lastPathComponent ?? "")
+                )
+                .focused($nameFieldFocused)
+                .onSubmit { commitName() }
+                .onChange(of: nameFieldFocused) { _, focused in
+                    if !focused { commitName() }
                 }
             }
             HStack {
@@ -131,7 +155,7 @@ struct LibrariesSettingsView: View {
     @ViewBuilder
     private var foldersSection: some View {
         if let url = selectedURL {
-            Section("Folders in \(url.lastPathComponent)") {
+            Section("Folders in \(controller.displayName(for: url))") {
                 if managedFolders.isEmpty {
                     Text("No folders imported yet.")
                         .foregroundStyle(.secondary)
@@ -159,6 +183,22 @@ struct LibrariesSettingsView: View {
                 Button("Add Folder…") { controller.presentAddFolderPanel(for: url) }
             }
         }
+    }
+
+    /// Loads the stored name of the current selection into the field.
+    private func loadEditedName() {
+        editedName = selectedURL.flatMap { controller.libraryNames[$0.path] } ?? ""
+        editedNamePath = selectedPath
+    }
+
+    /// Persists the field if it actually changed. Keyed to `editedNamePath`,
+    /// not the live selection — see the state declaration.
+    private func commitName() {
+        guard let url = controller.knownLibraries.first(where: { $0.path == editedNamePath })
+        else { return }
+        let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != (controller.libraryNames[url.path] ?? "") else { return }
+        Task { await controller.setLibraryName(trimmed, forLibraryAt: url) }
     }
 
     private func reloadFolders() {

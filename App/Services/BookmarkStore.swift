@@ -13,6 +13,10 @@ struct BookmarkStore {
     private static let lastOpenedKey = "lastOpenedLibraryBookmark"
     /// Historic key name — pre-U14 recents carry over as known libraries.
     private static let knownKey = "recentLibraryBookmarks"
+    /// Path → display name. A CACHE of `libraryMeta.name` (the authority lives
+    /// inside each library.sqlite) so the Library menu and Settings can show
+    /// names of closed libraries without opening their pools.
+    private static let namesKey = "libraryDisplayNames"
 
     // MARK: Last opened (auto-reopen)
 
@@ -45,6 +49,19 @@ struct BookmarkStore {
         var entries = rawKnown()
         entries.removeAll { resolve($0)?.path == url.path }
         defaults.set(entries, forKey: Self.knownKey)
+        setDisplayName(nil, forPath: url.path)
+    }
+
+    // MARK: Display names (cache of libraryMeta.name)
+
+    func displayNames() -> [String: String] {
+        defaults.dictionary(forKey: Self.namesKey) as? [String: String] ?? [:]
+    }
+
+    func setDisplayName(_ name: String?, forPath path: String) {
+        var names = displayNames()
+        names[path] = name
+        defaults.set(names, forKey: Self.namesKey)
     }
 
     /// Entries that no longer resolve are dropped silently.

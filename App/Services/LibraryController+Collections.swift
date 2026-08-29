@@ -163,7 +163,8 @@ extension LibraryController {
     /// changed column is written — persisting the whole in-memory row let a
     /// sidebar click queued during an import commit a stale
     /// `lastImportBatchId` on top of the batch the import had just recorded.
-    private func persistMeta(column: String, value: String?) {
+    /// Internal so the library-rename path (+Import) can use the same lane.
+    func persistMeta(column: String, value: String?) {
         guard let metaId = snapshot?.meta.id else { return }
         persist { db in
             try LibraryMetaRecord.filter(key: metaId).updateAll(db, Column(column).set(to: value))

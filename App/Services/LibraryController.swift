@@ -19,6 +19,24 @@ final class LibraryController {
     /// Every library the app knows (U14): the Library menu's switcher list,
     /// managed in Settings ▸ Libraries. Most recently opened first.
     private(set) var knownLibraries: [URL] = []
+    /// Display names of known libraries (path → `libraryMeta.name`), mirrored
+    /// from a UserDefaults cache so closed libraries show their name without
+    /// opening their pools. The authority is each library's own meta row.
+    private(set) var libraryNames: [String: String] = [:]
+
+    /// What the UI shows for a library: its stored display name, else the
+    /// package filename (extension included, U13).
+    func displayName(for url: URL) -> String {
+        if let name = libraryNames[url.path], !name.isEmpty { return name }
+        return url.lastPathComponent
+    }
+
+    /// Keeps the in-memory and UserDefaults name caches in step. Internal so
+    /// the rename path in LibraryController+Import can call it.
+    func updateNameCache(_ name: String?, forPath path: String) {
+        libraryNames[path] = name
+        bookmarks.setDisplayName(name, forPath: path)
+    }
 
     /// Non-nil presents the app-wide error alert. User-initiated failures are
     /// never silent (fixes spec §4.1/§4.2).
@@ -237,6 +255,7 @@ final class LibraryController {
     var isLibraryOpen: Bool { library != nil }
 
     init() {
+        libraryNames = bookmarks.displayNames()
         knownLibraries = bookmarks.knownURLs()
         reopenLastLibrary()
     }
@@ -332,6 +351,7 @@ final class LibraryController {
         }
         bookmarks.removeKnown(url)
         knownLibraries = bookmarks.knownURLs()
+        libraryNames[url.path] = nil
     }
 
     private func reopenLastLibrary() {
@@ -421,6 +441,9 @@ final class LibraryController {
         bookmarks.saveLastOpened(url)
         bookmarks.addKnown(url)
         knownLibraries = bookmarks.knownURLs()
+        // Opening is when the meta row is authoritative — refresh the name
+        // cache (covers libraries renamed on another machine).
+        updateNameCache(loaded.meta.name, forPath: url.path)
         emitCatalogEvent(.catalogReplaced)
     }
 

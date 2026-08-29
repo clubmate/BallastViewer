@@ -87,6 +87,28 @@ func insertPhoto(_ db: Database, folderId: Int64, path: String, rating: Int = 0)
         }
     }
 
+    @Test func v5AddsLibraryNameAndItRoundTrips() throws {
+        // A database stopped at v4 (pre-name libraries) must migrate cleanly
+        // and read back with a nil name; a stored name round-trips.
+        let dbQueue = try DatabaseQueue()
+        try LibrarySchema.migrator.migrate(dbQueue, upTo: "v4-needsFileWrite")
+        try dbQueue.write { db in
+            // Raw insert: the Swift record already carries `name`, which the
+            // v4 table doesn't have yet — exactly the situation on disk.
+            try db.execute(
+                sql: "INSERT INTO libraryMeta (id, libraryUUID, createdAt) VALUES (1, ?, ?)",
+                arguments: [UUID().uuidString, Date()]
+            )
+        }
+        try LibrarySchema.migrator.migrate(dbQueue)
+        try dbQueue.write { db in
+            #expect(try LibraryMetaRecord.fetchOne(db)?.name == nil)
+            try LibraryMetaRecord.filter(key: 1)
+                .updateAll(db, Column("name").set(to: "Familienfotos"))
+            #expect(try LibraryMetaRecord.fetchOne(db)?.name == "Familienfotos")
+        }
+    }
+
     @Test func seedCreatesMetaAndSixDefaultGroups() throws {
         let dbQueue = try makeTestDatabase()
         try dbQueue.read { db in

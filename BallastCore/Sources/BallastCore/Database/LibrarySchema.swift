@@ -134,6 +134,14 @@ public enum LibrarySchema {
             }
         }
 
+        migrator.registerMigration("v5-library-name") { db in
+            // User-editable display name (Settings ▸ Libraries). NULL means
+            // "no name set" — the UI falls back to the package filename.
+            try db.alter(table: "libraryMeta") { t in
+                t.add(column: "name", .text)
+            }
+        }
+
         return migrator
     }
 

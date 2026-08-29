@@ -237,6 +237,32 @@ extension LibraryController {
         }.value
     }
 
+    /// Sets the display name of any known library (Settings ▸ Libraries).
+    /// A blank name clears back to the package filename. The open library
+    /// writes through the pipeline (snapshot first); closed ones write
+    /// directly into their meta row. Both update the UserDefaults name cache
+    /// so the Library menu and window title follow immediately.
+    func setLibraryName(_ rawName: String, forLibraryAt url: URL) async {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name: String? = trimmed.isEmpty ? nil : trimmed
+        if url.path == libraryURL?.path {
+            mutateSnapshot { $0.meta.name = name }
+            persistMeta(column: "name", value: name)
+        } else {
+            let saved = await Self.withClosedLibraryPool(at: url) { pool in
+                try pool.write { db in
+                    try LibraryMetaRecord.filter(key: 1)
+                        .updateAll(db, Column("name").set(to: name))
+                }
+            }
+            guard saved != nil else {
+                errorMessage = "Could not rename “\(url.lastPathComponent)” — the library could not be opened."
+                return
+            }
+        }
+        updateNameCache(name, forPath: url.path)
+    }
+
     /// Whether `url` is catalogued by the open library: a registered folder
     /// itself, or a descendant of a recursive one. Read-only; used by the
     /// BallastPicker guard (U16) — the picker moves files, which would break
@@ -304,20 +330,27 @@ extension LibraryController {
         Task {
             // Validation open runs off the MainActor (disk I/O, possibly a
             // slow volume); the error is surfaced here, not later in the menu.
-            let validation: Result<Void, any Error> = await Task.detached(priority: .userInitiated) {
+            // The same brief open reads the stored display name so the menu
+            // and Settings show it right away.
+            let validation: Result<String?, any Error> = await Task.detached(priority: .userInitiated) {
                 do {
                     let database = try LibraryDatabase.open(at: url)
-                    try? database.pool.close()
-                    return .success(())
+                    defer { try? database.pool.close() }
+                    let name = try? database.pool.read { db in
+                        try LibraryMetaRecord.fetchOne(db)?.name
+                    }
+                    return .success(name ?? nil)
                 } catch {
                     return .failure(error)
                 }
             }.value
-            if case .failure(let error) = validation {
+            switch validation {
+            case .failure(let error):
                 errorMessage = "“\(url.lastPathComponent)” is not a usable library.\n\(error.localizedDescription)"
-                return
+            case .success(let name):
+                addKnownLibrary(url)
+                updateNameCache(name, forPath: url.path)
             }
-            addKnownLibrary(url)
         }
     }
 

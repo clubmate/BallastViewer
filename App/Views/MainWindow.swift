@@ -82,7 +82,7 @@ struct MainWindow: View {
         // the AppKit titlebar would otherwise tint differently over the dark
         // grid than over the panels.
         .background(.bar)
-        .navigationTitle(controller.libraryURL?.lastPathComponent ?? "BallastViewer")
+        .navigationTitle(controller.libraryURL.map { controller.displayName(for: $0) } ?? "BallastViewer")
         .background(MainWindowRegistrar())
         // The environment undo manager can be nil on the first body pass and
         // arrive later; onAppear alone would then leave Edit ▸ Undo dead.
