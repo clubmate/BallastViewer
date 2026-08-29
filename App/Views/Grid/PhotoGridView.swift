@@ -244,7 +244,7 @@ struct PhotoGridView: NSViewRepresentable {
 
         private func currentBucket(_ collectionView: NSCollectionView) -> Int {
             let cellPoints = (collectionView.collectionViewLayout as? GridFlowLayout)?
-                .itemSize.width ?? 128
+                .cellSize ?? 128
             let scale = collectionView.window?.backingScaleFactor ?? 2
             return ThumbnailBuckets.bucket(forPixelSize: Int(cellPoints * scale))
         }
@@ -348,44 +348,97 @@ final class GridScrollView: NSScrollView {
     }
 }
 
-/// Flow layout that recomputes the square cell size from the current width:
-/// cell = (width − (N+1)·spacing) / N, floored at 10 (spec §9.3/Q23).
-final class GridFlowLayout: NSCollectionViewFlowLayout {
+/// Hand-rolled N-column square grid layout: cell = (width − (N+1)·spacing) / N,
+/// floored at 10 (spec §9.3/Q23), gaps EXACTLY `spacing` at every width.
+///
+/// This replaced NSCollectionViewFlowLayout deliberately. The flow layout
+/// treats spacing as a minimum and justifies every row across the content
+/// width, so any lag between itemSize and the real width shows up as wrong,
+/// zoom-dependent gaps — and setting `itemSize` inside `prepare()` triggers
+/// its own invalidation mid-pass, which left the visible layout one resize
+/// behind. Here the attributes are computed on demand from `cellSize`, so a
+/// re-prepare is O(1) and every query reflects the current width; there is no
+/// cached row layout to go stale and no justification to stretch the gaps.
+final class GridFlowLayout: NSCollectionViewLayout {
     var columnCount = 5
     let spacing = CGFloat(PhotoGridView.spacing)
     /// The viewport width the current layout was prepared for — the guard that
-    /// keeps scrolling and height-only changes from re-preparing O(photos).
+    /// keeps scrolling and height-only changes from re-preparing.
     private(set) var lastLayoutWidth: CGFloat = 0
+    /// Square cell side; exposed for the thumbnail bucket choice.
+    private(set) var cellSize: CGFloat = 10
+    private var itemCount = 0
 
     override func prepare() {
         // The viewport (clip view) width, NOT the collection view's own bounds:
         // when the pane resizes in one layout pass (panel toggle, window
         // resize), the document view's width lags a pass behind and prepare()
-        // would compute stale cell sizes — the flow layout then rewraps rows
-        // with the old itemSize and justifies the leftovers into uneven gaps.
-        if let width = collectionView?.enclosingScrollView?.contentView.bounds.width
-            ?? collectionView?.bounds.width {
-            // Floor the cell size: computing it to EXACTLY fill the width sits
-            // on a floating-point knife edge where the flow layout sometimes
-            // wraps a row early and justifies the leftovers into huge gaps —
-            // visible whenever the width shifts by a scroller. Sub-point slack
-            // per row is invisible; an early wrap is not.
-            let cell = max(10, ((width - spacing * CGFloat(columnCount + 1)) / CGFloat(columnCount)).rounded(.down))
-            lastLayoutWidth = width
-            itemSize = NSSize(width: cell, height: cell)
-            minimumInteritemSpacing = spacing
-            minimumLineSpacing = spacing
-            sectionInset = NSEdgeInsets(top: spacing, left: spacing, bottom: spacing, right: spacing)
+        // would compute a stale cell size.
+        let width = collectionView?.enclosingScrollView?.contentView.bounds.width
+            ?? collectionView?.bounds.width ?? 0
+        lastLayoutWidth = width
+        // Floored: sub-point slack at the trailing edge is invisible; cells
+        // drawn on fractional pixel boundaries are not.
+        cellSize = max(10, ((width - spacing * CGFloat(columnCount + 1)) / CGFloat(columnCount)).rounded(.down))
+        itemCount = collectionView.map {
+            $0.numberOfSections > 0 ? $0.numberOfItems(inSection: 0) : 0
+        } ?? 0
+    }
+
+    override var collectionViewContentSize: NSSize {
+        guard itemCount > 0 else { return NSSize(width: lastLayoutWidth, height: 0) }
+        let rows = (itemCount + columnCount - 1) / columnCount
+        return NSSize(
+            width: lastLayoutWidth,
+            height: spacing + CGFloat(rows) * (cellSize + spacing)
+        )
+    }
+
+    /// NSCollectionView is flipped: y grows downward from the top-left.
+    private func frame(forItem index: Int) -> NSRect {
+        let row = index / columnCount
+        let column = index % columnCount
+        return NSRect(
+            x: spacing + CGFloat(column) * (cellSize + spacing),
+            y: spacing + CGFloat(row) * (cellSize + spacing),
+            width: cellSize,
+            height: cellSize
+        )
+    }
+
+    override func layoutAttributesForElements(in rect: NSRect) -> [NSCollectionViewLayoutAttributes] {
+        guard itemCount > 0 else { return [] }
+        // Row range from the rect — O(visible), never O(photos).
+        let rowHeight = cellSize + spacing
+        let firstRow = max(0, Int(((rect.minY - spacing) / rowHeight).rounded(.down)))
+        let lastRow = max(firstRow, Int((rect.maxY / rowHeight).rounded(.down)))
+        let firstItem = firstRow * columnCount
+        let lastItem = min(itemCount - 1, (lastRow + 1) * columnCount - 1)
+        guard firstItem <= lastItem else { return [] }
+        return (firstItem...lastItem).compactMap { index in
+            let itemFrame = frame(forItem: index)
+            guard itemFrame.intersects(rect) else { return nil }
+            let attributes = NSCollectionViewLayoutAttributes(
+                forItemWith: IndexPath(item: index, section: 0)
+            )
+            attributes.frame = itemFrame
+            return attributes
         }
-        super.prepare()
+    }
+
+    override func layoutAttributesForItem(at indexPath: IndexPath) -> NSCollectionViewLayoutAttributes? {
+        guard indexPath.item >= 0, indexPath.item < itemCount else { return nil }
+        let attributes = NSCollectionViewLayoutAttributes(forItemWith: indexPath)
+        attributes.frame = frame(forItem: indexPath.item)
+        return attributes
     }
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
         // Scrolling changes only the origin; a cell-size change needs a new
         // width. Compare the width prepare() will actually consume (the clip
         // view's), not newBounds — the collection view's own bounds can lag a
-        // layout pass behind the pane. Column/spacing edits invalidate
-        // explicitly in `apply`.
+        // layout pass behind the pane. Column edits invalidate explicitly in
+        // `apply`.
         (collectionView?.enclosingScrollView?.contentView.bounds.width ?? newBounds.width)
             != lastLayoutWidth
     }
