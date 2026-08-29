@@ -170,10 +170,15 @@ struct CollectionEditorSheet: View {
     /// no more `rating lessThan 1` workaround (Q28 lifted deliberately).
     private func starPicker(_ value: Binding<String>) -> some View {
         HStack(spacing: 2) {
-            Button("Unrated") { value.wrappedValue = "0" }
-                .buttonStyle(.borderless)
-                .font(.caption)
-                .foregroundStyle(value.wrappedValue == "0" ? Color.accentColor : .secondary)
+            // star.slash matches the sidebar's UNRATED row (U28).
+            Button {
+                value.wrappedValue = "0"
+            } label: {
+                Image(systemName: "star.slash")
+                    .foregroundStyle(value.wrappedValue == "0" ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Unrated")
             ForEach(1...5, id: \.self) { star in
                 let current = Int(value.wrappedValue) ?? -1
                 Button {
