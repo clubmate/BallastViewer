@@ -403,11 +403,12 @@ private struct BottomBar: View {
                 Spacer()
 
                 // No step: — a stepped macOS slider draws tick marks; the
-                // binding rounds to whole columns anyway.
+                // binding rounds to whole columns anyway. Inverted (11 − n):
+                // sliding right means fewer columns, i.e. bigger thumbnails.
                 Slider(
                     value: Binding(
-                        get: { Double(center.columnCount) },
-                        set: { center.columnCount = Int($0.rounded()) }
+                        get: { Double(11 - center.columnCount) },
+                        set: { center.columnCount = 11 - Int($0.rounded()) }
                     ),
                     in: 1...10
                 )
