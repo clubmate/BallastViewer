@@ -48,14 +48,57 @@ final class ShortcutMonitor {
 
     private let keyMap: KeyMapStore
     private let dispatcher: ActionDispatcher
-    /// Monitor token — never removed; this object lives as long as the app.
+    /// Monitor tokens — never removed; this object lives as long as the app.
     private var monitor: Any?
+    private var clickMonitor: Any?
+
+    private struct EventBox: @unchecked Sendable {
+        let event: NSEvent
+    }
 
     init(keyMap: KeyMapStore, dispatcher: ActionDispatcher) {
         self.keyMap = keyMap
         self.dispatcher = dispatcher
         monitor = LocalKeyDownMonitor.install { [weak self] event in
             self?.consume(event) ?? false
+        }
+        // Clicking anywhere outside a focused text field hands the keyboard
+        // back to the grid (user request 2026-08-30): grid cells and most
+        // SwiftUI controls never claim first-responder status, so the field
+        // stayed focused — and Q21 kept suppressing every shortcut — until
+        // Escape or a committing Return. Standard app behaviour, emulated
+        // globally because SwiftUI surfaces won't do it themselves.
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { event in
+            let box = EventBox(event: event)
+            MainActor.assumeIsolated { Self.releaseTextFocusAfterClick(box.event) }
+            return event
+        }
+    }
+
+    /// Resigns a focused text field when a click lands anywhere that is not
+    /// itself a text control. Mouse-UP, and the release deferred to after the
+    /// event is fully dispatched: a click on a suggestion-dropdown row (an
+    /// in-window overlay) must reach its button first — releasing on
+    /// mouse-down tore the dropdown down before the row's mouse-up landed and
+    /// swallowed the pick. The async re-check skips the release when the
+    /// click itself moved focus into another field, or the row's action
+    /// already released it.
+    private static func releaseTextFocusAfterClick(_ event: NSEvent) {
+        guard let window = event.window,
+              window === mainWindow,
+              window.attachedSheet == nil,
+              window.firstResponder is NSText,
+              let contentView = window.contentView
+        else { return }
+        // A click into any text control claims or keeps focus itself.
+        var view = contentView.hitTest(event.locationInWindow)
+        while let current = view {
+            if current is NSText || current is NSTextField { return }
+            view = current.superview
+        }
+        DispatchQueue.main.async {
+            guard let window = mainWindow, window.firstResponder is NSText else { return }
+            window.makeFirstResponder(nil)
         }
     }
 

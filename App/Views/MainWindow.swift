@@ -494,6 +494,9 @@ private struct SearchField: View {
                 }
                 .onSubmit {
                     showSearchSuggestions = false
+                    // Return hands the keyboard back to the grid — the filter
+                    // stays applied, Q21 stops suppressing shortcuts.
+                    searchFocused = false
                 }
                 .onChange(of: searchFocused) { _, focused in
                     // Blur closes the dropdown too; otherwise re-focusing a

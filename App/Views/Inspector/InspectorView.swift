@@ -129,6 +129,10 @@ struct InspectorView: View {
                         suggestions.indices.contains(index) ? suggestions[index] : nil
                     }
                     commit(highlighted)
+                    // Return always hands the keyboard back, even when there
+                    // was nothing to commit (empty field) — commit() only
+                    // releases focus on success.
+                    keywordFieldFocused = false
                     return .handled
                 }
             Button {
