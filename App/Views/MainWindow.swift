@@ -162,23 +162,42 @@ struct MainWindow: View {
     /// divider renders an unstylable black line, and it re-adds a hidden pane
     /// at its ideal width (ignoring `idealWidth`), so every panel toggle
     /// resized the grid. Here the widths are plain state.
+    ///
+    /// The DISPLAYED widths are squeezed to the window (PanelSqueeze): with
+    /// fixed-width panels a too-narrow window overflows the HStack, which
+    /// centres its oversized content — the sidebar slid off the left edge.
+    /// Panels shrink to their PaneDivider minimum before anything clips; the
+    /// stored widths are untouched and come back when the window widens.
     private var libraryContent: some View {
-        HStack(spacing: 0) {
-            if center.showLeftPanel {
-                SidebarView(sidebar: sidebar, center: center)
-                    .frame(width: sidebarWidth)
-                PaneDivider(width: $sidebarWidth, range: Self.sidebarWidthRange, direction: 1) {
-                    UserDefaults.standard.set(Double(sidebarWidth), forKey: "sidebarPanelWidth")
+        GeometryReader { proxy in
+            let effective = PanelSqueeze.effectiveWidths(
+                available: proxy.size.width,
+                sidebar: sidebarWidth,
+                sidebarMin: Self.sidebarWidthRange.lowerBound,
+                sidebarShown: center.showLeftPanel,
+                inspector: inspectorWidth,
+                inspectorMin: Self.inspectorWidthRange.lowerBound,
+                inspectorShown: center.showRightPanel,
+                centerMin: 400,
+                dividerWidth: 1
+            )
+            HStack(spacing: 0) {
+                if center.showLeftPanel {
+                    SidebarView(sidebar: sidebar, center: center)
+                        .frame(width: effective.sidebar)
+                    PaneDivider(width: $sidebarWidth, range: Self.sidebarWidthRange, direction: 1) {
+                        UserDefaults.standard.set(Double(sidebarWidth), forKey: "sidebarPanelWidth")
+                    }
                 }
-            }
-            centerPane
-                .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
-            if center.showRightPanel {
-                PaneDivider(width: $inspectorWidth, range: Self.inspectorWidthRange, direction: -1) {
-                    UserDefaults.standard.set(Double(inspectorWidth), forKey: "inspectorPanelWidth")
+                centerPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if center.showRightPanel {
+                    PaneDivider(width: $inspectorWidth, range: Self.inspectorWidthRange, direction: -1) {
+                        UserDefaults.standard.set(Double(inspectorWidth), forKey: "inspectorPanelWidth")
+                    }
+                    InspectorView()
+                        .frame(width: effective.inspector)
                 }
-                InspectorView()
-                    .frame(width: inspectorWidth)
             }
         }
     }
