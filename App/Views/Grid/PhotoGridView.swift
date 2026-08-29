@@ -37,7 +37,7 @@ struct PhotoGridView: NSViewRepresentable {
         collectionView.backgroundColors = [.clear]
         collectionView.register(GridViewItem.self, forItemWithIdentifier: GridViewItem.identifier)
 
-        let scrollView = NSScrollView()
+        let scrollView = GridScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         // Thin auto-hiding overlay scroller (spec §9.10 look).
@@ -56,23 +56,6 @@ struct PhotoGridView: NSViewRepresentable {
         ) { [weak scrollView] _ in
             MainActor.assumeIsolated {
                 scrollView?.scrollerStyle = .overlay
-            }
-        }
-        // One-pass size changes (panel toggle, window resize) must recompute
-        // the cell size — without this the layout keeps the old itemSize and
-        // just rewraps the rows (see GridFlowLayout.prepare). Width-guarded:
-        // a full flow re-prepare is O(photos), and height-only frame changes
-        // (bottom bar toggle) must not pay it.
-        scrollView.postsFrameChangedNotifications = true
-        context.coordinator.frameObserver = NotificationCenter.default.addObserver(
-            forName: NSView.frameDidChangeNotification, object: scrollView, queue: .main
-        ) { [weak collectionView, weak scrollView] _ in
-            MainActor.assumeIsolated {
-                guard let collectionView, let scrollView,
-                      let layout = collectionView.collectionViewLayout as? GridFlowLayout,
-                      layout.lastLayoutWidth != scrollView.contentView.bounds.width
-                else { return }
-                layout.invalidateLayout()
             }
         }
         return scrollView
@@ -101,16 +84,12 @@ struct PhotoGridView: NSViewRepresentable {
         private let viewModel: CenterViewModel
         weak var collectionView: NSCollectionView?
         // nonisolated(unsafe): only written once on the main actor; deinit
-        // (nonisolated) must be able to unregister them.
+        // (nonisolated) must be able to unregister it.
         nonisolated(unsafe) var scrollerStyleObserver: NSObjectProtocol?
-        nonisolated(unsafe) var frameObserver: NSObjectProtocol?
 
         deinit {
             if let scrollerStyleObserver {
                 NotificationCenter.default.removeObserver(scrollerStyleObserver)
-            }
-            if let frameObserver {
-                NotificationCenter.default.removeObserver(frameObserver)
             }
         }
 
@@ -337,6 +316,38 @@ struct PhotoGridView: NSViewRepresentable {
     }
 }
 
+/// One-pass size changes (panel toggle, window resize) must recompute the cell
+/// size — without this the layout keeps the old itemSize and just rewraps the
+/// rows (see GridFlowLayout.prepare). Frame-change notifications proved
+/// unreliable for this: the scroll view's fires before tiling resizes the clip
+/// (the width guard then compares stale-vs-stale and skips), and a listener on
+/// the clip view races the collection view's own bounds-change handling —
+/// whether the layout recomputed depended on notification order, so window
+/// resizes froze the cell size intermittently. Overriding `setFrameSize` /
+/// `layout` instead is deterministic: both run after the clip view has its
+/// final width, on every geometry change, with no ordering to race.
+/// Width-guarded: a full flow re-prepare is O(photos), and height-only
+/// changes (bottom bar toggle) must not pay it.
+final class GridScrollView: NSScrollView {
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        invalidateGridIfWidthChanged()
+    }
+
+    override func layout() {
+        super.layout()
+        invalidateGridIfWidthChanged()
+    }
+
+    private func invalidateGridIfWidthChanged() {
+        guard let collectionView = documentView as? NSCollectionView,
+              let layout = collectionView.collectionViewLayout as? GridFlowLayout,
+              layout.lastLayoutWidth != contentView.bounds.width
+        else { return }
+        layout.invalidateLayout()
+    }
+}
+
 /// Flow layout that recomputes the square cell size from the current width:
 /// cell = (width − (N+1)·spacing) / N, floored at 10 (spec §9.3/Q23).
 final class GridFlowLayout: NSCollectionViewFlowLayout {
@@ -371,7 +382,11 @@ final class GridFlowLayout: NSCollectionViewFlowLayout {
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: NSRect) -> Bool {
         // Scrolling changes only the origin; a cell-size change needs a new
-        // width. Column/spacing edits invalidate explicitly in `apply`.
-        newBounds.width != lastLayoutWidth
+        // width. Compare the width prepare() will actually consume (the clip
+        // view's), not newBounds — the collection view's own bounds can lag a
+        // layout pass behind the pane. Column/spacing edits invalidate
+        // explicitly in `apply`.
+        (collectionView?.enclosingScrollView?.contentView.bounds.width ?? newBounds.width)
+            != lastLayoutWidth
     }
 }
