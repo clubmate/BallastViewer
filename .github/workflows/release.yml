@@ -34,6 +34,22 @@ jobs:
           echo "number=$N" >> "$GITHUB_OUTPUT"
           echo "tag=v0.1.$N" >> "$GITHUB_OUTPUT"
 
+      - name: Release notes from commits since the last release
+        id: notes
+        # One bullet per commit subject since the previous release tag
+        # (oldest first). --exclude keeps a re-run of this workflow from
+        # comparing against its own tag and producing empty notes.
+        run: |
+          PREV=$(git describe --tags --abbrev=0 --exclude "${{ steps.version.outputs.tag }}" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then RANGE="$PREV..HEAD"; else RANGE="HEAD"; fi
+          echo "Previous release: ${PREV:-none} — range: $RANGE"
+          {
+            echo "notes<<NOTES_EOF"
+            git log "$RANGE" --no-merges --reverse --pretty=format:'- %s'
+            echo ""
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build
         run: |
           xcodegen generate
@@ -60,6 +76,12 @@ jobs:
           name: BallastViewer ${{ steps.version.outputs.tag }}
           files: BallastViewer-${{ steps.version.outputs.tag }}.zip
           body: |
+            ## What's new
+
+            ${{ steps.notes.outputs.notes }}
+
+            ---
+
             Automatic build of `${{ github.sha }}`.
 
             The app is ad-hoc signed, not notarized. After unzipping, macOS will refuse to open it once.

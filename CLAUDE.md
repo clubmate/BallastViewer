@@ -35,4 +35,4 @@ The app NEVER alters image data. Rotation in the library touches only `library.s
 ## Workflow
 
 - `docs/PLAN.md` has 12 steps with checkboxes. Work **one step per session**; the user is token-conscious — do not run ahead into later steps. When a step is done: check it off in `docs/PLAN.md`, note anything a later step must know, and verify its acceptance criteria.
-- **When a step is complete, commit and push** (standing instruction from the user): `git add -A`, commit with a descriptive message + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`, push to `origin master` (github.com/clubmate/BallastViewer — HTTPS credentials are in the keychain; there is no `gh` CLI).
+- **When a task is complete, commit — but do NOT push** (standing instruction from the user, 2026-08-30): `git add -A`, commit with a descriptive message + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. Push to `origin master` ONLY when the user explicitly asks ("push") — every push triggers the GitHub release build. (github.com/clubmate/BallastViewer — HTTPS credentials are in the keychain; there is no `gh` CLI.)
