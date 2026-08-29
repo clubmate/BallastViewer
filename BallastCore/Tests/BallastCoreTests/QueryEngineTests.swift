@@ -196,11 +196,13 @@ private func photo(
 
 @Suite struct SidebarItemTests {
     @Test func codecRoundTripsAllCases() {
-        let items: [SidebarItem] = [.allPhotos, .lastImport, .rating(1), .rating(5), .collection(12)]
+        let items: [SidebarItem] = [
+            .allPhotos, .lastImport, .rating(0), .rating(1), .rating(5), .collection(12),
+        ]
         for item in items {
             #expect(SidebarItem(encoded: item.encoded) == item)
         }
-        #expect(SidebarItem(encoded: "rating:0") == nil)
+        #expect(SidebarItem(encoded: "rating:-1") == nil)
         #expect(SidebarItem(encoded: "rating:6") == nil)
         #expect(SidebarItem(encoded: "collection:abc") == nil)
         #expect(SidebarItem(encoded: "garbage") == nil)

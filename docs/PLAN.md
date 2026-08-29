@@ -45,6 +45,7 @@ Rebuild of BALLASTVIEW per `docs/BALLASTVIEW-SPEC.md`. One step per Claude Code 
 | U26 | Settings ▸ Keywords shows an **UNGROUPED** pseudo-group LAST listing every top-level keyword without an effective group (ad-hoc keywords). It is not colourable, renamable, deletable, reorderable or a "+"/drop target; its keywords support the normal row actions (rename, add sub-keyword, delete with the U7 confirmation) plus "Move to Group" (context menu on any top-level keyword; `LibraryController.setKeywordGroup`, `KeywordTree.settingGroup`). Fixes the original's undeletable ad-hoc keywords. |
 
 | U27 | **Library display name** (user request 2026-08-29): `libraryMeta.name` (migration `v5-library-name`), editable in Settings ▸ Libraries via a Name field under the picker (commit on Return/focus loss/selection switch; blank clears back to the filename; works for closed libraries via the short-lived pool). Shown everywhere the filename was: window title, Library menu, Settings picker/folder header/delete alert. A UserDefaults cache (`libraryDisplayNames`, path → name, maintained by `BookmarkStore`) lets closed libraries show their name without opening pools; refreshed from the meta row on every open and on Add Existing. The authority is each library's own `library.sqlite`. |
+| U28 | **UNRATED sidebar row** (user request 2026-08-30): below the ★ row, `star.slash` icon, exact rating 0 — `SidebarItem.rating(0)` (codec range widened to 0…5); counts came free (`ratings[0]` was already tracked). |
 
 ## Steps
 

@@ -42,6 +42,10 @@ struct SidebarView: View {
                             }
                         }
                     }
+                    // UNRATED below ★: exact rating 0 (U28).
+                    row(item: .rating(0), count: sidebar.counts.ratings[0]) {
+                        Image(systemName: "star.slash").font(.caption2)
+                    }
 
                     ForEach(groupReorder.ordered(sidebar.groups, id: \.id)) { group in
                         groupBlock(group)

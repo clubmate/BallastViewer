@@ -5,7 +5,7 @@
 public enum SidebarItem: Hashable, Sendable {
     case allPhotos
     case lastImport
-    /// Exact star match, 1…5 (Q9).
+    /// Exact star match (Q9): 1…5 stars, or 0 for the UNRATED row (U28).
     case rating(Int)
     case collection(Int64)
 
@@ -24,7 +24,7 @@ public enum SidebarItem: Hashable, Sendable {
         } else if encoded == "lastImport" {
             self = .lastImport
         } else if encoded.hasPrefix("rating:"), let stars = Int(encoded.dropFirst(7)),
-                  (1...5).contains(stars) {
+                  (0...5).contains(stars) {
             self = .rating(stars)
         } else if encoded.hasPrefix("collection:"), let id = Int64(encoded.dropFirst(11)) {
             self = .collection(id)
@@ -39,7 +39,7 @@ public enum SidebarFilter {
     /// - `allPhotos`: no filtering.
     /// - `lastImport`: photos of the remembered batch; before any import this
     ///   is a real match-nothing — the list is empty, not full (Q8).
-    /// - `rating(n)`: exactly n stars (Q9).
+    /// - `rating(n)`: exactly n stars (Q9); n = 0 is the UNRATED row (U28).
     /// - `collection`: rule evaluation; a deleted/unknown id matches nothing.
     /// - `collection`: compiled rule evaluation; a missing entry means a
     ///   deleted/unknown id → matches nothing.
