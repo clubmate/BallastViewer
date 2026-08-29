@@ -138,6 +138,10 @@ final class CenterViewModel {
     /// pre-compiled — the filter evaluates every photo against them.
     @ObservationIgnored private var collectionsById: [Int64: SmartCollectionRecord] = [:]
     @ObservationIgnored private var compiledCollections: [Int64: CompiledRules] = [:]
+    /// Subtree ids (keyword + descendants) for an active `.keyword` item (U29)
+    /// — the per-photo filter tests set intersection instead of walking the
+    /// tree. Refreshed at the top of every filter pass; cheap (O(subtree)).
+    @ObservationIgnored private var activeKeywordSubtree: Set<Int64> = []
     @ObservationIgnored private var currentLibraryURL: URL?
 
     init(controller: LibraryController) {
@@ -206,13 +210,34 @@ final class CenterViewModel {
         controller.setSelectedSidebarItem(item)
     }
 
-    /// A stored/active collection that no longer exists degrades to ALL PHOTOS.
+    /// U29: inspector keyword-tree click — global keyword filter that replaces
+    /// the sidebar selection and discards an active search.
+    func filterByKeyword(_ id: Int64) {
+        if !searchText.isEmpty { searchText = "" }
+        selectSidebarItem(.keyword(id))
+    }
+
+    /// A stored/active collection or keyword that no longer exists degrades
+    /// to ALL PHOTOS.
     private func validated(_ item: SidebarItem?) -> SidebarItem {
         guard let item else { return .allPhotos }
         if case .collection(let id) = item, collectionsById[id] == nil {
             return .allPhotos
         }
+        if case .keyword(let id) = item, controller.snapshot?.keywordTree.node(id) == nil {
+            return .allPhotos
+        }
         return item
+    }
+
+    private func refreshActiveKeywordSubtree() {
+        guard case .keyword(let id) = activeItem,
+              let tree = controller.snapshot?.keywordTree
+        else {
+            if !activeKeywordSubtree.isEmpty { activeKeywordSubtree = [] }
+            return
+        }
+        activeKeywordSubtree = Set(tree.descendants(of: id)).union([id])
     }
 
     // MARK: Catalog events
@@ -281,7 +306,8 @@ final class CenterViewModel {
             facts: facts,
             item: activeItem,
             compiledCollections: compiledCollections,
-            lastImportBatchId: snapshot.meta.lastImportBatchId
+            lastImportBatchId: snapshot.meta.lastImportBatchId,
+            activeKeywordSubtree: activeKeywordSubtree
         ) else { return false }
         guard let search else { return true }
         return search.matches(filename: photo.filename, facts: facts)
@@ -290,6 +316,7 @@ final class CenterViewModel {
     /// Full recompute — bulk changes only (library open/import, sort or filter
     /// change). Single-photo mutations go through `photosDidChange`.
     private func rebuildVisible() {
+        refreshActiveKeywordSubtree()
         let search = SearchFilter.FoldedQuery(searchText)
         let records = (controller.snapshot?.photos ?? []).filter { passesFilter($0, search: search) }
         if sortOption == .random {
@@ -338,6 +365,8 @@ final class CenterViewModel {
     /// Incremental update after in-place photo mutations: O(changed + visible),
     /// never a full refilter of the catalog.
     private func photosDidChange(_ ids: [Int64]) {
+        // A keyword edit may have grown/shrunk the active subtree (U29).
+        refreshActiveKeywordSubtree()
         var removals = Set<Int64>()
         var insertions: [PhotoRecord] = []
         var valueUpdates: [GridPhoto] = []

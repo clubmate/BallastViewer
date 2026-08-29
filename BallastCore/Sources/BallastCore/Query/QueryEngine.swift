@@ -33,6 +33,9 @@ public enum RuleOperator: String, CaseIterable, Sendable {
 public struct PhotoQueryFacts: Equatable, Sendable {
     public var keywordPaths: [String]
     public var keywordGroupIds: Set<Int64>
+    /// The photo's raw keyword ids — the U29 keyword filter tests subtree
+    /// membership against these instead of re-deriving ids from paths.
+    public var keywordIds: Set<Int64>
     /// Case-folded twins of `keywordPaths` (same order) — supplied by
     /// `LibrarySnapshot.queryFacts` from the tree's memo so compiled rules
     /// match with plain `contains`. Empty means "not precomputed"; consumers
@@ -47,11 +50,13 @@ public struct PhotoQueryFacts: Equatable, Sendable {
     public init(
         keywordPaths: [String] = [],
         keywordGroupIds: Set<Int64> = [],
+        keywordIds: Set<Int64> = [],
         foldedKeywordPaths: [String] = [],
         foldedFilename: String? = nil
     ) {
         self.keywordPaths = keywordPaths
         self.keywordGroupIds = keywordGroupIds
+        self.keywordIds = keywordIds
         self.foldedKeywordPaths = foldedKeywordPaths
         self.foldedFilename = foldedFilename
     }

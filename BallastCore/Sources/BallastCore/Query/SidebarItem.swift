@@ -8,6 +8,10 @@ public enum SidebarItem: Hashable, Sendable {
     /// Exact star match (Q9): 1…5 stars, or 0 for the UNRATED row (U28).
     case rating(Int)
     case collection(Int64)
+    /// Keyword filter from the inspector's keyword tree (U29): photos carrying
+    /// this keyword or any descendant. Not a sidebar row — selecting it
+    /// deselects every sidebar entry visually.
+    case keyword(Int64)
 
     public var encoded: String {
         switch self {
@@ -15,6 +19,7 @@ public enum SidebarItem: Hashable, Sendable {
         case .lastImport: "lastImport"
         case .rating(let stars): "rating:\(stars)"
         case .collection(let id): "collection:\(id)"
+        case .keyword(let id): "keyword:\(id)"
         }
     }
 
@@ -28,6 +33,8 @@ public enum SidebarItem: Hashable, Sendable {
             self = .rating(stars)
         } else if encoded.hasPrefix("collection:"), let id = Int64(encoded.dropFirst(11)) {
             self = .collection(id)
+        } else if encoded.hasPrefix("keyword:"), let id = Int64(encoded.dropFirst(8)) {
+            self = .keyword(id)
         } else {
             return nil
         }
@@ -40,9 +47,11 @@ public enum SidebarFilter {
     /// - `lastImport`: photos of the remembered batch; before any import this
     ///   is a real match-nothing — the list is empty, not full (Q8).
     /// - `rating(n)`: exactly n stars (Q9); n = 0 is the UNRATED row (U28).
-    /// - `collection`: rule evaluation; a deleted/unknown id matches nothing.
     /// - `collection`: compiled rule evaluation; a missing entry means a
     ///   deleted/unknown id → matches nothing.
+    /// - `keyword`: the photo carries any keyword in `activeKeywordSubtree`
+    ///   (the selected keyword plus its descendants, precomputed by the
+    ///   caller — U29). An empty set matches nothing.
     ///
     /// Callers compile each collection's rules once (`CompiledRules`) instead
     /// of re-parsing them for every photo.
@@ -51,7 +60,8 @@ public enum SidebarFilter {
         facts: @autoclosure () -> PhotoQueryFacts,
         item: SidebarItem,
         compiledCollections: [Int64: CompiledRules],
-        lastImportBatchId: Int64?
+        lastImportBatchId: Int64?,
+        activeKeywordSubtree: Set<Int64> = []
     ) -> Bool {
         switch item {
         case .allPhotos:
@@ -64,6 +74,8 @@ public enum SidebarFilter {
         case .collection(let id):
             guard let compiled = compiledCollections[id] else { return false }
             return compiled.matches(photo, facts: facts())
+        case .keyword:
+            return !activeKeywordSubtree.isDisjoint(with: facts().keywordIds)
         }
     }
 }

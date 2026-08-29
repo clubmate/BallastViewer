@@ -31,6 +31,7 @@ public struct LibrarySnapshot: Sendable {
         return PhotoQueryFacts(
             keywordPaths: ids.map { keywordTree.path(of: $0) },
             keywordGroupIds: Set(ids.compactMap { keywordTree.effectiveGroupId(of: $0) }),
+            keywordIds: keywordIds,
             foldedKeywordPaths: ids.map { keywordTree.foldedPath(of: $0) },
             foldedFilename: foldedFilename
         )

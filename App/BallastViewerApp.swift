@@ -15,6 +15,7 @@ struct BallastViewerApp: App {
     @State private var midiService: MidiService
     @State private var settingsRouter = SettingsRouter()
     @State private var photoPicker = PhotoPickerModel()
+    @State private var keywordPanel: KeywordPanelModel
 
     init() {
         let controller = LibraryController()
@@ -32,6 +33,7 @@ struct BallastViewerApp: App {
         _appearance = State(initialValue: appearance)
         _dispatcher = State(initialValue: dispatcher)
         _shortcutMonitor = State(initialValue: ShortcutMonitor(keyMap: keyMap, dispatcher: dispatcher))
+        _keywordPanel = State(initialValue: KeywordPanelModel(controller: controller))
         _midiService = State(initialValue: MidiService(
             midiMap: midiMap, appearance: appearance, dispatcher: dispatcher, center: center
         ))
@@ -57,6 +59,7 @@ struct BallastViewerApp: App {
                 .environment(center)
                 .environment(sidebar)
                 .environment(appearance)
+                .environment(keywordPanel)
                 .background(PhotoPickerAutoOpen())
                 .task {
                     await TestHooks.runIfRequested(

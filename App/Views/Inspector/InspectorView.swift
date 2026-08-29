@@ -18,19 +18,22 @@ struct InspectorView: View {
         // relevant change in CenterViewModel, not per body pass. Actions
         // materialise the id list lazily at click time.
         let summary = center.selectionSummary
-        VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    title(summary)
-                    ratingStars(summary)
-                    keywordEntry(hasSelection: summary.count > 0)
-                        .zIndex(1)
-                    chipList(summary)
+        GeometryReader { proxy in
+            VStack(alignment: .leading, spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        title(summary)
+                        ratingStars(summary)
+                        keywordEntry(hasSelection: summary.count > 0)
+                            .zIndex(1)
+                        chipList(summary)
+                    }
+                    .padding(10)
                 }
-                .padding(10)
+                KeywordTreeSection(panelHeight: proxy.size.height)
+                Divider()
+                footer(hasSelection: summary.count > 0)
             }
-            Divider()
-            footer(hasSelection: summary.count > 0)
         }
     }
 
