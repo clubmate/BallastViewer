@@ -23,6 +23,9 @@ final class KeywordPanelModel {
     }
     /// Disclosure state of the tree's nodes (session-only, collapsed roots).
     var expandedNodes: Set<Int64> = []
+    /// Disclosure state of the first-level group rows — a separate set:
+    /// group ids and keyword ids come from different tables and can collide.
+    var expandedGroups: Set<Int64> = []
     /// Section height in points; 0 = unset → 30% of the panel at first expand.
     var sectionHeight: Double {
         didSet {
@@ -31,8 +34,9 @@ final class KeywordPanelModel {
         }
     }
 
-    /// Photo count per keyword id, subtree-inclusive (KeywordCounts).
-    private(set) var counts: [Int64: Int] = [:]
+    /// Photo counts per keyword id (subtree-inclusive) and per group
+    /// (KeywordCounts).
+    private(set) var counts = KeywordCounts.Result()
     @ObservationIgnored private var countsDirty = true
 
     private static let expandedKey = "keywordSectionExpanded"
@@ -56,6 +60,14 @@ final class KeywordPanelModel {
         }
     }
 
+    func toggleGroup(_ id: Int64) {
+        if expandedGroups.contains(id) {
+            expandedGroups.remove(id)
+        } else {
+            expandedGroups.insert(id)
+        }
+    }
+
     private func handle(_ event: CatalogEvent) {
         switch event {
         case .photosUpdated, .catalogReplaced:
@@ -72,7 +84,7 @@ final class KeywordPanelModel {
         guard countsDirty else { return }
         countsDirty = false
         guard let snapshot = controller.snapshot else {
-            counts = [:]
+            counts = KeywordCounts.Result()
             return
         }
         let newCounts = KeywordCounts.compute(

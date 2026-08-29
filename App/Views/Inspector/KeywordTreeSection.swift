@@ -60,9 +60,6 @@ struct KeywordTreeSection: View {
             model.isExpanded.toggle()
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(.degrees(model.isExpanded ? 90 : 0))
                 Text("KEYWORDS")
                     .font(.caption.weight(.semibold))
                 Spacer(minLength: 0)
@@ -77,6 +74,9 @@ struct KeywordTreeSection: View {
 
     // MARK: Tree
 
+    /// First level: the keyword groups (Settings ▸ Keywords order), then the
+    /// UNGROUPED pseudo-group — root keywords bucketed by their effective
+    /// group, exactly like the settings list.
     @ViewBuilder
     private var content: some View {
         let tree = controller.vocabulary.tree
@@ -90,13 +90,81 @@ struct KeywordTreeSection: View {
             }
             .frame(maxWidth: .infinity)
         } else {
+            let groups = controller.vocabulary.groups
+            let ungrouped = tree.rootIds.filter { tree.effectiveGroupId(of: $0) == nil }
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    KeywordTreeRows(tree: tree, ids: tree.rootIds, level: 0)
+                    ForEach(groups) { group in
+                        let groupId = group.id ?? KeywordCounts.ungroupedKey
+                        let roots = tree.rootIds.filter { tree.effectiveGroupId(of: $0) == groupId }
+                        KeywordGroupRow(name: group.name, groupId: groupId)
+                        if model.expandedGroups.contains(groupId) {
+                            KeywordTreeRows(tree: tree, ids: roots, level: 1)
+                        }
+                    }
+                    if !ungrouped.isEmpty {
+                        let sentinel = KeywordCounts.ungroupedKey
+                        KeywordGroupRow(name: "UNGROUPED", groupId: sentinel)
+                        if model.expandedGroups.contains(sentinel) {
+                            KeywordTreeRows(tree: tree, ids: ungrouped, level: 1)
+                        }
+                    }
                 }
                 .padding(.vertical, 2)
             }
         }
+    }
+}
+
+/// First-level group row: whole row toggles disclosure, count pill on the
+/// right (photos with ≥1 keyword of the group, deduped).
+private struct KeywordGroupRow: View {
+    @Environment(KeywordPanelModel.self) private var model
+
+    let name: String
+    let groupId: Int64
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .rotationEffect(.degrees(model.expandedGroups.contains(groupId) ? 90 : 0))
+                .foregroundStyle(.secondary)
+                .frame(width: 16, height: 16)
+            Text(name)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            CountPill(count: model.counts.byGroup[groupId] ?? 0, selected: false)
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 8)
+        .frame(height: 24)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            model.toggleGroup(groupId)
+        }
+    }
+}
+
+/// The sidebar's count-badge recipe (SidebarView.rowLabel), shared by group
+/// and keyword rows.
+private struct CountPill: View {
+    let count: Int
+    let selected: Bool
+
+    var body: some View {
+        Text("\(count)")
+            .font(.caption)
+            .foregroundStyle(selected ? .white.opacity(0.8) : .secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(
+                Capsule().fill(
+                    selected ? AnyShapeStyle(.white.opacity(0.2))
+                        : AnyShapeStyle(.secondary.opacity(0.2))
+                )
+            )
     }
 }
 
@@ -143,7 +211,7 @@ private struct KeywordTreeRow: View {
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
                     .rotationEffect(.degrees(model.expandedNodes.contains(id) ? 90 : 0))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(selected ? AnyShapeStyle(.white.opacity(0.8)) : AnyShapeStyle(.secondary))
                     .frame(width: 16, height: 16)
                     .contentShape(Rectangle())
             }
@@ -153,16 +221,16 @@ private struct KeywordTreeRow: View {
 
             Text(tree.node(id)?.name ?? "?")
                 .lineLimit(1)
-            Text("(\(model.counts[id] ?? 0))")
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
+            Spacer(minLength: 4)
+            CountPill(count: model.counts.byKeyword[id] ?? 0, selected: selected)
         }
         .font(.callout)
+        .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
         .padding(.leading, 6 + CGFloat(level) * 14)
-        .padding(.trailing, 6)
-        .frame(height: 22)
+        .padding(.trailing, 8)
+        .frame(height: 24)
         .contentShape(Rectangle())
-        .background(selected ? Color.accentColor.opacity(0.25) : Color.clear)
+        .background(selected ? Color.accentColor : Color.clear)
         .onTapGesture {
             center.filterByKeyword(id)
         }
