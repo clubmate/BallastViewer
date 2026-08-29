@@ -67,6 +67,7 @@ struct PhotoGridView: NSViewRepresentable {
         if scrollView.scrollerStyle != .overlay {
             scrollView.scrollerStyle = .overlay
         }
+        (scrollView as? GridScrollView)?.acceptsClicks = isVisible
         // Reading viewModel properties here registers Observation dependencies,
         // so SwiftUI re-runs this update on selection/column changes.
         context.coordinator.apply(
@@ -329,6 +330,17 @@ struct PhotoGridView: NSViewRepresentable {
 /// Width-guarded: a full flow re-prepare is O(photos), and height-only
 /// changes (bottom bar toggle) must not pay it.
 final class GridScrollView: NSScrollView {
+    /// False while the single view covers the grid. SwiftUI's
+    /// `.allowsHitTesting(false)` does not stop AppKit's own event routing
+    /// into representable content, so clicks on the single view fell THROUGH
+    /// onto the hidden grid cells and moved the selection to whatever photo
+    /// happened to lie under the pointer.
+    var acceptsClicks = true
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        acceptsClicks ? super.hitTest(point) : nil
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         invalidateGridIfWidthChanged()
