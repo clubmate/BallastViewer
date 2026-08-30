@@ -22,6 +22,32 @@ extension LibraryController {
         return keywordId
     }
 
+    /// U36: assigns the EXACT path, creating it if missing — the dropdown's
+    /// "Create" row must bypass the Q16 first-match resolution, or a bare
+    /// "2008" could never become a new top-level keyword while a nested
+    /// "JAHRE > 2008" exists.
+    @discardableResult
+    func assignKeyword(exactPath text: String, toPhotoIds photoIds: [Int64]) -> Int64? {
+        guard !photoIds.isEmpty, let snapshot else { return nil }
+        let components = text
+            .components(separatedBy: KeywordTree.separator)
+            .map(KeywordDAO.normalize)
+            .filter { !$0.isEmpty }
+        guard !components.isEmpty else { return nil }
+        var keywordId = snapshot.keywordTree.find(pathComponents: components)
+        if keywordId == nil {
+            guard let result: (leafId: Int64, created: [KeywordRecord]) = writeSync({ db in
+                try KeywordDAO.ensurePathCollectingCreated(components, groupId: nil, in: db)
+            }) else { return nil }
+            mutateSnapshot { $0.keywordTree = $0.keywordTree.inserting(contentsOf: result.created) }
+            refreshVocabulary()
+            keywordId = result.leafId
+        }
+        guard let keywordId else { return nil }
+        assignKeyword(id: keywordId, toPhotoIds: photoIds)
+        return keywordId
+    }
+
     func assignKeyword(id keywordId: Int64, toPhotoIds photoIds: [Int64]) {
         guard snapshot?.keywordTree.node(keywordId) != nil else { return }
         var changed: [Int64] = []

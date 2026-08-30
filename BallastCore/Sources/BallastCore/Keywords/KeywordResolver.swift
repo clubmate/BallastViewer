@@ -48,6 +48,20 @@ public enum KeywordResolver {
 /// Autocomplete over the whole tree: every node is offered, not just leaves (Q17).
 /// Ad-hoc keywords are tree nodes too, so this is the spec's vocabulary∪index list.
 public enum KeywordAutocomplete {
+    /// U36: the dropdown's explicit escape from the Q16 first-match rule —
+    /// non-nil when the input, read as an EXACT path, does not exist yet
+    /// (a bare "2008" while only "JAHRE > 2008" is in the tree). Selecting
+    /// the offered row creates and assigns exactly this path instead of
+    /// resolving to the first name match somewhere in the tree.
+    public static func createOption(for input: String, tree: KeywordTree) -> String? {
+        let components = input
+            .components(separatedBy: KeywordTree.separator)
+            .map(KeywordDAO.normalize)
+            .filter { !$0.isEmpty }
+        guard !components.isEmpty, tree.find(pathComponents: components) == nil else { return nil }
+        return components.joined(separator: KeywordTree.separator)
+    }
+
     /// Filters the tree's precomputed folded corpus with one plain-`contains`
     /// pass — no path construction and no per-path ICU search per keystroke.
     public static func suggestions(for input: String, tree: KeywordTree) -> [String] {

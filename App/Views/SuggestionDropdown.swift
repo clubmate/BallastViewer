@@ -5,9 +5,14 @@ import SwiftUI
 /// paths, optional keyboard highlight that scrolls into view, click picks.
 struct SuggestionDropdown: View {
     let suggestions: [String]
-    /// Keyboard-highlighted row (spec §9.8 ↑/↓); nil = none.
+    /// Keyboard-highlighted row (spec §9.8 ↑/↓); nil = none. Indexes run over
+    /// the suggestions, then the create row (when present) as the last index.
     var highlightIndex: Int? = nil
     var rowHeight: CGFloat = 28
+    /// U36: exact path offered as an explicit "Create" row below the matches —
+    /// the escape from the Q16 first-match resolution. nil = no such row.
+    var createOption: String? = nil
+    var onCreate: (String) -> Void = { _ in }
     let onPick: (String) -> Void
 
     static let defaultRowHeight: CGFloat = 28
@@ -41,9 +46,30 @@ struct SuggestionDropdown: View {
                         .buttonStyle(.plain)
                         .id(index)
                     }
+                    if let createOption {
+                        Button {
+                            onCreate(createOption)
+                        } label: {
+                            Label("Create “\(createOption)”", systemImage: "plus")
+                                .lineLimit(1)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .frame(height: rowHeight)
+                                .background(
+                                    highlightIndex == suggestions.count
+                                        ? Color.accentColor.opacity(0.3) : Color.clear
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .id(suggestions.count)
+                    }
                 }
             }
-            .frame(height: Self.height(forCount: suggestions.count, rowHeight: rowHeight))
+            .frame(height: Self.height(
+                forCount: suggestions.count + (createOption == nil ? 0 : 1), rowHeight: rowHeight
+            ))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             .shadow(radius: 4)
             .onChange(of: highlightIndex) {

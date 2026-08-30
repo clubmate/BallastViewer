@@ -3,6 +3,53 @@ import GRDB
 import Testing
 @testable import BallastCore
 
+/// U36: the dropdown's explicit "Create" row — offered exactly when the
+/// input as an EXACT path does not exist, the escape from Q16.
+@Suite struct KeywordCreateOptionTests {
+    private func makeTree(_ paths: [[String]]) -> KeywordTree {
+        var records: [KeywordRecord] = []
+        var nextId: Int64 = 1
+        var idByPath: [String: Int64] = [:]
+        for path in paths {
+            var parent: Int64?
+            var walked: [String] = []
+            for name in path {
+                walked.append(name)
+                let key = walked.joined(separator: ">")
+                if let existing = idByPath[key] {
+                    parent = existing
+                } else {
+                    records.append(KeywordRecord(id: nextId, parentId: parent, groupId: nil, name: name))
+                    idByPath[key] = nextId
+                    parent = nextId
+                    nextId += 1
+                }
+            }
+        }
+        return KeywordTree(records: records)
+    }
+
+    @Test func offeredWhenOnlyANestedNamesakeExists() {
+        let tree = makeTree([["JAHRE", "2008"]])
+        #expect(KeywordAutocomplete.createOption(for: "2008", tree: tree) == "2008")
+    }
+
+    @Test func notOfferedWhenTheExactPathExists() {
+        let tree = makeTree([["JAHRE", "2008"], ["2008"]])
+        #expect(KeywordAutocomplete.createOption(for: "2008", tree: tree) == nil)
+        #expect(KeywordAutocomplete.createOption(for: "jahre > 2008", tree: tree) == nil)
+    }
+
+    @Test func offersMissingNestedPathsAndNormalizes() {
+        let tree = makeTree([["PRIVAT", "PORTRAIT"]])
+        #expect(
+            KeywordAutocomplete.createOption(for: "strasse > portrait", tree: tree)
+                == "STRASSE > PORTRAIT"
+        )
+        #expect(KeywordAutocomplete.createOption(for: "  ", tree: tree) == nil)
+    }
+}
+
 /// U35: lifting a nested keyword to a group's top level, with the merge
 /// semantics for name collisions.
 @Suite struct KeywordMoveTests {

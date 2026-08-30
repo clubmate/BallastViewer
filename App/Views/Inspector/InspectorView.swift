@@ -96,6 +96,12 @@ struct InspectorView: View {
         // Focus-guarded: leftover text in an unfocused field must not filter
         // the whole vocabulary on every unrelated body pass.
         let suggestions = keywordFieldFocused ? self.suggestions : []
+        // U36: explicit "Create" row — highlight indexes run over the
+        // suggestions, then this row as the last index.
+        let createOption = keywordFieldFocused
+            ? KeywordAutocomplete.createOption(for: keywordInput, tree: controller.vocabulary.tree)
+            : nil
+        let entryCount = suggestions.count + (createOption == nil ? 0 : 1)
         return HStack(spacing: 6) {
             TextField("Add Keyword", text: $keywordInput)
                 .textFieldStyle(.plain)
@@ -107,13 +113,13 @@ struct InspectorView: View {
                     highlight.reset()
                 }
                 .onKeyPress(.downArrow) {
-                    guard !suggestions.isEmpty else { return .ignored }
-                    highlight.moveDown(count: suggestions.count)
+                    guard entryCount > 0 else { return .ignored }
+                    highlight.moveDown(count: entryCount)
                     return .handled
                 }
                 .onKeyPress(.upArrow) {
-                    guard !suggestions.isEmpty else { return .ignored }
-                    highlight.moveUp(count: suggestions.count)
+                    guard entryCount > 0 else { return .ignored }
+                    highlight.moveUp(count: entryCount)
                     return .handled
                 }
                 .onKeyPress(.escape) {
@@ -128,10 +134,15 @@ struct InspectorView: View {
                     // Bounds-checked: the vocabulary can shrink (keyword
                     // deleted in Settings) between the body pass that built
                     // `suggestions` and this key press.
-                    let highlighted = highlight.index.flatMap { index in
-                        suggestions.indices.contains(index) ? suggestions[index] : nil
+                    if let index = highlight.index, index == suggestions.count,
+                       let createOption {
+                        commitCreate(createOption)
+                    } else {
+                        let highlighted = highlight.index.flatMap { index in
+                            suggestions.indices.contains(index) ? suggestions[index] : nil
+                        }
+                        commit(highlighted)
                     }
-                    commit(highlighted)
                     // Return always hands the keyboard back, even when there
                     // was nothing to commit (empty field) — commit() only
                     // releases focus on success.
@@ -155,9 +166,13 @@ struct InspectorView: View {
         .roundedFieldChrome()
         .overlay(alignment: .topLeading) {
             // Dropdown overlays below the field (spec §9.8: offset 45).
-            if keywordFieldFocused && !suggestions.isEmpty {
+            if keywordFieldFocused, entryCount > 0 {
                 SuggestionDropdown(
-                    suggestions: suggestions, highlightIndex: highlight.index, rowHeight: 35
+                    suggestions: suggestions,
+                    highlightIndex: highlight.index,
+                    rowHeight: 35,
+                    createOption: createOption,
+                    onCreate: { commitCreate($0) }
                 ) { commit($0) }
                 .offset(y: 45)
             }
@@ -180,6 +195,21 @@ struct InspectorView: View {
         // Hand the keyboard back to the grid right away: the usual flow is
         // "keyword, then arrow to the next photo" (Q21 would otherwise swallow
         // the arrow). Click the field again to add another keyword.
+        keywordFieldFocused = false
+    }
+
+    /// U36: the dropdown's "Create" row — the EXACT typed path is created and
+    /// assigned, bypassing the Q16 first-match resolution.
+    private func commitCreate(_ path: String) {
+        let ids = selectedIds
+        guard !ids.isEmpty else { return }
+        guard !controller.isBusy else {
+            controller.errorMessage = LibraryController.busyMessage
+            return
+        }
+        controller.assignKeyword(exactPath: path, toPhotoIds: ids)
+        keywordInput = ""
+        highlight.reset()
         keywordFieldFocused = false
     }
 
