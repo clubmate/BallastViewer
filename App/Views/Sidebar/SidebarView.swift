@@ -204,22 +204,29 @@ struct SidebarView: View {
                         Color.clear.frame(width: Self.outlineColumnWidth)
                     }
                     // The chevron column is reserved on EVERY row so siblings
-                    // align whether or not they can disclose.
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .rotationEffect(.degrees(collapsed ? 0 : 90))
-                        .foregroundStyle(.secondary)
-                        .opacity(outlineRow.hasChildren ? 1 : 0)
-                        .frame(width: Self.outlineColumnWidth)
-                        // The chevron toggles disclosure WITHOUT selecting
-                        // the row — high priority beats the row button.
-                        .contentShape(Rectangle())
-                        .highPriorityGesture(TapGesture().onEnded {
-                            guard outlineRow.hasChildren else { return }
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                sidebar.toggleCollectionCollapse(collectionId)
-                            }
-                        })
+                    // align; leaves show a quiet bullet instead of an empty
+                    // gap (user request 2026-08-30).
+                    Group {
+                        if outlineRow.hasChildren {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .rotationEffect(.degrees(collapsed ? 0 : 90))
+                                .foregroundStyle(.secondary)
+                                // Toggles disclosure WITHOUT selecting the
+                                // row — high priority beats the row button.
+                                .contentShape(Rectangle())
+                                .highPriorityGesture(TapGesture().onEnded {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        sidebar.toggleCollectionCollapse(collectionId)
+                                    }
+                                })
+                        } else {
+                            Circle()
+                                .fill(.secondary.opacity(0.5))
+                                .frame(width: 4, height: 4)
+                        }
+                    }
+                    .frame(width: Self.outlineColumnWidth)
                     Text(collection.name)
                 }
             }
