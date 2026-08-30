@@ -164,6 +164,10 @@ struct InspectorView: View {
         // synchronous structural write — see LibraryController.writeSync.
         .disabled(!hasSelection || controller.isBusy)
         .roundedFieldChrome()
+        // U39: the "k" shortcut — onChange for the live field, onAppear for a
+        // panel revealed by the same action; consume-once in the view model.
+        .onChange(of: center.focusKeywordRequest) { adoptKeywordFocusRequest() }
+        .onAppear { adoptKeywordFocusRequest() }
         .overlay(alignment: .topLeading) {
             // Dropdown overlays below the field (spec §9.8: offset 45).
             if keywordFieldFocused, entryCount > 0 {
@@ -177,6 +181,13 @@ struct InspectorView: View {
                 .offset(y: 45)
             }
         }
+    }
+
+    /// U39: takes a pending "k" focus request. Async — a field that appeared
+    /// in this very body pass cannot take @FocusState synchronously yet.
+    private func adoptKeywordFocusRequest() {
+        guard center.consumeKeywordFocusRequest() else { return }
+        DispatchQueue.main.async { keywordFieldFocused = true }
     }
 
     /// Accepts the highlighted suggestion when given, otherwise the raw text

@@ -122,6 +122,43 @@ final class CenterViewModel {
     }
     @ObservationIgnored private var searchDebounce: Task<Void, Never>?
 
+    /// U39: focus requests from the "s"/"k" shortcuts — monotonically
+    /// increasing tokens the fields observe (@FocusState is view-local, so
+    /// the dispatcher cannot set it directly). Consumption is centralised
+    /// here: a request fires exactly once, whether the field was live
+    /// (onChange) or created by the same action (onAppear after a mode
+    /// switch / panel reveal) — and a stale token can never steal focus on
+    /// an unrelated re-appearance.
+    private(set) var focusSearchRequest = 0
+    private(set) var focusKeywordRequest = 0
+    @ObservationIgnored private var searchFocusConsumed = 0
+    @ObservationIgnored private var keywordFocusConsumed = 0
+
+    /// "s": the search field lives in the grid bar (U5) — switch there first.
+    func requestSearchFocus() {
+        if viewMode != .grid { viewMode = .grid }
+        focusSearchRequest += 1
+    }
+
+    /// "k": the keyword field lives in the right panel — reveal it first.
+    func requestKeywordFocus() {
+        if !showRightPanel { showRightPanel = true }
+        focusKeywordRequest += 1
+    }
+
+    /// True exactly once per request — the caller takes the focus.
+    func consumeSearchFocusRequest() -> Bool {
+        guard focusSearchRequest > searchFocusConsumed else { return false }
+        searchFocusConsumed = focusSearchRequest
+        return true
+    }
+
+    func consumeKeywordFocusRequest() -> Bool {
+        guard focusKeywordRequest > keywordFocusConsumed else { return false }
+        keywordFocusConsumed = focusKeywordRequest
+        return true
+    }
+
     /// U38: exact-rating filter from the star chips next to the search field
     /// (nil = off, 0 = unrated, Q9 exact semantics like the sidebar rows).
     /// ANDed with the text search and the active collection. A click applies

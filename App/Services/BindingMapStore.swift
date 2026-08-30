@@ -75,8 +75,10 @@ typealias KeyMapStore = BindingMapStore<KeyChord>
 extension BindingMapStore where Key == KeyChord {
     convenience init() {
         self.init(defaultsKey: "keyboardShortcuts", initial: KeyMap.defaults, resetValue: KeyMap.defaults)
-        // U33 shipped after the first stored maps existed.
+        // U33/U39 shipped after the first stored maps existed.
         adoptDefaultOnce(key: "cmd+a", action: "app:selectAll", marker: "adopted.cmd+a.selectAll")
+        adoptDefaultOnce(key: "s", action: "app:focusSearch", marker: "adopted.s.focusSearch")
+        adoptDefaultOnce(key: "k", action: "app:focusKeywords", marker: "adopted.k.focusKeywords")
     }
 
     func resetToDefaults() { reset() }

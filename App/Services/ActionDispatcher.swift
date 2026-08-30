@@ -52,6 +52,10 @@ final class ActionDispatcher {
             center.moveAnchorByRow(1)
         case .selectAll:
             center.selectAllVisible()
+        case .focusSearch:
+            center.requestSearchFocus()
+        case .focusKeywords:
+            center.requestKeywordFocus()
         case .rotate:
             controller.rotatePhotos(ids: Array(center.selection.selectedIds))
         case .viewGrid:

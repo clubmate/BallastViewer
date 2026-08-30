@@ -22,6 +22,8 @@ extension BindingMap where Key == KeyChord {
             "UpArrow": "app:moveUp",
             "DownArrow": "app:moveDown",
             "cmd+a": "app:selectAll",
+            "s": "app:focusSearch",
+            "k": "app:focusKeywords",
             "Space": "app:rotate",
             "Escape": "app:viewGrid",
             "Return": "app:viewSingle",

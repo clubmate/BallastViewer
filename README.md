@@ -29,6 +29,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 - **Stable random order:** a Random sort that keeps its order while you work, so rating a photo never reshuffles the list under your hands.
 - **Instant rotation** via stored orientation — display-only, files untouched, no re-decode.
 - **Search** matches keywords and filenames, on top of the active collection; space-separated terms combine with OR (`PARIS ROME`), and `LOCATION > ROME` stays one path term. Star chips beside the field add an exact-rating filter on top.
+- **Keyboard-first:** every shortcut is remappable; `s` jumps into search, `k` into keyword entry, ⌘A selects all.
 - **Full undo** for ratings, rotations, keyword changes, and even folder removal.
 
 ### Keywords

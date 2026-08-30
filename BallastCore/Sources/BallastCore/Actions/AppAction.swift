@@ -7,6 +7,8 @@ public enum AppAction: String, CaseIterable, Hashable, Sendable {
     case moveUp
     case moveDown
     case selectAll
+    case focusSearch
+    case focusKeywords
     case rotate
     case viewGrid
     case viewSingle
@@ -26,6 +28,8 @@ public enum AppAction: String, CaseIterable, Hashable, Sendable {
         case .moveUp: "Move Up"
         case .moveDown: "Move Down"
         case .selectAll: "Select All"
+        case .focusSearch: "Focus Search"
+        case .focusKeywords: "Focus Keyword Entry"
         case .rotate: "Rotate Selection"
         case .viewGrid: "Grid View"
         case .viewSingle: "Single View"

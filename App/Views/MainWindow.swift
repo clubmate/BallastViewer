@@ -526,6 +526,13 @@ private struct SearchField: View {
         KeywordAutocomplete.suggestions(for: center.searchText, tree: controller.vocabulary.tree)
     }
 
+    /// U39: takes a pending "s" focus request. Async — a field that appeared
+    /// in this very body pass cannot take @FocusState synchronously yet.
+    private func adoptFocusRequest() {
+        guard center.consumeSearchFocusRequest() else { return }
+        DispatchQueue.main.async { searchFocused = true }
+    }
+
     var body: some View {
         @Bindable var center = center
         return HStack(spacing: 4) {
@@ -552,6 +559,12 @@ private struct SearchField: View {
                     // submitted field reopens it without any typing.
                     if !focused { showSearchSuggestions = false }
                 }
+                // U39: the "s" shortcut — onChange for the live field, the
+                // onAppear pass for a field created by the same action
+                // (single → grid switch). Consume-once, so a stale token
+                // never re-focuses on an unrelated re-appearance.
+                .onChange(of: center.focusSearchRequest) { adoptFocusRequest() }
+                .onAppear { adoptFocusRequest() }
             if !center.searchText.isEmpty {
                 Button {
                     center.searchText = ""
