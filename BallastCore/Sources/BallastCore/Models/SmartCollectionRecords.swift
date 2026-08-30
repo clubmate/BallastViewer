@@ -24,14 +24,22 @@ public struct SmartCollectionRecord: Codable, Hashable, Sendable, Identifiable, 
 
     public var id: Int64?
     public var groupId: Int64
+    /// U41: non-nil makes this a CHILD collection — its result is the
+    /// parent's result AND its own rules. Children live under their parent
+    /// in the sidebar; `groupId` mirrors the parent's for grouping queries.
+    public var parentId: Int64?
     public var name: String
     /// true = AND, false = OR (spec §3.6).
     public var matchAll: Bool
     public var sortOrder: Int
 
-    public init(id: Int64? = nil, groupId: Int64, name: String, matchAll: Bool = true, sortOrder: Int) {
+    public init(
+        id: Int64? = nil, groupId: Int64, parentId: Int64? = nil, name: String,
+        matchAll: Bool = true, sortOrder: Int
+    ) {
         self.id = id
         self.groupId = groupId
+        self.parentId = parentId
         self.name = name
         self.matchAll = matchAll
         self.sortOrder = sortOrder

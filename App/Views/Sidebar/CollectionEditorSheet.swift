@@ -41,9 +41,12 @@ struct CollectionEditorSheet: View {
             }
 
             if draft.rules.isEmpty {
-                // U10 hint — Q6 makes an empty list match every photo.
+                // U10 hint — Q6 makes an empty list match every photo; a
+                // child with no own rules shows exactly the parent's result.
                 Label(
-                    "No rules yet — this collection currently matches every photo. Add rules to narrow it down.",
+                    draft.inheritedRules.isEmpty
+                        ? "No rules yet — this collection currently matches every photo. Add rules to narrow it down."
+                        : "No own rules yet — this collection currently shows its parent's photos. Add rules to narrow it down.",
                     systemImage: "info.circle"
                 )
                 .font(.callout)
@@ -53,10 +56,30 @@ struct CollectionEditorSheet: View {
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
             }
 
+            if draft.childCount > 0 {
+                // U41: inherited rules propagate — an edit here silently
+                // changes every descendant's result too.
+                Label(
+                    "Changes also affect its \(draft.childCount) child collection\(draft.childCount == 1 ? "" : "s").",
+                    systemImage: "arrow.triangle.branch"
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             // A plain scroll view, not a List: List adds side insets of its
             // own that no style removes, and rows are deleted via their button.
             ScrollView {
                 VStack(spacing: 8) {
+                    // U41: the ancestors' rules, greyed and read-only — a
+                    // child photo must pass these AND the own rules below.
+                    ForEach(draft.inheritedRules) { inherited in
+                        inheritedRuleRow(inherited)
+                    }
+                    if !draft.inheritedRules.isEmpty {
+                        Divider()
+                    }
                     ForEach($draft.rules) { $rule in
                         ruleRow($rule)
                     }
@@ -82,6 +105,57 @@ struct CollectionEditorSheet: View {
         }
         .padding(16)
         .frame(minWidth: 500, minHeight: 400)
+    }
+
+    // MARK: Inherited rule row (U41): read-only summary, greyed, with origin
+
+    private func inheritedRuleRow(_ inherited: CollectionDraft.InheritedRule) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock")
+                .font(.caption)
+            Text(inheritedRuleText(inherited.record))
+            Spacer()
+            Text("from “\(inherited.originName)”")
+                .font(.caption)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+        .help("Inherited from “\(inherited.originName)” — edit it there.")
+    }
+
+    /// "Keyword Contains STRASSE" — falls back to the raw strings for types/
+    /// operators this app version does not know (D6).
+    private func inheritedRuleText(_ record: CollectionRuleRecord) -> String {
+        let type = RuleType(rawValue: record.type)
+        let typeText = type.map(typeName) ?? record.type
+        let opText: String
+        if record.type == RuleType.importBatch.rawValue {
+            opText = ""
+        } else if let type, let op = RuleOperator(rawValue: record.operation) {
+            opText = operatorName(op, for: type)
+        } else {
+            opText = record.operation
+        }
+        return "\(typeText) \(opText) \(inheritedValueText(record))"
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func inheritedValueText(_ record: CollectionRuleRecord) -> String {
+        let value = record.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch RuleType(rawValue: record.type) {
+        case .keywordGroup:
+            return keywordGroups.first { $0.id.map(String.init) == value }?.name ?? value
+        case .rating:
+            return value == "0" ? "Unrated" : "\(value) ★"
+        case .captureDate, .dateRange:
+            guard let timestamp = Double(value) else { return value }
+            return Date(timeIntervalSince1970: timestamp)
+                .formatted(date: .abbreviated, time: .omitted)
+        default:
+            return value
+        }
     }
 
     // MARK: Rule row: type · operator · value, three equal columns

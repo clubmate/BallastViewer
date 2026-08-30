@@ -185,7 +185,7 @@ final class CenterViewModel {
     /// Query caches, refreshed on collection/catalog changes. Rules are kept
     /// pre-compiled — the filter evaluates every photo against them.
     @ObservationIgnored private var collectionsById: [Int64: SmartCollectionRecord] = [:]
-    @ObservationIgnored private var compiledCollections: [Int64: CompiledRules] = [:]
+    @ObservationIgnored private var compiledCollections: [Int64: CompiledRuleChain] = [:]
     /// Subtree ids (keyword + descendants) for an active `.keyword` item (U29)
     /// — the per-photo filter tests set intersection instead of walking the
     /// tree. Refreshed at the top of every filter pass; cheap (O(subtree)).
@@ -346,12 +346,12 @@ final class CenterViewModel {
 
     private func refreshQueryCaches() {
         collectionsById = controller.snapshot?.makeCollectionsById() ?? [:]
-        let rulesByCollection = controller.snapshot?.makeRulesByCollection() ?? [:]
-        compiledCollections = collectionsById.mapValues { collection in
-            CompiledRules(
-                rulesByCollection[collection.id ?? -1] ?? [], matchAll: collection.matchAll
-            )
-        }
+        // Chains, not flat rule sets: a child collection ANDs every
+        // ancestor's rules onto its own (U41).
+        compiledCollections = CompiledRuleChain.chains(
+            collections: controller.snapshot?.collections ?? [],
+            rulesByCollection: controller.snapshot?.makeRulesByCollection() ?? [:]
+        )
     }
 
     /// `search` is folded once per pass by the caller (nil = search off);

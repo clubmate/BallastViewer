@@ -90,6 +90,9 @@ enum TestHooks {
         if env["BV_TEST_MERGE"] != nil {
             runMergeChecks(controller, center: center)
         }
+        if env["BV_TEST_CHILDCOLL"] != nil {
+            runChildCollectionChecks(controller, center: center, sidebar: sidebar)
+        }
         if env["BV_TEST_STEP9"] != nil {
             runStep9Checks(controller, center: center, dispatcher: dispatcher, keyMap: keyMap)
         }
@@ -352,6 +355,43 @@ enum TestHooks {
             "BVMERGE merged children=\(survivors.joined(separator: ","))",
             "sourceGone=\(tree?.node(sourceId) == nil)",
             "bothCarry=\(carriers.count == 2)"
+        )
+    }
+
+    /// U41 acceptance, headless: a child collection ANDs the parent's rules
+    /// onto its own — counts and the active-collection filter follow the
+    /// chain. Leaves the structure in place for a manual UI pass.
+    @MainActor
+    private static func runChildCollectionChecks(
+        _ controller: LibraryController, center: CenterViewModel, sidebar: SidebarViewModel
+    ) {
+        controller.createSmartGroup(named: "CHAIN")
+        guard let groupId = controller.snapshot?.smartGroups.last?.id else {
+            print("BVCHILD error=no-group")
+            return
+        }
+        guard let parentId = controller.createCollection(named: "STRASSE", inGroup: groupId),
+              let parent = controller.snapshot?.collections.first(where: { $0.id == parentId })
+        else {
+            print("BVCHILD error=no-parent")
+            return
+        }
+        controller.saveCollection(parent, rules: [("keyword", "contains", "STRASSE")])
+        guard let childId = controller.createCollection(
+                  named: "M1", inGroup: groupId, parentId: parentId
+              ),
+              let child = controller.snapshot?.collections.first(where: { $0.id == childId })
+        else {
+            print("BVCHILD error=no-child")
+            return
+        }
+        controller.saveCollection(child, rules: [("filename", "contains", "m1")])
+        center.selectSidebarItem(.collection(childId))
+        print(
+            "BVCHILD parentCount=\(sidebar.counts.collections[parentId] ?? -1)",
+            "childCount=\(sidebar.counts.collections[childId] ?? -1)",
+            "visibleInChild=\(center.visiblePhotos.count)",
+            "descendants=\(controller.collectionDescendantCount(parentId))"
         )
     }
 

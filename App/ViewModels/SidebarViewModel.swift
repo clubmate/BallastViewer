@@ -36,20 +36,27 @@ final class SidebarViewModel {
     var namePrompt: NamePrompt?
 
     struct NamePrompt: Identifiable {
-        enum Target { case newGroup, newCollection(groupId: Int64), renameGroup(id: Int64) }
+        enum Target {
+            case newGroup
+            /// `parentId` non-nil = child collection under that parent (U41).
+            case newCollection(groupId: Int64, parentId: Int64?)
+            case renameGroup(id: Int64)
+        }
         let target: Target
         var name: String = ""
         var id: String {
             switch target {
             case .newGroup: "newGroup"
-            case .newCollection(let groupId): "newCollection:\(groupId)"
+            case .newCollection(let groupId, let parentId):
+                "newCollection:\(groupId):\(parentId.map(String.init) ?? "-")"
             case .renameGroup(let id): "renameGroup:\(id)"
             }
         }
         var title: String {
             switch target {
             case .newGroup: "New Group"
-            case .newCollection: "New Smart Collection"
+            case .newCollection(_, let parentId):
+                parentId == nil ? "New Smart Collection" : "New Child Collection"
             case .renameGroup: "Rename Group"
             }
         }
@@ -76,23 +83,56 @@ final class SidebarViewModel {
     /// rotation and keyword change, which would re-render the whole sidebar
     /// per key press. These refresh only on collection-list events.
     private(set) var groups: [SmartGroupRecord] = []
+    /// FLAT per group, children included — the group-deletion blast radius.
     private(set) var collectionsByGroup: [Int64: [SmartCollectionRecord]] = [:]
+    /// U41: disclosure state of collections with children. Transient by
+    /// design — like the keyword editor's outline, unlike group collapse.
+    var collapsedCollections: Set<Int64> = []
 
     func collections(inGroup groupId: Int64) -> [SmartCollectionRecord] {
         collectionsByGroup[groupId] ?? []
     }
 
+    /// One visible outline row (U41): the collection, its indent depth and
+    /// whether it can disclose children.
+    struct CollectionRow: Identifiable {
+        let collection: SmartCollectionRecord
+        let depth: Int
+        let hasChildren: Bool
+        var id: Int64 { collection.id ?? 0 }
+    }
+
+    /// Depth-first flattening of a group's visible collection outline —
+    /// alphabetical per level (U32), collapsed subtrees skipped.
+    func collectionRows(inGroup groupId: Int64) -> [CollectionRow] {
+        let childrenByParent = Dictionary(
+            grouping: collections(inGroup: groupId).filter { $0.parentId != nil },
+            by: { $0.parentId! }
+        )
+        func sorted(_ list: [SmartCollectionRecord]) -> [SmartCollectionRecord] {
+            list.sorted { CaseInsensitiveMatch.fold($0.name) < CaseInsensitiveMatch.fold($1.name) }
+        }
+        var rows: [CollectionRow] = []
+        var stack: [(SmartCollectionRecord, Int)] = sorted(
+            collections(inGroup: groupId).filter { $0.parentId == nil }
+        ).reversed().map { ($0, 0) }
+        while let (collection, depth) = stack.popLast() {
+            guard let id = collection.id else { continue }
+            let children = childrenByParent[id] ?? []
+            rows.append(CollectionRow(
+                collection: collection, depth: depth, hasChildren: !children.isEmpty
+            ))
+            if !children.isEmpty, !collapsedCollections.contains(id) {
+                stack.append(contentsOf: sorted(children).reversed().map { ($0, depth + 1) })
+            }
+        }
+        return rows
+    }
+
     private func refreshLists() {
         let snapshot = controller.snapshot
         let newGroups = snapshot?.smartGroups ?? []
-        // Collections list alphabetically within their group (U32) — groups
-        // themselves keep their drag order.
         let newByGroup = Dictionary(grouping: snapshot?.collections ?? [], by: \.groupId)
-            .mapValues { collections in
-                collections.sorted {
-                    CaseInsensitiveMatch.fold($0.name) < CaseInsensitiveMatch.fold($1.name)
-                }
-            }
         if groups != newGroups { groups = newGroups }
         if collectionsByGroup != newByGroup { collectionsByGroup = newByGroup }
     }
@@ -102,6 +142,14 @@ final class SidebarViewModel {
             collapsedGroups.remove(groupId)
         } else {
             collapsedGroups.insert(groupId)
+        }
+    }
+
+    func toggleCollectionCollapse(_ id: Int64) {
+        if collapsedCollections.contains(id) {
+            collapsedCollections.remove(id)
+        } else {
+            collapsedCollections.insert(id)
         }
     }
 
@@ -153,10 +201,27 @@ final class SidebarViewModel {
 
     func beginEditing(_ collection: SmartCollectionRecord) {
         guard let id = collection.id else { return }
-        let rules = (controller.snapshot?.rules ?? [])
+        let allRules = controller.snapshot?.rules ?? []
+        let rules = allRules
             .filter { $0.collectionId == id }
             .sorted { $0.sortOrder < $1.sortOrder }
-        editingCollection = CollectionDraft(collection: collection, rules: rules)
+        // U41: ancestors' rules show greyed out in the editor — root first,
+        // so the list reads top-down like the sidebar outline.
+        let allCollections = controller.snapshot?.collections ?? []
+        let inherited = CollectionHierarchy.ancestors(of: id, in: allCollections)
+            .reversed()
+            .flatMap { ancestor in
+                allRules
+                    .filter { $0.collectionId == ancestor.id }
+                    .sorted { $0.sortOrder < $1.sortOrder }
+                    .map { CollectionDraft.InheritedRule(originName: ancestor.name, record: $0) }
+            }
+        editingCollection = CollectionDraft(
+            collection: collection,
+            rules: rules,
+            inheritedRules: inherited,
+            childCount: CollectionHierarchy.descendantIds(of: id, in: allCollections).count
+        )
     }
 }
 
@@ -165,6 +230,11 @@ final class SidebarViewModel {
 struct CollectionDraft: Identifiable {
     var collection: SmartCollectionRecord
     var rules: [DraftRule]
+    /// U41: the ancestors' rules, root first — displayed greyed out and
+    /// read-only; Save never touches them.
+    let inheritedRules: [InheritedRule]
+    /// U41: how many descendants an edit propagates into (editor hint).
+    let childCount: Int
     var id: Int64 { collection.id ?? 0 }
 
     struct DraftRule: Identifiable, Hashable {
@@ -174,8 +244,21 @@ struct CollectionDraft: Identifiable {
         var value: String
     }
 
-    init(collection: SmartCollectionRecord, rules: [CollectionRuleRecord]) {
+    struct InheritedRule: Identifiable, Hashable {
+        let id = UUID()
+        let originName: String
+        let record: CollectionRuleRecord
+    }
+
+    init(
+        collection: SmartCollectionRecord,
+        rules: [CollectionRuleRecord],
+        inheritedRules: [InheritedRule] = [],
+        childCount: Int = 0
+    ) {
         self.collection = collection
+        self.inheritedRules = inheritedRules
+        self.childCount = childCount
         // Unknown types/operators exist only in libraries written by newer
         // versions (D6); the editor cannot represent them, so editing drops
         // them on save — matching wholesale-replace semantics.

@@ -58,23 +58,38 @@ extension LibraryController {
     // MARK: Collections
 
     /// New collections start with no rules and matchAll — showing the whole
-    /// library until narrowed down (Q6). Returns the id for auto-selection.
+    /// library until narrowed down (Q6; a CHILD still shows exactly the
+    /// parent's result then, U41). `parentId` non-nil creates a child in the
+    /// parent's group. Returns the id for auto-selection.
     @discardableResult
-    func createCollection(named name: String, inGroup groupId: Int64) -> Int64? {
+    func createCollection(named name: String, inGroup groupId: Int64, parentId: Int64? = nil) -> Int64? {
         guard let created: SmartCollectionRecord = writeSync({ db in
-            try CollectionDAO.createCollection(name: name, inGroup: groupId, in: db)
+            try CollectionDAO.createCollection(
+                name: name, inGroup: groupId, parentId: parentId, in: db
+            )
         }) else { return nil }
         mutateSnapshot { $0.collections.append(created) }
         emitCatalogEvent(.collectionsChanged)
         return created.id
     }
 
+    /// U41 confirmation number for the sidebar's delete alert.
+    func collectionDescendantCount(_ id: Int64) -> Int {
+        guard let snapshot else { return 0 }
+        return CollectionHierarchy.descendantIds(of: id, in: snapshot.collections).count
+    }
+
+    /// Deletes the collection AND its child subtree (U41; DB cascade does the
+    /// rows, the mirror follows).
     func deleteCollection(_ id: Int64) {
+        let removed = (snapshot?.collections).map {
+            CollectionHierarchy.descendantIds(of: id, in: $0).union([id])
+        } ?? [id]
         guard writeSync({ db in try CollectionDAO.deleteCollection(id, in: db) }) != nil
         else { return }
         mutateSnapshot { snapshot in
-            snapshot.collections.removeAll { $0.id == id }
-            snapshot.rules.removeAll { $0.collectionId == id }
+            snapshot.collections.removeAll { $0.id.map(removed.contains) ?? false }
+            snapshot.rules.removeAll { removed.contains($0.collectionId) }
         }
         emitCatalogEvent(.collectionsChanged)
     }

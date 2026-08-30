@@ -142,6 +142,18 @@ public enum LibrarySchema {
             }
         }
 
+        migrator.registerMigration("v6-collection-parent") { db in
+            // U41: child Smart Collections. NULL = top level; deleting a
+            // parent cascades through its subtree.
+            try db.alter(table: "smartCollection") { t in
+                t.add(column: "parentId", .integer)
+                    .references("smartCollection", onDelete: .cascade)
+            }
+            try db.create(
+                index: "smartCollection_parentId", on: "smartCollection", columns: ["parentId"]
+            )
+        }
+
         return migrator
     }
 

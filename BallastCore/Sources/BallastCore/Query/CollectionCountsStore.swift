@@ -24,10 +24,10 @@ public struct CollectionCountsStore: Sendable {
 
     public private(set) var counts = SidebarCounts()
     private var membershipByPhoto: [Int64: Membership] = [:]
-    /// The collections' rules, compiled by the last `rebuild` and reused by
-    /// every `update` — rule edits always arrive as a rebuild, so a delta
-    /// never needs to recompile.
-    private var compiled: [(id: Int64, rules: CompiledRules)] = []
+    /// The collections' rule chains (own + inherited ancestor rules, U41),
+    /// compiled by the last `rebuild` and reused by every `update` — rule
+    /// edits always arrive as a rebuild, so a delta never needs to recompile.
+    private var compiled: [(id: Int64, rules: CompiledRuleChain)] = []
 
     public init() {}
 
@@ -85,12 +85,9 @@ public struct CollectionCountsStore: Sendable {
     private static func compile(
         _ collections: [SmartCollectionRecord],
         _ rulesByCollection: [Int64: [CollectionRuleRecord]]
-    ) -> [(id: Int64, rules: CompiledRules)] {
-        collections.compactMap { collection in
-            collection.id.map {
-                ($0, CompiledRules(rulesByCollection[$0] ?? [], matchAll: collection.matchAll))
-            }
-        }
+    ) -> [(id: Int64, rules: CompiledRuleChain)] {
+        CompiledRuleChain.chains(collections: collections, rulesByCollection: rulesByCollection)
+            .map { (id: $0.key, rules: $0.value) }
     }
 
     /// `scratch` is a caller-owned set reused across photos (cleared, capacity

@@ -47,19 +47,20 @@ public enum SidebarFilter {
     /// - `lastImport`: photos of the remembered batch; before any import this
     ///   is a real match-nothing — the list is empty, not full (Q8).
     /// - `rating(n)`: exactly n stars (Q9); n = 0 is the UNRATED row (U28).
-    /// - `collection`: compiled rule evaluation; a missing entry means a
-    ///   deleted/unknown id → matches nothing.
+    /// - `collection`: compiled rule-chain evaluation (own rules AND every
+    ///   ancestor's — U41); a missing entry means a deleted/unknown id →
+    ///   matches nothing.
     /// - `keyword`: the photo carries any keyword in `activeKeywordSubtree`
     ///   (the selected keyword plus its descendants, precomputed by the
     ///   caller — U29). An empty set matches nothing.
     ///
-    /// Callers compile each collection's rules once (`CompiledRules`) instead
-    /// of re-parsing them for every photo.
+    /// Callers compile the chains once (`CompiledRuleChain.chains`) instead
+    /// of re-parsing rules for every photo.
     public static func matches(
         _ photo: PhotoRecord,
         facts: @autoclosure () -> PhotoQueryFacts,
         item: SidebarItem,
-        compiledCollections: [Int64: CompiledRules],
+        compiledCollections: [Int64: CompiledRuleChain],
         lastImportBatchId: Int64?,
         activeKeywordSubtree: Set<Int64> = []
     ) -> Bool {

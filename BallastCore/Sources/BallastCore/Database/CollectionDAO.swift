@@ -30,10 +30,13 @@ public enum CollectionDAO {
 
     // MARK: Collections
 
+    /// `parentId` non-nil creates a CHILD collection (U41) — the caller passes
+    /// the parent's `groupId`, children always live in their parent's group.
     @discardableResult
     public static func createCollection(
         name: String,
         inGroup groupId: Int64,
+        parentId: Int64? = nil,
         matchAll: Bool = true,
         in db: Database
     ) throws -> SmartCollectionRecord {
@@ -43,7 +46,8 @@ public enum CollectionDAO {
             arguments: [groupId]
         ) ?? -1
         var record = SmartCollectionRecord(
-            groupId: groupId, name: name, matchAll: matchAll, sortOrder: maxOrder + 1
+            groupId: groupId, parentId: parentId, name: name,
+            matchAll: matchAll, sortOrder: maxOrder + 1
         )
         try record.insert(db)
         return record

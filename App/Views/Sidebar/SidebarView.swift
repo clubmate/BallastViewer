@@ -135,22 +135,6 @@ struct SidebarView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer()
-            // Collapsing hides the + button too (Q25). An unsaved group
-            // (nil id) cannot parent a collection — no button rather than a
-            // bogus -1 parent.
-            if !collapsed, let parentId = group.id {
-                Button {
-                    sidebar.namePrompt = .init(target: .newCollection(groupId: parentId))
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                // Optically centred under the count badges in the rows below —
-                // flush-right the glyph sat visibly right of the badge pills.
-                .padding(.trailing, 4)
-                .help("New Smart Collection")
-            }
         }
         .padding(.horizontal, 8)
         .frame(minHeight: 26)
@@ -161,6 +145,13 @@ struct SidebarView: View {
             }
         }
         .contextMenu {
+            // U41: creation lives in the context menu — top-level here, child
+            // collections on their parent's row (the group "+" is gone).
+            if let parentId = group.id {
+                Button("New Smart Collection") {
+                    sidebar.namePrompt = .init(target: .newCollection(groupId: parentId, parentId: nil))
+                }
+            }
             Button("Rename Group") {
                 sidebar.namePrompt = .init(target: .renameGroup(id: groupId), name: group.name)
             }
@@ -182,20 +173,41 @@ struct SidebarView: View {
         )
 
         if !collapsed {
-            ForEach(sidebar.collections(inGroup: groupId)) { collection in
-                collectionRow(collection)
+            // U41: outline rows — depth-indented, disclosure chevron on
+            // collections with children.
+            ForEach(sidebar.collectionRows(inGroup: groupId)) { outlineRow in
+                collectionRow(outlineRow)
             }
         }
     }
 
     @ViewBuilder
-    private func collectionRow(_ collection: SmartCollectionRecord) -> some View {
+    private func collectionRow(_ outlineRow: SidebarViewModel.CollectionRow) -> some View {
+        let collection = outlineRow.collection
         if let collectionId = collection.id {
+            let collapsed = sidebar.collapsedCollections.contains(collectionId)
             row(
                 item: .collection(collectionId),
                 count: sidebar.counts.collections[collectionId]
             ) {
-                Text(collection.name)
+                HStack(spacing: 4) {
+                    if outlineRow.hasChildren {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .rotationEffect(.degrees(collapsed ? 0 : 90))
+                            .foregroundStyle(.secondary)
+                            // The chevron toggles disclosure WITHOUT selecting
+                            // the row — high priority beats the row button.
+                            .contentShape(Rectangle())
+                            .highPriorityGesture(TapGesture().onEnded {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    sidebar.toggleCollectionCollapse(collectionId)
+                                }
+                            })
+                    }
+                    Text(collection.name)
+                }
+                .padding(.leading, CGFloat(outlineRow.depth) * 14)
             }
             // Simultaneous: the row is a Button, which would otherwise swallow
             // the second click of a double-click.
@@ -204,6 +216,13 @@ struct SidebarView: View {
             )
             .contextMenu {
                 Button("Edit Smart Collection") { sidebar.beginEditing(collection) }
+                // U41: a child inherits this collection's (and its ancestors')
+                // rules; it is created in the parent's group.
+                Button("New Child Collection") {
+                    sidebar.namePrompt = .init(
+                        target: .newCollection(groupId: collection.groupId, parentId: collectionId)
+                    )
+                }
                 Button("Delete", role: .destructive) {
                     sidebar.pendingCollectionDeletion = collection
                 }
@@ -241,10 +260,15 @@ private extension View {
                     switch prompt.target {
                     case .newGroup:
                         controller.createSmartGroup(named: name)
-                    case .newCollection(let groupId):
-                        // Auto-select the new collection (spec §7.7) — it has
-                        // no rules yet, so it shows the whole library (Q6).
-                        if let id = controller.createCollection(named: name, inGroup: groupId) {
+                    case .newCollection(let groupId, let parentId):
+                        // Auto-select the new collection (spec §7.7) — with
+                        // no rules yet it shows the whole library (Q6), or
+                        // exactly the parent's result for a child (U41).
+                        if let id = controller.createCollection(
+                            named: name, inGroup: groupId, parentId: parentId
+                        ) {
+                            // A child must be visible right away.
+                            if let parentId { sidebar.collapsedCollections.remove(parentId) }
                             center.selectSidebarItem(.collection(id))
                         }
                     case .renameGroup(let id):
@@ -282,7 +306,12 @@ private extension View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { collection in
-                Text("Delete “\(collection.name)”? Photos are not affected.")
+                // U41: children go with their parent — say so (U7).
+                let childCount = collection.id.map(controller.collectionDescendantCount) ?? 0
+                let children = childCount == 0
+                    ? ""
+                    : " and its \(childCount) child collection\(childCount == 1 ? "" : "s")"
+                Text("Delete “\(collection.name)”\(children)? Photos are not affected.")
             }
             .sheet(item: Binding(
                 get: { sidebar.editingCollection },
