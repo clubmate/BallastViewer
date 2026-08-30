@@ -35,6 +35,13 @@ struct LibraryCommands: Commands {
             }
             .keyboardShortcut("l", modifiers: [.shift, .command])
             Divider()
+            // Merges ratings + keywords from an .lrcat into photos already in
+            // the open library — imports metadata, never images.
+            Button("Import Metadata from Lightroom…") {
+                controller.presentImportLightroomPanel()
+            }
+            .disabled(controller.libraryURL == nil || controller.isBusy)
+            Divider()
             Button("BallastPicker") { openWindow(id: "photoPicker") }
                 .keyboardShortcut("p", modifiers: [.shift, .command])
         }
