@@ -1,11 +1,12 @@
-/// The nineteen app actions (spec §12.2). Every dispatcher must handle all of
-/// them exhaustively — the original's fall-through no-op made `ratingUp` /
-/// `ratingDown` unreachable from the keyboard (C5).
+/// The app actions (spec §12.2 plus `selectAll`, U33). Every dispatcher must
+/// handle all of them exhaustively — the original's fall-through no-op made
+/// `ratingUp` / `ratingDown` unreachable from the keyboard (C5).
 public enum AppAction: String, CaseIterable, Hashable, Sendable {
     case nextPhoto
     case previousPhoto
     case moveUp
     case moveDown
+    case selectAll
     case rotate
     case viewGrid
     case viewSingle
@@ -24,6 +25,7 @@ public enum AppAction: String, CaseIterable, Hashable, Sendable {
         case .previousPhoto: "Previous Photo"
         case .moveUp: "Move Up"
         case .moveDown: "Move Down"
+        case .selectAll: "Select All"
         case .rotate: "Rotate Selection"
         case .viewGrid: "Grid View"
         case .viewSingle: "Single View"

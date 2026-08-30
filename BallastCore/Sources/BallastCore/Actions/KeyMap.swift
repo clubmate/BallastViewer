@@ -21,6 +21,7 @@ extension BindingMap where Key == KeyChord {
             "LeftArrow": "app:previousPhoto",
             "UpArrow": "app:moveUp",
             "DownArrow": "app:moveDown",
+            "cmd+a": "app:selectAll",
             "Space": "app:rotate",
             "Escape": "app:viewGrid",
             "Return": "app:viewSingle",

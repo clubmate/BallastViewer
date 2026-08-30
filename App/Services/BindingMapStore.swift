@@ -43,6 +43,21 @@ final class BindingMapStore<Key: BindingKey> {
         save()
     }
 
+    /// One-time adoption of a default binding added in a later app version —
+    /// stored maps predate it and would otherwise never receive it. Applied
+    /// only when neither the key nor the action is already bound, and never
+    /// again after the first attempt (`marker`): a user remap or a deliberate
+    /// unbind must not be fought on every launch.
+    func adoptDefaultOnce(key keyString: String, action actionString: String, marker: String) {
+        guard !UserDefaults.standard.bool(forKey: marker) else { return }
+        UserDefaults.standard.set(true, forKey: marker)
+        var bindings = map.bindings
+        guard bindings[keyString] == nil, !bindings.values.contains(actionString) else { return }
+        bindings[keyString] = actionString
+        map = BindingMap(bindings: bindings)
+        save()
+    }
+
     /// Follows a vocabulary rename so keyword bindings (and their LEDs) stay live.
     func renameKeywordPath(from oldPath: String, to newPath: String) {
         map.renameKeywordPath(from: oldPath, to: newPath)
@@ -60,6 +75,8 @@ typealias KeyMapStore = BindingMapStore<KeyChord>
 extension BindingMapStore where Key == KeyChord {
     convenience init() {
         self.init(defaultsKey: "keyboardShortcuts", initial: KeyMap.defaults, resetValue: KeyMap.defaults)
+        // U33 shipped after the first stored maps existed.
+        adoptDefaultOnce(key: "cmd+a", action: "app:selectAll", marker: "adopted.cmd+a.selectAll")
     }
 
     func resetToDefaults() { reset() }

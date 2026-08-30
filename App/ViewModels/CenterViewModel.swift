@@ -199,6 +199,15 @@ final class CenterViewModel {
         }
     }
 
+    /// ⌘A (U33): selects every visible photo — grid only, so an invisible
+    /// mass-selection can never sit behind the single view and swallow a
+    /// rating press. The anchor stays put.
+    func selectAllVisible() {
+        guard viewMode == .grid, !visiblePhotos.isEmpty else { return }
+        selection.selectAll(visiblePhotos.map(\.id))
+        updateControlSurface()
+    }
+
     // MARK: Sidebar selection (spec §10.4: switching auto-selects the first photo)
 
     func selectSidebarItem(_ item: SidebarItem) {

@@ -50,6 +50,8 @@ final class ActionDispatcher {
         case .moveDown:
             guard center.viewMode == .grid || source == .midi else { return }
             center.moveAnchorByRow(1)
+        case .selectAll:
+            center.selectAllVisible()
         case .rotate:
             controller.rotatePhotos(ids: Array(center.selection.selectedIds))
         case .viewGrid:

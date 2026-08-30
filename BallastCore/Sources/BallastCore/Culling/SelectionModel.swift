@@ -42,6 +42,16 @@ public struct SelectionModel: Equatable, Sendable {
     /// Drops selected ids that are no longer visible; the anchor follows the
     /// same rule. Used after list membership changes that did not remove the
     /// anchor (the neighbour rule handles that case).
+    /// ⌘A (U33): selects every given id. The anchor stays where it is when it
+    /// is part of the list, else it moves to the first id; an empty list
+    /// clears the selection.
+    public mutating func selectAll(_ orderedIds: [Int64]) {
+        selectedIds = Set(orderedIds)
+        if anchorId.map({ !selectedIds.contains($0) }) ?? true {
+            anchorId = orderedIds.first
+        }
+    }
+
     public mutating func prune(keeping visibleIds: Set<Int64>) {
         prune { visibleIds.contains($0) }
     }

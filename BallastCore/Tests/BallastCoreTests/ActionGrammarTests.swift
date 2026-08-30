@@ -42,8 +42,9 @@ import Testing
 }
 
 @Suite struct ActionCommandTests {
-    @Test func appNamespaceParsesAllNineteenActions() {
-        #expect(AppAction.allCases.count == 19)
+    @Test func appNamespaceParsesAllTwentyActions() {
+        // Spec §12.2's nineteen plus selectAll (U33).
+        #expect(AppAction.allCases.count == 20)
         for action in AppAction.allCases {
             let command = ActionCommand(actionString: "app:\(action.rawValue)")
             #expect(command == .app(action))
@@ -94,7 +95,8 @@ import Testing
 
     @Test func defaultsMatchSpec12_3() throws {
         let map = KeyMap.defaults
-        #expect(map.bindings.count == 16)
+        // Spec §12.3's sixteen plus cmd+a (U33).
+        #expect(map.bindings.count == 17)
         let expectations: [(String, AppAction)] = [
             ("RightArrow", .nextPhoto), ("LeftArrow", .previousPhoto),
             ("UpArrow", .moveUp), ("DownArrow", .moveDown),
