@@ -209,14 +209,30 @@ final class AppUpdater {
         await MainActor.run { progress(1) }
     }
 
+    /// Quit first, START SECOND. The old order (open the new instance, then
+    /// terminate) ran both versions side by side on the same library — and
+    /// its terminate call, issued from a dispatch block, deadlocked forever:
+    /// `_shouldTerminate`'s nested event loop cannot drain the main queue
+    /// from INSIDE a main-queue drain, so the AppDelegate's drain task never
+    /// got to call `reply(toApplicationShouldTerminate:)` and the old
+    /// instance simply stayed open (real-world report 2026-08-30).
     private func relaunch(_ url: URL) {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, _ in
-            // Terminate regardless: the new bundle is in place either way, and
-            // quitting runs the normal write-through drain.
-            DispatchQueue.main.async { NSApp.terminate(nil) }
-        }
+        // A detached shell outlives this process: it waits for the PID to
+        // disappear (write-through drain included), then opens the updated
+        // bundle — exactly one instance at any time.
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let shell = Process()
+        shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+        shell.arguments = [
+            "-c",
+            "while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.2; done;"
+                + " /usr/bin/open \"\(url.path)\"",
+        ]
+        try? shell.run()
+        // A RunLoop block runs as a top-level callout, NOT inside a queue
+        // drain — the nested `_shouldTerminate` loop can then service the
+        // drain task and the reply actually arrives.
+        RunLoop.main.perform { NSApp.terminate(nil) }
     }
 
     // MARK: Dialogs
