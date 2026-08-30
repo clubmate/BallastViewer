@@ -14,6 +14,10 @@ struct SidebarView: View {
     /// alphabetically (U32) and are not draggable.
     @State private var groupReorder = RowReorderSession()
 
+    /// One outline column (U41): guide lines and chevrons share this width
+    /// so each line sits exactly under its ancestor's chevron.
+    private static let outlineColumnWidth: CGFloat = 12
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -191,23 +195,35 @@ struct SidebarView: View {
                 count: sidebar.counts.collections[collectionId]
             ) {
                 HStack(spacing: 4) {
-                    if outlineRow.hasChildren {
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .rotationEffect(.degrees(collapsed ? 0 : 90))
-                            .foregroundStyle(.secondary)
-                            // The chevron toggles disclosure WITHOUT selecting
-                            // the row — high priority beats the row button.
-                            .contentShape(Rectangle())
-                            .highPriorityGesture(TapGesture().onEnded {
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    sidebar.toggleCollectionCollapse(collectionId)
-                                }
-                            })
+                    // Guide lines: one hairline per ancestor level, each
+                    // sitting exactly under that ancestor's chevron column —
+                    // the vertical line ties a subtree to its parent.
+                    ForEach(0..<outlineRow.depth, id: \.self) { _ in
+                        Rectangle()
+                            .fill(.secondary.opacity(0.35))
+                            .frame(width: 1)
+                            .frame(maxHeight: .infinity)
+                            .frame(width: Self.outlineColumnWidth)
                     }
+                    // The chevron column is reserved on EVERY row so siblings
+                    // align whether or not they can disclose.
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .rotationEffect(.degrees(collapsed ? 0 : 90))
+                        .foregroundStyle(.secondary)
+                        .opacity(outlineRow.hasChildren ? 1 : 0)
+                        .frame(width: Self.outlineColumnWidth)
+                        // The chevron toggles disclosure WITHOUT selecting
+                        // the row — high priority beats the row button.
+                        .contentShape(Rectangle())
+                        .highPriorityGesture(TapGesture().onEnded {
+                            guard outlineRow.hasChildren else { return }
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                sidebar.toggleCollectionCollapse(collectionId)
+                            }
+                        })
                     Text(collection.name)
                 }
-                .padding(.leading, CGFloat(outlineRow.depth) * 14)
             }
             // Simultaneous: the row is a Button, which would otherwise swallow
             // the second click of a double-click.

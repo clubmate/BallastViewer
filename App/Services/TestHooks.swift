@@ -365,6 +365,11 @@ enum TestHooks {
     private static func runChildCollectionChecks(
         _ controller: LibraryController, center: CenterViewModel, sidebar: SidebarViewModel
     ) {
+        // Idempotent-ish: a leftover CHAIN group from a previous run goes
+        // first, so reruns don't stack duplicate groups.
+        while let stale = controller.snapshot?.smartGroups.first(where: { $0.name == "CHAIN" })?.id {
+            controller.deleteSmartGroup(stale)
+        }
         controller.createSmartGroup(named: "CHAIN")
         guard let groupId = controller.snapshot?.smartGroups.last?.id else {
             print("BVCHILD error=no-group")
@@ -386,6 +391,10 @@ enum TestHooks {
             return
         }
         controller.saveCollection(child, rules: [("filename", "contains", "m1")])
+        // Third level + a leaf sibling, so the outline rendering (guide
+        // lines, chevron alignment) is inspectable in the UI pass.
+        _ = controller.createCollection(named: "ALL", inGroup: groupId, parentId: childId)
+        _ = controller.createCollection(named: "M2", inGroup: groupId, parentId: parentId)
         center.selectSidebarItem(.collection(childId))
         print(
             "BVCHILD parentCount=\(sidebar.counts.collections[parentId] ?? -1)",
