@@ -1,0 +1,81 @@
+import BallastCore
+import SwiftUI
+
+/// Collapsible status section at the sidebar's bottom (same recipe as the
+/// inspector's KEYWORDS section, U29): visible only while the metadata
+/// write-through has work — a bulk Lightroom import queues thousands of file
+/// writes that used to run invisibly. Shows a progress bar over the current
+/// burst plus any failed files; disappears when the queue drains. Expanded by
+/// default; purely informative (the writes run regardless).
+struct FileWriteStatusSection: View {
+    @Environment(LibraryController.self) private var controller
+    @AppStorage("sidebarFileWriteExpanded") private var isExpanded = true
+
+    var body: some View {
+        if let writer = controller.fileWriteThrough,
+           writer.pendingCount > 0 || !writer.failedPaths.isEmpty {
+            VStack(spacing: 0) {
+                Divider()
+                header(writer)
+                if isExpanded {
+                    content(writer)
+                }
+            }
+        }
+    }
+
+    private func header(_ writer: MetadataWriteThrough) -> some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Text("WRITING FILES")
+                    .font(.caption.weight(.semibold))
+                Spacer(minLength: 0)
+                if !isExpanded, writer.pendingCount > 0 {
+                    Text("\(writer.pendingCount)")
+                        .font(.caption)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(.secondary.opacity(0.2)))
+                }
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func content(_ writer: MetadataWriteThrough) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if writer.pendingCount > 0 {
+                ProgressView(value: progressValue(writer))
+                    .progressViewStyle(.linear)
+                Text("\(writer.completedCount) of \(writer.runTotal) photos")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !writer.failedPaths.isEmpty {
+                Label(
+                    "\(writer.failedPaths.count) file\(writer.failedPaths.count == 1 ? "" : "s") failed — retried on next change or open",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
+    }
+
+    private func progressValue(_ writer: MetadataWriteThrough) -> Double {
+        guard writer.runTotal > 0 else { return 0 }
+        return Double(writer.completedCount) / Double(writer.runTotal)
+    }
+}

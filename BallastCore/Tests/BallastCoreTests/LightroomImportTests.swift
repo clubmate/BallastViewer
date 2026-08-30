@@ -150,6 +150,8 @@ private func makeLightroomCatalog(
         #expect(result.matches.isEmpty)
         #expect(result.ambiguous == 2)
         #expect(result.unmatched == 1)
+        // The candidate photo is reported for the review tagging.
+        #expect(result.ambiguousPhotoIds == [1])
     }
 
     @Test func ambiguousLibrarySideIsSkippedToo() {
@@ -162,6 +164,7 @@ private func makeLightroomCatalog(
         )
         #expect(result.matches.isEmpty)
         #expect(result.ambiguous == 1)
+        #expect(result.ambiguousPhotoIds == [1, 2])
     }
 
     @Test func pathMatchedPhotoIsNotAFilenameFallbackTarget() {
@@ -287,6 +290,113 @@ private func makeLightroomCatalog(
         )]
         let summary = try dbQueue.write { try LightroomImportDAO.merge(matches, in: $0) }
         #expect(summary == LightroomMergeSummary())
+    }
+
+    @Test func markIssuesTagsPhotosAndCreatesSmartCollection() throws {
+        let dbQueue = try makeTestDatabase()
+        let (photoA, photoB) = try dbQueue.write { db -> (Int64, Int64) in
+            let folderId = try insertFolder(db)
+            let a = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/x.jpg")
+            let b = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/y.jpg")
+            return (a, b)
+        }
+        let tagged = try dbQueue.write { db in
+            try LightroomImportDAO.markIssues(
+                photoIds: [photoA, photoB, 999],  // 999 = deleted since the match
+                keywordName: "Lightroom Import 30.08.2026",
+                groupName: "LIGHTROOM",
+                collectionName: "LIGHTROOM IMPORT 30.08.2026",
+                in: db
+            )
+        }
+        #expect(tagged == [photoA, photoB])
+
+        try dbQueue.read { db in
+            // Keyword stored top-level, normalized UPPERCASE.
+            let keyword = try KeywordRecord
+                .filter(Column("name") == "LIGHTROOM IMPORT 30.08.2026").fetchOne(db)
+            #expect(keyword?.parentId == nil)
+            let assigned = try Int64.fetchAll(
+                db, sql: "SELECT photoId FROM photoKeyword WHERE keywordId = ? ORDER BY photoId",
+                arguments: [keyword?.id]
+            )
+            #expect(assigned == [photoA, photoB])
+            // Tagged photos are flagged for the file write-through.
+            let flagged = try PhotoRecord.fetchOne(db, key: photoA)?.needsFileWrite
+            #expect(flagged == true)
+            // Smart group + collection with a keyword-equals rule.
+            let group = try SmartGroupRecord.filter(Column("name") == "LIGHTROOM").fetchOne(db)
+            let collection = try SmartCollectionRecord
+                .filter(Column("name") == "LIGHTROOM IMPORT 30.08.2026").fetchOne(db)
+            #expect(collection?.groupId == group?.id)
+            let rules = try CollectionRuleRecord
+                .filter(Column("collectionId") == collection?.id).fetchAll(db)
+            #expect(rules.count == 1)
+            #expect(rules.first?.type == "keyword")
+            #expect(rules.first?.operation == "equals")
+            #expect(rules.first?.value == "LIGHTROOM IMPORT 30.08.2026")
+        }
+    }
+
+    @Test func markIssuesIsIdempotent() throws {
+        let dbQueue = try makeTestDatabase()
+        let photoId = try dbQueue.write { db -> Int64 in
+            let folderId = try insertFolder(db)
+            return try insertPhoto(db, folderId: folderId, path: "/tmp/photos/z.jpg")
+        }
+        let mark: (Database) throws -> [Int64] = { db in
+            try LightroomImportDAO.markIssues(
+                photoIds: [photoId],
+                keywordName: "LIGHTROOM IMPORT 30.08.2026",
+                groupName: "LIGHTROOM",
+                collectionName: "LIGHTROOM IMPORT 30.08.2026",
+                in: db
+            )
+        }
+        let first = try dbQueue.write(mark)
+        #expect(first == [photoId])
+        let second = try dbQueue.write(mark)
+        // Rerun: nothing newly tagged, no duplicate group/collection/keyword.
+        #expect(second.isEmpty)
+        try dbQueue.read { db in
+            let groups = try SmartGroupRecord.filter(Column("name") == "LIGHTROOM").fetchCount(db)
+            #expect(groups == 1)
+            let collections = try SmartCollectionRecord
+                .filter(Column("name") == "LIGHTROOM IMPORT 30.08.2026").fetchCount(db)
+            #expect(collections == 1)
+            let keywords = try KeywordRecord
+                .filter(Column("name") == "LIGHTROOM IMPORT 30.08.2026").fetchCount(db)
+            #expect(keywords == 1)
+        }
+    }
+
+    @Test func issueCollectionRuleMatchesTaggedPhotos() throws {
+        // End-to-end over the query engine: the created rule must actually
+        // select the tagged photos in the sidebar.
+        let dbQueue = try makeTestDatabase()
+        let photoId = try dbQueue.write { db -> Int64 in
+            let folderId = try insertFolder(db)
+            let id = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/w.jpg")
+            _ = try LightroomImportDAO.markIssues(
+                photoIds: [id],
+                keywordName: "LIGHTROOM IMPORT 30.08.2026",
+                groupName: "LIGHTROOM",
+                collectionName: "LIGHTROOM IMPORT 30.08.2026",
+                in: db
+            )
+            return id
+        }
+        try dbQueue.read { db in
+            let photo = try #require(try PhotoRecord.fetchOne(db, key: photoId))
+            let collection = try #require(
+                try SmartCollectionRecord
+                    .filter(Column("name") == "LIGHTROOM IMPORT 30.08.2026").fetchOne(db)
+            )
+            let rules = try CollectionRuleRecord
+                .filter(Column("collectionId") == collection.id).fetchAll(db)
+            let facts = PhotoQueryFacts(keywordPaths: ["LIGHTROOM IMPORT 30.08.2026"])
+            #expect(QueryEngine.matches(photo, facts: facts, rules: rules, matchAll: collection.matchAll))
+        }
     }
 
     @Test func existingKeywordAssignmentIsNotDuplicated() throws {

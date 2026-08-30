@@ -44,6 +44,14 @@ final class MetadataWriteThrough {
     private(set) var failedPaths: Set<String> = []
     /// Photos waiting or in flight — for an optional status indicator.
     private(set) var pendingCount = 0
+    /// Photos in the current write burst (grows while new work arrives, resets
+    /// to 0 when the queue drains) — the "of M" for a progress bar.
+    private(set) var runTotal = 0
+    /// The "N" for a progress bar: photos of the current burst already handled.
+    var completedCount: Int { max(0, runTotal - pendingCount) }
+    /// The photo currently being written — counted as pending until its
+    /// outcome lands, so the bar never claims completion early.
+    @ObservationIgnored private var inFlightCount = 0
 
     static let debounceInterval: Duration = .seconds(2)
 
@@ -133,7 +141,9 @@ final class MetadataWriteThrough {
     }
 
     private func updatePendingCount() {
-        let count = debounces.count + queue.count
+        let count = debounces.count + queue.count + inFlightCount
+        if count > pendingCount { runTotal += count - pendingCount }
+        if count == 0 { runTotal = 0 }
         if count != pendingCount { pendingCount = count }
     }
 
@@ -157,6 +167,11 @@ final class MetadataWriteThrough {
         while !queue.isEmpty, !Task.isCancelled {
             let id = queue.removeFirst()
             queued.remove(id)
+            inFlightCount = 1
+            defer {
+                inFlightCount = 0
+                updatePendingCount()
+            }
             updatePendingCount()
             guard let job = makeJob(for: id) else {
                 // Photo left the catalog (folder removed) — nothing to write.

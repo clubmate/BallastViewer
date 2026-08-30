@@ -32,6 +32,10 @@ public struct LightroomMatchResult: Sendable {
     /// wrong merge would put foreign keywords on a photo AND write them into
     /// its file, so ambiguity always loses to caution.
     public var ambiguous = 0
+    /// Library photos involved in those ambiguous cases — candidates that may
+    /// have deserved metadata but were skipped. The import tags them for
+    /// manual review (issue keyword + smart collection).
+    public var ambiguousPhotoIds: [Int64] = []
 
     public init() {}
 }
@@ -54,6 +58,7 @@ public enum LightroomMatcher {
         }
 
         var matchedPhotoIds: Set<Int64> = []
+        var ambiguousPhotoIds: Set<Int64> = []
         var pending: [LightroomPhotoEntry] = []
         for entry in entries {
             guard let ids = photoIdsByPath[key(entry.path)] else {
@@ -68,6 +73,7 @@ public enum LightroomMatcher {
                 // Several photos fold to the same path, or a duplicate entry
                 // hit an already-taken photo.
                 result.ambiguous += 1
+                ambiguousPhotoIds.formUnion(ids)
             }
         }
 
@@ -90,8 +96,10 @@ public enum LightroomMatcher {
                 result.unmatched += entryIndices.count
             } else {
                 result.ambiguous += entryIndices.count
+                ambiguousPhotoIds.formUnion(candidates)
             }
         }
+        result.ambiguousPhotoIds = ambiguousPhotoIds.sorted()
         return result
     }
 
@@ -181,5 +189,49 @@ public enum LightroomImportDAO {
         summary.changedPhotoIds = changed.sorted()
         try PhotoDAO.setNeedsFileWrite(true, forPhotoIds: summary.changedPhotoIds, in: db)
         return summary
+    }
+
+    /// Tags the library photos an ambiguous match skipped with a review
+    /// keyword (top-level, ad-hoc) and collects them in a smart collection
+    /// (`keyword equals <name>`) inside `groupName` — both find-or-create, so
+    /// a rerun reuses them. Returns the NEWLY tagged photo ids (already
+    /// flagged `needsFileWrite`; the caller schedules the write-through).
+    /// Deleting the keyword afterwards cleans up fully — the collection then
+    /// simply goes empty until it is deleted too.
+    public static func markIssues(
+        photoIds: [Int64],
+        keywordName: String,
+        groupName: String,
+        collectionName: String,
+        in db: Database
+    ) throws -> [Int64] {
+        guard !photoIds.isEmpty else { return [] }
+        let name = KeywordDAO.normalize(keywordName)
+        let keywordId = try KeywordDAO.ensurePath([name], groupId: nil, in: db)
+
+        let existingPhotoIds = Set(try Int64.fetchAll(db, sql: "SELECT id FROM photo"))
+        let alreadyTagged = Set(try Int64.fetchAll(
+            db, sql: "SELECT photoId FROM photoKeyword WHERE keywordId = ?",
+            arguments: [keywordId]
+        ))
+        let newlyTagged = photoIds.filter {
+            existingPhotoIds.contains($0) && !alreadyTagged.contains($0)
+        }
+        try PhotoDAO.assignKeyword(keywordId, toPhotoIds: newlyTagged, in: db)
+        try PhotoDAO.setNeedsFileWrite(true, forPhotoIds: newlyTagged, in: db)
+
+        let group = try SmartGroupRecord
+            .filter(Column("name") == groupName).fetchOne(db)
+            ?? CollectionDAO.createGroup(name: groupName, in: db)
+        let collection = try SmartCollectionRecord
+            .filter(Column("groupId") == group.id! && Column("name") == collectionName)
+            .fetchOne(db)
+            ?? CollectionDAO.createCollection(name: collectionName, inGroup: group.id!, in: db)
+        try CollectionDAO.saveRules(
+            [(type: RuleType.keyword.rawValue, operation: RuleOperator.equals.rawValue, value: name)],
+            forCollection: collection.id!,
+            in: db
+        )
+        return newlyTagged
     }
 }

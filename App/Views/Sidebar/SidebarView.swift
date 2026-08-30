@@ -69,6 +69,7 @@ struct SidebarView: View {
                 )
             }
 
+            FileWriteStatusSection()
             Divider()
             HStack {
                 Button {

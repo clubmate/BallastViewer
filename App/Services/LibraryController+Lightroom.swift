@@ -59,20 +59,49 @@ extension LibraryController {
         case .success(let matched):
             do {
                 let matches = matched.matches
-                let summary = try await pipeline.submitAndWait { db in
-                    try LightroomImportDAO.merge(matches, in: db)
+                let ambiguousIds = matched.ambiguousPhotoIds
+                // Ambiguous candidates get a dated review keyword + a smart
+                // collection listing them ("keyword equals <name>") — same
+                // transaction as the merge, so a crash leaves no half-state.
+                let issueName = "LIGHTROOM IMPORT \(Self.importDateString())"
+                struct Applied: Sendable {
+                    var merge: LightroomMergeSummary
+                    var taggedIssueIds: [Int64]
                 }
-                if !summary.changedPhotoIds.isEmpty {
+                let applied = try await pipeline.submitAndWait { db -> Applied in
+                    let merge = try LightroomImportDAO.merge(matches, in: db)
+                    var tagged: [Int64] = []
+                    if !ambiguousIds.isEmpty {
+                        tagged = try LightroomImportDAO.markIssues(
+                            photoIds: ambiguousIds,
+                            keywordName: issueName,
+                            groupName: "LIGHTROOM",
+                            collectionName: issueName,
+                            in: db
+                        )
+                    }
+                    return Applied(merge: merge, taggedIssueIds: tagged)
+                }
+                let changedIds = Array(Set(applied.merge.changedPhotoIds + applied.taggedIssueIds)).sorted()
+                if !changedIds.isEmpty || !ambiguousIds.isEmpty {
                     await refreshSnapshot()
-                    // The merge transaction already set the dirty flags; this
-                    // hands the photos to the debounced file write-through.
-                    markNeedsFileWrite(summary.changedPhotoIds)
+                    // The transaction already set the dirty flags; this hands
+                    // the photos to the debounced file write-through.
+                    markNeedsFileWrite(changedIds)
                 }
-                infoMessage = Self.lightroomSummary(matched: matched, summary: summary)
+                infoMessage = Self.lightroomSummary(
+                    matched: matched, summary: applied.merge, issueName: issueName
+                )
             } catch {
                 errorMessage = "Lightroom import failed.\n\(error.localizedDescription)"
             }
         }
+    }
+
+    private static func importDateString(_ date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "dd.MM.yyyy"
+        return formatter.string(from: date)
     }
 
     /// Reads the catalog from a private temp copy: Lightroom may hold locks on
@@ -101,7 +130,7 @@ extension LibraryController {
     }
 
     private static func lightroomSummary(
-        matched: LightroomMatchResult, summary: LightroomMergeSummary
+        matched: LightroomMatchResult, summary: LightroomMergeSummary, issueName: String
     ) -> String {
         func count(_ n: Int, _ noun: String) -> String {
             "\(n) \(noun)\(n == 1 ? "" : "s")"
@@ -128,7 +157,10 @@ extension LibraryController {
         }
         if matched.ambiguous > 0 {
             message += " \(count(matched.ambiguous, "entry")) skipped as ambiguous"
-                + " (same filename appears more than once)."
+                + " (same filename appears more than once);"
+                + " the \(count(matched.ambiguousPhotoIds.count, "affected photo"))"
+                + " were tagged “\(issueName)” and collected in a smart collection"
+                + " of that name for review."
         }
         return message
     }
