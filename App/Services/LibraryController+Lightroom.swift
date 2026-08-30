@@ -86,8 +86,10 @@ extension LibraryController {
                 if !changedIds.isEmpty || !ambiguousIds.isEmpty {
                     await refreshSnapshot()
                     // The transaction already set the dirty flags; this hands
-                    // the photos to the debounced file write-through.
+                    // the photos to the debounced file write-through and turns
+                    // on the sidebar's WRITING FILES progress for the run.
                     markNeedsFileWrite(changedIds)
+                    fileWriteThrough?.beginBulkRun()
                 }
                 infoMessage = Self.lightroomSummary(
                     matched: matched, summary: applied.merge, issueName: issueName

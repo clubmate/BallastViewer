@@ -52,6 +52,19 @@ final class MetadataWriteThrough {
     /// The photo currently being written — counted as pending until its
     /// outcome lands, so the bar never claims completion early.
     @ObservationIgnored private var inFlightCount = 0
+    /// True while a caller-declared bulk run (the Lightroom import) is being
+    /// written. The sidebar's WRITING FILES section shows ONLY during such a
+    /// run — everyday single-photo writes stay invisible, as before. Cleared
+    /// when the queue drains (kept while failures from the run are open, so
+    /// they stay visible).
+    private(set) var isBulkRun = false
+
+    /// Declares the just-scheduled work a bulk run worth showing progress for.
+    /// Call AFTER scheduling the ids.
+    func beginBulkRun() {
+        guard pendingCount > 0 else { return }
+        isBulkRun = true
+    }
 
     static let debounceInterval: Duration = .seconds(2)
 
@@ -84,9 +97,13 @@ final class MetadataWriteThrough {
         enqueue(id)
     }
 
-    /// Library open: everything still flagged from an earlier session.
+    /// Library open: everything still flagged from an earlier session. A big
+    /// backlog is the remnant of an interrupted bulk run (Lightroom import) —
+    /// show its progress again; a handful of leftovers stays silent like any
+    /// everyday write.
     func enqueueAll(_ ids: [Int64]) {
         for id in ids { enqueue(id) }
+        if ids.count >= 25 { beginBulkRun() }
     }
 
     /// Termination: fold every debounce into the queue and wait for the
@@ -121,6 +138,7 @@ final class MetadataWriteThrough {
     /// dirty flags in the closed library keep the work for next time).
     func shutdown() {
         isShutDown = true
+        isBulkRun = false
         for task in debounces.values { task.cancel() }
         debounces = [:]
         drain?.cancel()
@@ -143,7 +161,10 @@ final class MetadataWriteThrough {
     private func updatePendingCount() {
         let count = debounces.count + queue.count + inFlightCount
         if count > pendingCount { runTotal += count - pendingCount }
-        if count == 0 { runTotal = 0 }
+        if count == 0 {
+            runTotal = 0
+            if failedPaths.isEmpty { isBulkRun = false }
+        }
         if count != pendingCount { pendingCount = count }
     }
 

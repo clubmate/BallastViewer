@@ -2,17 +2,18 @@ import BallastCore
 import SwiftUI
 
 /// Collapsible status section at the sidebar's bottom (same recipe as the
-/// inspector's KEYWORDS section, U29): visible only while the metadata
-/// write-through has work — a bulk Lightroom import queues thousands of file
-/// writes that used to run invisibly. Shows a progress bar over the current
-/// burst plus any failed files; disappears when the queue drains. Expanded by
-/// default; purely informative (the writes run regardless).
+/// inspector's KEYWORDS section, U29): visible ONLY during a declared bulk
+/// write run — the Lightroom import's thousands of queued file writes.
+/// Everyday single-photo write-throughs never show it. Shows a progress bar
+/// over the run plus any failed files; disappears when the run drains.
+/// Expanded by default; purely informative (the writes run regardless).
 struct FileWriteStatusSection: View {
     @Environment(LibraryController.self) private var controller
     @AppStorage("sidebarFileWriteExpanded") private var isExpanded = true
 
     var body: some View {
         if let writer = controller.fileWriteThrough,
+           writer.isBulkRun,
            writer.pendingCount > 0 || !writer.failedPaths.isEmpty {
             VStack(spacing: 0) {
                 Divider()
