@@ -95,7 +95,10 @@ struct SidebarView: View {
         } label: {
             rowLabel(selected: selected, count: count, label: label)
         }
-        .buttonStyle(.plain)
+        // Not .plain: that style dims the label while the mouse is down —
+        // selection is the only highlight a sidebar row shows (user request
+        // 2026-08-30).
+        .buttonStyle(SidebarRowButtonStyle())
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
@@ -239,6 +242,13 @@ struct SidebarView: View {
                 }
             }
         }
+    }
+}
+
+/// A button that renders its label verbatim — no pressed-state dimming.
+private struct SidebarRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
     }
 }
 
