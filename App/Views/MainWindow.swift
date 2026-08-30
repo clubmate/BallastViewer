@@ -20,6 +20,7 @@ struct MainWindow: View {
     @Environment(CenterViewModel.self) private var center
     @Environment(SidebarViewModel.self) private var sidebar
     @Environment(AppearanceStore.self) private var appearance
+    @Environment(AppUpdater.self) private var updater
     /// The window's undo manager — handed to the controller so photo mutations
     /// are undoable via the standard Edit menu (U8) while text fields keep
     /// their own undo through the responder chain.
@@ -118,6 +119,14 @@ struct MainWindow: View {
                 ProgressView(controller.isImporting ? "Importing…" : "Working…")
                     .padding(20)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            } else if let progress = updater.downloadProgress {
+                // Update download (U31): determinate bar over the zip.
+                ProgressView(value: progress) {
+                    Text("Downloading update… \(Int(progress * 100)) %")
+                }
+                .frame(width: 260)
+                .padding(20)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
         .alert(
