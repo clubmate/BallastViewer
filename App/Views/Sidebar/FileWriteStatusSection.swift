@@ -30,9 +30,6 @@ struct FileWriteStatusSection: View {
             isExpanded.toggle()
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 Text("WRITING FILES")
                     .font(.caption.weight(.semibold))
                 Spacer(minLength: 0)

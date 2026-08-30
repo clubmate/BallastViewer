@@ -158,10 +158,12 @@ extension LibraryController {
             message += " \(count(matched.unmatched, "catalog photo")) not in this library."
         }
         if matched.ambiguous > 0 {
-            message += " \(count(matched.ambiguous, "entry")) skipped as ambiguous"
+            let entries = matched.ambiguous == 1 ? "1 entry" : "\(matched.ambiguous) entries"
+            message += " \(entries) skipped as ambiguous"
                 + " (same filename appears more than once);"
                 + " the \(count(matched.ambiguousPhotoIds.count, "affected photo"))"
-                + " were tagged “\(issueName)” and collected in a smart collection"
+                + " \(matched.ambiguousPhotoIds.count == 1 ? "was" : "were")"
+                + " tagged “\(issueName)” and collected in a smart collection"
                 + " of that name for review."
         }
         return message
