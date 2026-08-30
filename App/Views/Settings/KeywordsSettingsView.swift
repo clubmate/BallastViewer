@@ -23,6 +23,14 @@ struct KeywordsSettingsView: View {
     /// Rename target + working text; nil id = closed.
     @State private var renameKeywordId: Int64?
     @State private var renameText = ""
+    /// Where a "+"-drafted keyword would go; the node is created only when
+    /// the New Keyword alert is confirmed (U34).
+    private struct NewKeywordDraft {
+        var parentId: Int64?
+        var groupId: Int64?
+    }
+    @State private var newKeywordDraft: NewKeywordDraft?
+    @State private var newKeywordText = ""
     @State private var pendingKeywordDeletion: Int64?
     @State private var pendingGroupDeletion: KeywordGroupRecord?
 
@@ -97,9 +105,30 @@ struct KeywordsSettingsView: View {
                 }
                 renameKeywordId = nil
             }
-            // Cancelling after "+" keeps the freshly created node — the
-            // spec §8.6 quirk is preserved deliberately.
             Button("Cancel", role: .cancel) { renameKeywordId = nil }
+        }
+        .alert(
+            "New Keyword",
+            isPresented: Binding(
+                get: { newKeywordDraft != nil },
+                set: { if !$0 { newKeywordDraft = nil } }
+            )
+        ) {
+            TextField("Name", text: $newKeywordText)
+                // Q15: keywords are uppercase while typing, everywhere.
+                .uppercasing($newKeywordText)
+            Button("Create") {
+                let name = newKeywordText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let draft = newKeywordDraft, !name.isEmpty,
+                   controller.createKeyword(
+                       baseName: name, parentId: draft.parentId, groupId: draft.groupId
+                   ) != nil,
+                   let parentId = draft.parentId {
+                    collapsedKeywords.remove(parentId)
+                }
+                newKeywordDraft = nil
+            }
+            Button("Cancel", role: .cancel) { newKeywordDraft = nil }
         }
         .alert(
             "Delete Keyword",
@@ -201,7 +230,7 @@ struct KeywordsSettingsView: View {
                 Spacer()
 
                 Button {
-                    addKeyword(parentId: nil, groupId: groupId, base: "NEW KEYWORD")
+                    addKeyword(parentId: nil, groupId: groupId)
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -341,7 +370,7 @@ struct KeywordsSettingsView: View {
             Text(tree.node(id)?.name ?? "")
             Spacer()
             Button {
-                addKeyword(parentId: id, groupId: nil, base: "NEW SUB-KEYWORD")
+                addKeyword(parentId: id, groupId: nil)
             } label: {
                 Image(systemName: "plus")
             }
@@ -355,7 +384,7 @@ struct KeywordsSettingsView: View {
         .contextMenu {
             Button("Rename") { beginRename(id, tree: tree) }
             Button("Add Sub-keyword") {
-                addKeyword(parentId: id, groupId: nil, base: "NEW SUB-KEYWORD")
+                addKeyword(parentId: id, groupId: nil)
             }
             // Only top-level nodes own a group; nested ones inherit it (C2).
             if depth == 1 {
@@ -394,13 +423,11 @@ struct KeywordsSettingsView: View {
 
     // MARK: Actions
 
-    /// New nodes are created immediately, then the rename dialog opens —
-    /// cancelling keeps the placeholder node (spec §8.6 quirk).
-    private func addKeyword(parentId: Int64?, groupId: Int64?, base: String) {
-        guard let id = controller.createKeyword(baseName: base, parentId: parentId, groupId: groupId)
-        else { return }
-        if let parentId { collapsedKeywords.remove(parentId) }
-        beginRename(id, tree: tree)
+    /// Draft pattern (U34, supersedes the spec §8.6 create-then-rename
+    /// quirk): the alert collects the name first; Cancel creates nothing.
+    private func addKeyword(parentId: Int64?, groupId: Int64?) {
+        newKeywordText = ""
+        newKeywordDraft = NewKeywordDraft(parentId: parentId, groupId: groupId)
     }
 
     /// Opens the sheet with a DRAFT (id nil, next free palette colour) —
