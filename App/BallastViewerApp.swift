@@ -19,6 +19,9 @@ struct BallastViewerApp: App {
     @State private var updater = AppUpdater()
 
     init() {
+        // U42: BEFORE anything reads UserDefaults — the sandboxed builds kept
+        // all state in the container, the unsandboxed app reads ~/Library.
+        SandboxMigration.runIfNeeded()
         let controller = LibraryController()
         let center = CenterViewModel(controller: controller)
         let sidebar = SidebarViewModel(controller: controller)

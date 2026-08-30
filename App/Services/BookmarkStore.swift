@@ -1,6 +1,33 @@
 import Foundation
 
-/// Persists security-scoped bookmarks in UserDefaults: the auto-reopened
+/// U42 (sandbox removed): new bookmarks are PLAIN — they still track moves
+/// and renames, which is all we need without a sandbox. Blobs written by the
+/// sandboxed builds are security-scoped; resolution tries plain first and
+/// falls back to the scoped variant so pre-U42 data keeps working.
+enum PortableBookmark {
+    static func make(_ url: URL) throws -> Data {
+        try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
+    static func resolve(_ data: Data, isStale: inout Bool) -> URL? {
+        if let url = try? URL(
+            resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale
+        ) {
+            return url
+        }
+        return try? URL(
+            resolvingBookmarkData: data, options: .withSecurityScope,
+            relativeTo: nil, bookmarkDataIsStale: &isStale
+        )
+    }
+
+    static func resolve(_ data: Data) -> URL? {
+        var isStale = false
+        return resolve(data, isStale: &isStale)
+    }
+}
+
+/// Persists bookmarks in UserDefaults: the auto-reopened
 /// library and the list of ALL known libraries (U14 — the original's
 /// 10-entry recents list became the Library menu's switcher, so it is
 /// unbounded and only shrinks when the user removes an entry in Settings).
@@ -76,20 +103,10 @@ struct BookmarkStore {
     // MARK: Bookmarks
 
     private func bookmarkData(_ url: URL) throws -> Data {
-        try url.bookmarkData(
-            options: .withSecurityScope,
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        )
+        try PortableBookmark.make(url)
     }
 
     private func resolve(_ data: Data) -> URL? {
-        var isStale = false
-        return try? URL(
-            resolvingBookmarkData: data,
-            options: .withSecurityScope,
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        )
+        PortableBookmark.resolve(data)
     }
 }

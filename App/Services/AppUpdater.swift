@@ -5,19 +5,20 @@ import Observation
 /// BallastViewer ▸ Check for Updates…: fetches the latest GitHub release
 /// (public repo, no auth), compares its build number against
 /// `CFBundleVersion` (both are the CI's commit count) and installs on
-/// confirmation: download the zip into the container, unpack with ditto,
-/// trash the running bundle, move the new one into its place, relaunch.
+/// confirmation: download the zip into temp, unpack with ditto, trash the
+/// running bundle, move the new one into its place, relaunch.
 ///
-/// Sandbox: replacing the bundle needs write access to its parent folder
-/// (usually /Applications). The first install asks once via NSOpenPanel and
-/// keeps a security-scoped bookmark; every later update is fully automatic.
-/// A download through the app carries no quarantine flag, so the ad-hoc
-/// signed release relaunches without Gatekeeper friction.
+/// U42 (sandbox removed): an UNSANDBOXED app's downloads carry no quarantine
+/// flag, so the ad-hoc signed release relaunches without Gatekeeper friction.
+/// Under the old sandbox this was structurally impossible — every file a
+/// sandboxed app writes is quarantined `0086`, Gatekeeper refuses to exec
+/// such bundles outright ("File created by an AppSandbox, exec/open not
+/// allowed"), and the sandbox forbids removing the attribute. That is the
+/// bug that bricked the very first real-world update.
 @MainActor @Observable
 final class AppUpdater {
     private static let latestReleaseURL =
         URL(string: "https://api.github.com/repos/clubmate/BallastViewer/releases/latest")!
-    private static let installFolderBookmarkKey = "updateInstallFolderBookmark"
 
     private(set) var isWorking = false
     /// Non-nil while the zip downloads — drives the progress bar overlay
@@ -88,8 +89,8 @@ final class AppUpdater {
     }
 
     private func install(_ release: UpdateRelease) async throws {
-        // Download + unpack in the container (no permission needed, and the
-        // file never touches a quarantine-flagging browser path).
+        // Download + unpack in temp — written by this (unsandboxed, U42)
+        // process, the files carry no quarantine flag.
         let workDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("update-\(release.tag)", isDirectory: true)
         try? FileManager.default.removeItem(at: workDir)
@@ -120,11 +121,12 @@ final class AppUpdater {
 
         let target = Bundle.main.bundleURL
         let parent = target.deletingLastPathComponent()
-        guard let granted = installFolder(for: parent) else {
-            throw UpdateError("Without access to “\(parent.lastPathComponent)” the app cannot replace itself.")
+        guard FileManager.default.isWritableFile(atPath: parent.path) else {
+            throw UpdateError(
+                "No write access to “\(parent.lastPathComponent)”."
+                    + " Move BallastViewer to a folder you own (e.g. /Applications) and try again."
+            )
         }
-        let didStartAccess = granted.startAccessingSecurityScopedResource()
-        defer { if didStartAccess { granted.stopAccessingSecurityScopedResource() } }
 
         // Three careful steps so a failure can NEVER leave "old app gone, new
         // app missing" (that exact half-state once stranded an install):
@@ -205,42 +207,6 @@ final class AppUpdater {
         }
         try handle.write(contentsOf: buffer)
         await MainActor.run { progress(1) }
-    }
-
-    /// Write access to the folder holding the bundle: directly writable (dev
-    /// builds in the build folder), via the stored grant, or by asking once.
-    private func installFolder(for parent: URL) -> URL? {
-        if FileManager.default.isWritableFile(atPath: parent.path) { return parent }
-        if let data = UserDefaults.standard.data(forKey: Self.installFolderBookmarkKey) {
-            var stale = false
-            if let url = try? URL(
-                resolvingBookmarkData: data, options: .withSecurityScope,
-                relativeTo: nil, bookmarkDataIsStale: &stale
-            ), !stale, url.path == parent.path {
-                return url
-            }
-        }
-        // The panel is modal: if it opened behind another app the whole app
-        // looked frozen and unquittable. Force it to the front.
-        NSApp.activate(ignoringOtherApps: true)
-        let panel = NSOpenPanel()
-        panel.title = "Allow Update"
-        panel.message = "To install the update, grant access to the folder containing"
-            + " BallastViewer (“\(parent.lastPathComponent)”)."
-        panel.prompt = "Grant Access"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = parent
-        guard panel.runModal() == .OK, let url = panel.url, url.path == parent.path else {
-            return nil
-        }
-        if let bookmark = try? url.bookmarkData(
-            options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil
-        ) {
-            UserDefaults.standard.set(bookmark, forKey: Self.installFolderBookmarkKey)
-        }
-        return url
     }
 
     private func relaunch(_ url: URL) {

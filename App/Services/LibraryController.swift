@@ -472,31 +472,29 @@ final class LibraryController {
         undoManager?.removeAllActions(withTarget: self)
     }
 
-    /// Resolves and starts every folder's security-scoped bookmark. Folders
-    /// added this session are implicitly accessible via their panel/drop URLs;
-    /// this is what restores access after a relaunch.
+    /// Resolves every folder's bookmark (tracking moves/renames). U42: without
+    /// the sandbox no access needs to be "started" — but old libraries carry
+    /// security-scoped bookmarks whose scope we still start when it takes
+    /// (harmless no-op false on plain ones).
     ///
     /// Failures are surfaced, not swallowed: a folder whose bookmark no longer
     /// resolves (moved, renamed, volume gone) would otherwise fail diffusely
     /// later — thumbnails blank, metadata write-back erroring per file. Stale
-    /// bookmarks are refreshed in place so they keep resolving.
+    /// bookmarks are refreshed in place (as plain ones) so they keep resolving.
     private func startFolderAccess(for folders: [FolderRecord]) {
         var inaccessible: [String] = []
         for folder in folders {
             guard let data = folder.bookmark else { continue }
             var isStale = false
-            guard let url = try? URL(
-                resolvingBookmarkData: data, options: .withSecurityScope,
-                relativeTo: nil, bookmarkDataIsStale: &isStale
-            ), url.startAccessingSecurityScopedResource() else {
+            guard let url = PortableBookmark.resolve(data, isStale: &isStale) else {
                 inaccessible.append((folder.path as NSString).lastPathComponent)
                 continue
             }
-            accessedFolderURLs.append(url)
+            if url.startAccessingSecurityScopedResource() {
+                accessedFolderURLs.append(url)
+            }
             if isStale, let folderId = folder.id,
-               let fresh = try? url.bookmarkData(
-                   options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil
-               )
+               let fresh = try? PortableBookmark.make(url)
             {
                 persist { db in
                     try FolderRecord.filter(key: folderId)

@@ -2,9 +2,9 @@ import AppKit
 import BallastCore
 
 /// Headless lifecycle checks, driven by environment variables so acceptance
-/// criteria can be verified from the CLI (the sandboxed container's temp
-/// directory is used for test libraries). Debug builds only; inert unless
-/// BV_TEST is set.
+/// criteria can be verified from the CLI (`FileManager.temporaryDirectory`
+/// holds the test libraries — since U42 that is the user temp dir, no longer
+/// the sandbox container). Debug builds only; inert unless BV_TEST is set.
 ///
 /// Hooks: BV_TEST_CREATE=<name> · BV_TEST_OPEN=<name> · BV_TEST_IMPORT=<abs path>
 /// (twice with BV_TEST_RESCAN=1) · BV_TEST_NONRECURSIVE=1 · BV_TEST_REMOVE=<abs path>
@@ -92,6 +92,9 @@ enum TestHooks {
         }
         if env["BV_TEST_CHILDCOLL"] != nil {
             runChildCollectionChecks(controller, center: center, sidebar: sidebar)
+        }
+        if let path = env["BV_TEST_QTN"] {
+            runQuarantineProbe(zipAt: path)
         }
         if env["BV_TEST_STEP9"] != nil {
             runStep9Checks(controller, center: center, dispatcher: dispatcher, keyMap: keyMap)
@@ -312,6 +315,70 @@ enum TestHooks {
             "keywords=\(controller.snapshot?.keywordTree.count ?? -1)",
             "firstCarrierChips=\(describe(restoredFirst.map { chips(for: [$0]) } ?? []))"
         )
+    }
+
+    /// Updater diagnosis: replays the install pipeline (FileHandle byte copy
+    /// like the streaming download → `ditto -xk`) inside the sandbox and
+    /// reports the quarantine state of every stage, then tries to strip the
+    /// attribute the way a fix would — so we KNOW instead of guessing.
+    private static func runQuarantineProbe(zipAt sourcePath: String) {
+        func qtn(_ path: String) -> String {
+            var buffer = [CChar](repeating: 0, count: 256)
+            let n = getxattr(path, "com.apple.quarantine", &buffer, buffer.count, 0, 0)
+            guard n > 0 else { return "none" }
+            return String(decoding: buffer.prefix(Int(n)).map(UInt8.init(bitPattern:)), as: UTF8.self)
+        }
+        do {
+            let work = FileManager.default.temporaryDirectory
+                .appendingPathComponent("qtnprobe", isDirectory: true)
+            try? FileManager.default.removeItem(at: work)
+            try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+            // Byte copy through FileHandle — the same write path the
+            // streaming download uses (FileManager.copyItem would copy the
+            // SOURCE's xattrs and hide what the sandbox adds on its own).
+            let zip = work.appendingPathComponent("update.zip")
+            let data = try Data(contentsOf: URL(fileURLWithPath: sourcePath))
+            FileManager.default.createFile(atPath: zip.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: zip)
+            try handle.write(contentsOf: data)
+            try handle.close()
+            print("BVQTN zip=\(qtn(zip.path))")
+
+            let ditto = Process()
+            ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            ditto.arguments = ["-x", "-k", zip.path, work.path]
+            try ditto.run()
+            ditto.waitUntilExit()
+            guard let app = try FileManager.default
+                .contentsOfDirectory(at: work, includingPropertiesForKeys: nil)
+                .first(where: { $0.pathExtension == "app" })
+            else {
+                print("BVQTN error=no-app-in-zip")
+                return
+            }
+            let executable = app.appendingPathComponent("Contents/MacOS/BallastViewer")
+            print("BVQTN app=\(qtn(app.path)) exe=\(qtn(executable.path))")
+
+            // The fix candidate: strip recursively via removexattr.
+            var failures = 0
+            var removed = 0
+            let paths = [app.path] + (FileManager.default
+                .enumerator(at: app, includingPropertiesForKeys: nil)?
+                .compactMap { ($0 as? URL)?.path } ?? [])
+            for path in paths where qtn(path) != "none" {
+                if removexattr(path, "com.apple.quarantine", 0) == 0 {
+                    removed += 1
+                } else {
+                    failures += 1
+                }
+            }
+            print(
+                "BVQTN strip removed=\(removed) failed=\(failures)",
+                "appAfter=\(qtn(app.path)) exeAfter=\(qtn(executable.path))"
+            )
+        } catch {
+            print("BVQTN error=\(error.localizedDescription)")
+        }
     }
 
     /// U40 acceptance, headless: renaming "_STRASSE" to "STRASSE" next to an

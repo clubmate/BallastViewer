@@ -143,9 +143,7 @@ extension LibraryController {
         for url in urls {
             let didStartAccess = url.startAccessingSecurityScopedResource()
             defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
-            let bookmark = try? url.bookmarkData(
-                options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil
-            )
+            let bookmark = try? PortableBookmark.make(url)
             do {
                 let folderPath = url.path
                 let folder = try await writer.write { db in
