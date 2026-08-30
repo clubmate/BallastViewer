@@ -452,22 +452,26 @@ private struct BottomBar: View {
                 .fixedSize()
             } else {
                 Spacer()
-                if !center.searchText.isEmpty || center.ratingFilter != nil {
-                    // U38: the rating chip is part of the search — the single-
-                    // mode reminder label shows it too.
-                    let rating = center.ratingFilter.map { $0 == 0 ? "unrated" : "★\($0)" }
-                    let parts = [
-                        center.searchText.isEmpty ? nil : center.searchText, rating,
-                    ].compactMap(\.self).joined(separator: " · ")
-                    Text(
-                        "Active search: \(parts) "
-                            + "(\(center.anchorPosition.map { String($0 + 1) } ?? "–")/\(center.visiblePhotos.count))"
+                // U44: the full active filter, always — the sidebar selection
+                // (collection chain / rating row / keyword-tree pick), then
+                // the search text and the U38 rating chip where set.
+                let item = controller.snapshot.map {
+                    center.activeItem.displayName(
+                        collections: $0.collections, keywordTree: $0.keywordTree
                     )
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
                 }
+                let rating = center.ratingFilter.map { $0 == 0 ? "unrated" : "★\($0)" }
+                let parts = [
+                    item, center.searchText.isEmpty ? nil : center.searchText, rating,
+                ].compactMap(\.self).joined(separator: " · ")
+                Text(
+                    "\(parts) "
+                        + "(\(center.anchorPosition.map { String($0 + 1) } ?? "–")/\(center.visiblePhotos.count))"
+                )
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             }
         }
         .padding(.horizontal, 8)

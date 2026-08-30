@@ -23,6 +23,44 @@ public enum SidebarItem: Hashable, Sendable {
         }
     }
 
+    /// Human-readable name of the filter this item applies, matching the
+    /// sidebar's own wording — the single-view footer shows it so the user
+    /// always sees WHY photos are hidden (U44). Collections render their
+    /// ancestor chain root-first ("TRIPS > 2009"), like keyword paths do.
+    public func displayName(
+        collections: [SmartCollectionRecord], keywordTree: KeywordTree
+    ) -> String {
+        switch self {
+        case .allPhotos:
+            return "ALL PHOTOS"
+        case .lastImport:
+            return "LAST IMPORT"
+        case .rating(0):
+            return "UNRATED"
+        case .rating(let stars):
+            return String(repeating: "★", count: max(1, min(5, stars)))
+        case .collection(let id):
+            var byId: [Int64: SmartCollectionRecord] = [:]
+            for collection in collections {
+                guard let collectionId = collection.id else { continue }
+                byId[collectionId] = collection
+            }
+            var names: [String] = []
+            var visited: Set<Int64> = []
+            var cursor: Int64? = id
+            // Cycle guard, like every other parent walk over hand-editable data.
+            while let currentId = cursor, visited.insert(currentId).inserted,
+                  let collection = byId[currentId] {
+                names.append(collection.name)
+                cursor = collection.parentId
+            }
+            return names.isEmpty ? "?" : names.reversed().joined(separator: " > ")
+        case .keyword(let id):
+            let path = keywordTree.path(of: id)
+            return path.isEmpty ? "?" : path
+        }
+    }
+
     public init?(encoded: String) {
         if encoded == "allPhotos" {
             self = .allPhotos
