@@ -42,6 +42,52 @@ struct SearchFilterTests {
             filename: "x.jpg", keywordPaths: ["PEOPLE > ANNA"], query: "people > an"
         ))
     }
+
+    // MARK: U37: whitespace = OR terms, "> " glues path terms
+
+    @Test func spaceSeparatedTermsCombineWithOr() {
+        #expect(SearchFilter.matches(
+            filename: "x.jpg", keywordPaths: ["TRAVEL > PARIS"], query: "PARIS ROME"
+        ))
+        #expect(SearchFilter.matches(
+            filename: "x.jpg", keywordPaths: ["TRAVEL > ROME"], query: "PARIS ROME"
+        ))
+        #expect(!SearchFilter.matches(
+            filename: "x.jpg", keywordPaths: ["TRAVEL > OSLO"], query: "PARIS ROME"
+        ))
+        // A term can also hit the filename.
+        #expect(SearchFilter.matches(
+            filename: "PARIS_001.jpg", keywordPaths: [], query: "PARIS ROME"
+        ))
+    }
+
+    @Test func pathTermStaysOneTermNextToOrTerms() {
+        // "LOCATION > ROME PARIS" = "LOCATION > ROME" OR "PARIS".
+        let query = "LOCATION > ROME PARIS"
+        #expect(SearchFilter.matches(
+            filename: "x.jpg", keywordPaths: ["LOCATION > ROME"], query: query
+        ))
+        #expect(SearchFilter.matches(
+            filename: "x.jpg", keywordPaths: ["TRAVEL > PARIS"], query: query
+        ))
+        // ROME under a DIFFERENT parent must NOT match the path term.
+        #expect(!SearchFilter.matches(
+            filename: "x.jpg", keywordPaths: ["TRAVEL > ROME"], query: query
+        ))
+        let folded = SearchFilter.FoldedQuery(query)
+        #expect(folded?.terms == ["location > rome", "paris"])
+    }
+
+    @Test func strayPathSeparatorsDoNotMatchEverything() {
+        // A lone ">" must not become a term that hits every nested path.
+        #expect(SearchFilter.FoldedQuery(">") == nil)
+        #expect(SearchFilter.FoldedQuery("> ROME")?.terms == ["rome"])
+        // Trailing ">" waits for a right side that never comes — kept as-is.
+        #expect(!SearchFilter.matches(
+            filename: "x.jpg", keywordPaths: ["PEOPLE > ANNA"], query: "> OSLO"
+        ))
+        #expect(SearchFilter.FoldedQuery("A > B > C")?.terms == ["a > b > c"])
+    }
 }
 
 // MARK: - Canonical hex colors (C8: #RRGGBBAA, alpha last, both directions)
