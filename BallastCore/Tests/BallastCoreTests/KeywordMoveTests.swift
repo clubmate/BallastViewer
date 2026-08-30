@@ -147,3 +147,69 @@ import Testing
         }
     }
 }
+
+/// U40: the rename-collision merge — renaming "_STRASSE" next to an
+/// existing sibling "STRASSE" folds it into the sibling instead of failing.
+@Suite struct KeywordMergeTests {
+    @Test func siblingAbsorbsSourceAssignmentsAndChildren() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let folderId = try insertFolder(db)
+            let p1 = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/g1.jpg")
+            let p2 = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/g2.jpg")
+            // META > STRASSE (p1, child ALT) and META > _STRASSE (p2, both
+            // a colliding ALT and a unique NEU below it).
+            let target = try KeywordDAO.ensurePath(["META", "STRASSE"], groupId: nil, in: db)
+            let targetAlt = try KeywordDAO.ensurePath(["META", "STRASSE", "ALT"], groupId: nil, in: db)
+            let source = try KeywordDAO.ensurePath(["META", "_STRASSE"], groupId: nil, in: db)
+            let sourceAlt = try KeywordDAO.ensurePath(["META", "_STRASSE", "ALT"], groupId: nil, in: db)
+            _ = try KeywordDAO.ensurePath(["META", "_STRASSE", "NEU"], groupId: nil, in: db)
+            try PhotoDAO.assignKeyword(target, toPhotoIds: [p1], in: db)
+            try PhotoDAO.assignKeyword(source, toPhotoIds: [p2], in: db)
+            try PhotoDAO.assignKeyword(sourceAlt, toPhotoIds: [p2], in: db)
+
+            try KeywordDAO.merge(source, into: target, in: db)
+
+            // Source subtree is gone; the survivor carries BOTH photos.
+            #expect(try KeywordRecord.fetchOne(db, key: source) == nil)
+            #expect(try KeywordRecord.fetchOne(db, key: sourceAlt) == nil)
+            let carriers = try Int64.fetchAll(
+                db, sql: "SELECT photoId FROM photoKeyword WHERE keywordId = ? ORDER BY photoId",
+                arguments: [target]
+            )
+            #expect(carriers == [p1, p2])
+            // ALT merged into the target's ALT (p2's assignment moved along);
+            // NEU re-hung under the survivor.
+            #expect(try KeywordRecord.filter(Column("name") == "ALT").fetchCount(db) == 1)
+            let altCarriers = try Int64.fetchAll(
+                db, sql: "SELECT photoId FROM photoKeyword WHERE keywordId = ?",
+                arguments: [targetAlt]
+            )
+            #expect(altCarriers == [p2])
+            let neu = try #require(try KeywordRecord.filter(Column("name") == "NEU").fetchOne(db))
+            #expect(neu.parentId == target)
+        }
+    }
+
+    @Test func mergingIntoItselfIsANoOp() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let id = try KeywordDAO.ensurePath(["STRASSE"], groupId: nil, in: db)
+            try KeywordDAO.merge(id, into: id, in: db)
+            #expect(try KeywordRecord.fetchOne(db, key: id) != nil)
+        }
+    }
+
+    @Test func refusesMergeIntoOwnDescendant() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let child = try KeywordDAO.ensurePath(["A", "B"], groupId: nil, in: db)
+            let parent = try #require(try KeywordRecord.fetchOne(db, key: child)?.parentId)
+            #expect(throws: KeywordDAOError.mergeTargetInsideSource) {
+                try KeywordDAO.merge(parent, into: child, in: db)
+            }
+            // Nothing was touched.
+            #expect(try KeywordRecord.fetchCount(db) == 2)
+        }
+    }
+}

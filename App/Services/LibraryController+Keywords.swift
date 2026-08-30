@@ -171,6 +171,57 @@ extension LibraryController {
         markNeedsFileWrite(carriers)
     }
 
+    /// The same-named SIBLING a rename of `id` to `newName` would collide
+    /// with — the editor asks BEFORE renaming so the collision becomes a
+    /// merge offer (U40: "_STRASSE" → existing "STRASSE") instead of the
+    /// hard error `renameKeyword` raises.
+    func keywordRenameMergeCandidate(_ id: Int64, newName: String) -> Int64? {
+        guard let tree = snapshot?.keywordTree, let node = tree.node(id) else { return nil }
+        let name = KeywordDAO.normalize(newName)
+        guard !name.isEmpty, name != node.name else { return nil }
+        let siblings = node.parentId.map { tree.children(of: $0) } ?? tree.rootIds
+        return siblings.first { $0 != id && tree.node($0)?.name == name }
+    }
+
+    /// U40: folds `id` (subtree included) into its sibling `targetId` — the
+    /// confirmed rename-collision merge. Assignments union, same-named
+    /// children merge recursively; like `moveKeywordToTopLevel`, tree and
+    /// join table are reloaded wholesale from the transaction's result.
+    /// Not undoable: a merge has no clean inverse.
+    func mergeKeyword(_ id: Int64, into targetId: Int64) {
+        guard let snapshot, id != targetId,
+              snapshot.keywordTree.node(id) != nil,
+              snapshot.keywordTree.node(targetId) != nil else { return }
+        let oldPath = snapshot.keywordTree.path(of: id)
+        // Captured BEFORE the merge while the source ids still exist.
+        let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
+        struct MergeResult {
+            var records: [KeywordRecord]
+            var keywordIdsByPhoto: [Int64: Set<Int64>]
+        }
+        let result: MergeResult? = writeSync { db in
+            try KeywordDAO.merge(id, into: targetId, in: db)
+            return MergeResult(
+                records: try KeywordDAO.fetchAll(db),
+                keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db)
+            )
+        }
+        guard let result else { return }
+        mutateSnapshot {
+            $0.keywordTree = KeywordTree(records: result.records)
+            $0.keywordIdsByPhoto = result.keywordIdsByPhoto
+        }
+        refreshVocabulary()
+        invalidateFacts(forPhotoIds: carriers)
+        // Shortcut/MIDI bindings on the old path re-point at the survivor.
+        if let newPath = self.snapshot?.keywordTree.path(of: targetId), newPath != oldPath {
+            keywordPathRenamed?(oldPath, newPath)
+        }
+        emitCatalogEvent(.photosUpdated(carriers))
+        // The file-facing paths of every source carrier changed.
+        markNeedsFileWrite(carriers)
+    }
+
     /// U7 confirmation numbers for the editor's delete alert.
     func keywordDeletionImpact(_ id: Int64) -> (keywordCount: Int, photoCount: Int) {
         let ids = subtreeIds(of: id)

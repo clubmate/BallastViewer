@@ -23,6 +23,13 @@ struct KeywordsSettingsView: View {
     /// Rename target + working text; nil id = closed.
     @State private var renameKeywordId: Int64?
     @State private var renameText = ""
+    /// U40: a rename that collided with a sibling, awaiting merge confirmation.
+    private struct KeywordMergeDraft: Identifiable {
+        let sourceId: Int64
+        let targetId: Int64
+        var id: Int64 { sourceId }
+    }
+    @State private var pendingKeywordMerge: KeywordMergeDraft?
     /// Where a "+"-drafted keyword would go; the node is created only when
     /// the New Keyword alert is confirmed (U34).
     private struct NewKeywordDraft {
@@ -101,11 +108,26 @@ struct KeywordsSettingsView: View {
                 .uppercasing($renameText)
             Button("Rename") {
                 if let id = renameKeywordId {
-                    controller.renameKeyword(id, to: renameText)
+                    attemptRename(id, to: renameText)
                 }
                 renameKeywordId = nil
             }
             Button("Cancel", role: .cancel) { renameKeywordId = nil }
+        }
+        .alert(
+            "Merge Keywords",
+            isPresented: Binding(
+                get: { pendingKeywordMerge != nil },
+                set: { if !$0 { pendingKeywordMerge = nil } }
+            ),
+            presenting: pendingKeywordMerge
+        ) { draft in
+            Button("Merge") {
+                controller.mergeKeyword(draft.sourceId, into: draft.targetId)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { draft in
+            Text(keywordMergeMessage(draft))
         }
         .alert(
             "New Keyword",
@@ -173,6 +195,20 @@ struct KeywordsSettingsView: View {
             message += " and its \(subCount) sub-keyword\(subCount == 1 ? "" : "s")"
         }
         message += "?\nIt will be removed from \(impact.photoCount) photo\(impact.photoCount == 1 ? "" : "s")."
+        return message
+    }
+
+    private func keywordMergeMessage(_ draft: KeywordMergeDraft) -> String {
+        let impact = controller.keywordDeletionImpact(draft.sourceId)
+        let source = tree.path(of: draft.sourceId)
+        let target = tree.path(of: draft.targetId)
+        var message = "“\(target)” already exists here.\nMerge “\(source)”"
+        if impact.keywordCount > 1 {
+            let subCount = impact.keywordCount - 1
+            message += " and its \(subCount) sub-keyword\(subCount == 1 ? "" : "s")"
+        }
+        message += " into it?\n\(impact.photoCount) photo\(impact.photoCount == 1 ? "" : "s") will carry “\(target)” instead."
+        message += "\nThis cannot be undone."
         return message
     }
 
@@ -460,6 +496,20 @@ struct KeywordsSettingsView: View {
     private func beginRename(_ id: Int64, tree: KeywordTree) {
         renameText = tree.node(id)?.name ?? ""
         renameKeywordId = id
+    }
+
+    /// U40: a rename that collides with a sibling becomes a merge offer
+    /// (the "_STRASSE" → existing "STRASSE" case) instead of an error.
+    private func attemptRename(_ id: Int64, to newName: String) {
+        if let targetId = controller.keywordRenameMergeCandidate(id, newName: newName) {
+            // Deferred a runloop turn: presenting the merge alert while the
+            // rename alert is still tearing down drops it silently.
+            DispatchQueue.main.async {
+                pendingKeywordMerge = KeywordMergeDraft(sourceId: id, targetId: targetId)
+            }
+        } else {
+            controller.renameKeyword(id, to: newName)
+        }
     }
 
     private func palettePicker(selected: String, choose: @escaping (String) -> Void) -> some View {

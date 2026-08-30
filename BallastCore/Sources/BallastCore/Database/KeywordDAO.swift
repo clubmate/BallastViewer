@@ -139,7 +139,21 @@ public enum KeywordDAO {
     /// Folds `sourceId` into `targetId`: assignments union (idempotent),
     /// same-named children merge recursively, the rest re-hang under the
     /// target; the source row is deleted (FK cascade drops its assignments).
-    private static func merge(_ sourceId: Int64, into targetId: Int64, in db: Database) throws {
+    /// Public for the rename-collision path (U40): renaming "_STRASSE" next
+    /// to an existing sibling "STRASSE" merges into it instead of failing.
+    public static func merge(_ sourceId: Int64, into targetId: Int64, in db: Database) throws {
+        guard sourceId != targetId else { return }
+        // A target inside the source's subtree would re-hang an ancestor
+        // under its own descendant — refuse instead of corrupting the tree.
+        var cursor = try KeywordRecord.fetchOne(db, key: targetId)?.parentId
+        while let current = cursor {
+            guard current != sourceId else { throw KeywordDAOError.mergeTargetInsideSource }
+            cursor = try KeywordRecord.fetchOne(db, key: current)?.parentId
+        }
+        try mergeUnchecked(sourceId, into: targetId, in: db)
+    }
+
+    private static func mergeUnchecked(_ sourceId: Int64, into targetId: Int64, in db: Database) throws {
         try db.execute(
             sql: """
                 INSERT OR IGNORE INTO photoKeyword (photoId, keywordId)
@@ -154,7 +168,7 @@ public enum KeywordDAO {
                 .filter(Column("parentId") == targetId && Column("name") == child.name)
                 .fetchOne(db), let twinId = twin.id
             {
-                try merge(childId, into: twinId, in: db)
+                try mergeUnchecked(childId, into: twinId, in: db)
             } else {
                 try KeywordRecord.filter(key: childId)
                     .updateAll(db, Column("parentId").set(to: targetId))
@@ -216,4 +230,7 @@ public enum KeywordDAOError: Error, Equatable, Sendable {
     /// A blank name would persist as `""` and produce paths like `PEOPLE > `
     /// that `KeywordResolver` can never address again.
     case emptyName
+    /// Merging a node into its own descendant would re-hang an ancestor
+    /// under its child and turn the tree into a cycle.
+    case mergeTargetInsideSource
 }

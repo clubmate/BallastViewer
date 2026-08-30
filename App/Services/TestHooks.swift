@@ -10,7 +10,8 @@ import BallastCore
 /// (twice with BV_TEST_RESCAN=1) · BV_TEST_NONRECURSIVE=1 · BV_TEST_REMOVE=<abs path>
 /// · BV_TEST_LRCAT=<abs path> (U30 Lightroom metadata import, bypassing the panel)
 /// · BV_TEST_CULL=1 (step-6 acceptance flow) · BV_TEST_KEYWORDS=1 (step-8
-/// acceptance flow) · BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
+/// acceptance flow) · BV_TEST_MERGE=1 (U40 rename-collision merge) ·
+/// BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
 /// BV_TEST_SINGLE=1 (single view, no quit) ·
 /// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
 /// · BV_TEST_QUIT=1
@@ -85,6 +86,9 @@ enum TestHooks {
         }
         if env["BV_TEST_KEYWORDS"] != nil {
             await runKeywordChecks(controller, center: center, sidebar: sidebar)
+        }
+        if env["BV_TEST_MERGE"] != nil {
+            runMergeChecks(controller, center: center)
         }
         if env["BV_TEST_STEP9"] != nil {
             runStep9Checks(controller, center: center, dispatcher: dispatcher, keyMap: keyMap)
@@ -304,6 +308,50 @@ enum TestHooks {
             "BVKEY persisted assignments=\(controller.snapshot?.keywordIdsByPhoto.values.map(\.count).reduce(0, +) ?? -1)",
             "keywords=\(controller.snapshot?.keywordTree.count ?? -1)",
             "firstCarrierChips=\(describe(restoredFirst.map { chips(for: [$0]) } ?? []))"
+        )
+    }
+
+    /// U40 acceptance, headless: renaming "_STRASSE" to "STRASSE" next to an
+    /// existing sibling is flagged as a merge candidate, and the confirmed
+    /// merge folds it in — assignments union, source gone, carriers re-derived.
+    @MainActor
+    private static func runMergeChecks(_ controller: LibraryController, center: CenterViewModel) {
+        guard let metaId = controller.createKeyword(baseName: "META", parentId: nil, groupId: nil),
+              let strasseId = controller.createKeyword(baseName: "STRASSE", parentId: metaId, groupId: nil),
+              let sourceId = controller.createKeyword(baseName: "_STRASSE", parentId: metaId, groupId: nil)
+        else {
+            print("BVMERGE error=could-not-create-vocabulary")
+            return
+        }
+        let photoIds = center.visiblePhotos.prefix(2).map(\.id)
+        guard photoIds.count == 2 else {
+            print("BVMERGE error=needs-two-photos")
+            return
+        }
+        controller.assignKeyword(id: strasseId, toPhotoIds: [photoIds[0]])
+        controller.assignKeyword(id: sourceId, toPhotoIds: [photoIds[1]])
+
+        // "setup" leaves the collision in place for a manual UI pass.
+        if ProcessInfo.processInfo.environment["BV_TEST_MERGE"] == "setup" {
+            print("BVMERGE setup done")
+            return
+        }
+
+        let candidate = controller.keywordRenameMergeCandidate(sourceId, newName: "strasse")
+        // A non-colliding rename must NOT be flagged.
+        let noCandidate = controller.keywordRenameMergeCandidate(sourceId, newName: "GASSE")
+        print("BVMERGE candidate=\(candidate == strasseId) noCandidate=\(noCandidate == nil)")
+
+        controller.mergeKeyword(sourceId, into: strasseId)
+        let tree = controller.snapshot?.keywordTree
+        let survivors = tree?.children(of: metaId).compactMap { tree?.node($0)?.name } ?? []
+        let carriers = photoIds.filter {
+            controller.snapshot?.keywordIdsByPhoto[$0]?.contains(strasseId) == true
+        }
+        print(
+            "BVMERGE merged children=\(survivors.joined(separator: ","))",
+            "sourceGone=\(tree?.node(sourceId) == nil)",
+            "bothCarry=\(carriers.count == 2)"
         )
     }
 
