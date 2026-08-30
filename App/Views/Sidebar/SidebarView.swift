@@ -10,10 +10,9 @@ struct SidebarView: View {
     let sidebar: SidebarViewModel
     let center: CenterViewModel
 
-    /// One reorder session per id list (group ids and collection ids can
-    /// collide numerically).
+    /// Groups are drag-ordered; collections inside a group list
+    /// alphabetically (U32) and are not draggable.
     @State private var groupReorder = RowReorderSession()
-    @State private var collectionReorder = RowReorderSession()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,14 +56,8 @@ struct SidebarView: View {
                 .onDrop(
                     of: [UTType.plainText],
                     delegate: RowReorderEndDelegate(
-                        flush: {
-                            groupReorder.flush()
-                            collectionReorder.flush()
-                        },
-                        end: {
-                            groupReorder.end()
-                            collectionReorder.end()
-                        }
+                        flush: { groupReorder.flush() },
+                        end: { groupReorder.end() }
                     )
                 )
             }
@@ -189,14 +182,14 @@ struct SidebarView: View {
         )
 
         if !collapsed {
-            ForEach(collectionReorder.ordered(sidebar.collections(inGroup: groupId), id: \.id)) { collection in
-                collectionRow(collection, inGroup: groupId)
+            ForEach(sidebar.collections(inGroup: groupId)) { collection in
+                collectionRow(collection)
             }
         }
     }
 
     @ViewBuilder
-    private func collectionRow(_ collection: SmartCollectionRecord, inGroup groupId: Int64) -> some View {
+    private func collectionRow(_ collection: SmartCollectionRecord) -> some View {
         if let collectionId = collection.id {
             row(
                 item: .collection(collectionId),
@@ -215,18 +208,6 @@ struct SidebarView: View {
                     sidebar.pendingCollectionDeletion = collection
                 }
             }
-            .onDrag {
-                collectionReorder.begin(
-                    draggedId: collectionId,
-                    order: sidebar.collections(inGroup: groupId).compactMap(\.id),
-                    commit: { controller.reorderCollections($0, inGroup: groupId) }
-                )
-                return NSItemProvider(object: "collection:\(collectionId)" as NSString)
-            }
-            .onDrop(
-                of: [UTType.plainText],
-                delegate: RowReorderDelegate(targetId: collectionId, session: collectionReorder)
-            )
         }
     }
 }

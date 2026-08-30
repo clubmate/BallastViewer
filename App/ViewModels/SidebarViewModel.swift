@@ -85,7 +85,14 @@ final class SidebarViewModel {
     private func refreshLists() {
         let snapshot = controller.snapshot
         let newGroups = snapshot?.smartGroups ?? []
+        // Collections list alphabetically within their group (U32) — groups
+        // themselves keep their drag order.
         let newByGroup = Dictionary(grouping: snapshot?.collections ?? [], by: \.groupId)
+            .mapValues { collections in
+                collections.sorted {
+                    CaseInsensitiveMatch.fold($0.name) < CaseInsensitiveMatch.fold($1.name)
+                }
+            }
         if groups != newGroups { groups = newGroups }
         if collectionsByGroup != newByGroup { collectionsByGroup = newByGroup }
     }

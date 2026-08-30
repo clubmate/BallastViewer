@@ -79,22 +79,6 @@ extension LibraryController {
         emitCatalogEvent(.collectionsChanged)
     }
 
-    func reorderCollections(_ orderedIds: [Int64], inGroup groupId: Int64) {
-        guard writeSync({ db in
-            try CollectionDAO.reorderCollections(orderedIds, inGroup: groupId, in: db)
-        }) != nil else { return }
-        mutateSnapshot { snapshot in
-            for (index, id) in orderedIds.enumerated() {
-                if let position = snapshot.collections.firstIndex(where: { $0.id == id }) {
-                    snapshot.collections[position].sortOrder = index
-                    snapshot.collections[position].groupId = groupId
-                }
-            }
-            snapshot.collections.sort { ($0.groupId, $0.sortOrder) < ($1.groupId, $1.sortOrder) }
-        }
-        emitCatalogEvent(.collectionListChanged)
-    }
-
     /// The editor sheet saves what it edits: name, match mode and the full
     /// rule list (spec §9.7). Group and sort position come from the LIVE
     /// record — the sheet's copy is as old as the sheet, and a reorder or move
