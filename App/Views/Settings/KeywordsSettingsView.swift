@@ -75,6 +75,9 @@ struct KeywordsSettingsView: View {
                 if let id = group.id {
                     controller.renameKeywordGroup(id, to: name)
                     controller.setKeywordGroupColor(id, color: color)
+                } else {
+                    // New Group draft: this Save is the moment of creation.
+                    _ = controller.createKeywordGroup(name: name, color: color)
                 }
             }
         }
@@ -400,14 +403,13 @@ struct KeywordsSettingsView: View {
         beginRename(id, tree: tree)
     }
 
-    /// Same create-then-edit flow as keywords: the group exists immediately
-    /// (next free palette colour), the sheet lets the user name it.
+    /// Opens the sheet with a DRAFT (id nil, next free palette colour) —
+    /// the group is created only on Save, so Cancel leaves no trace (U34;
+    /// the create-then-edit flow silently kept a "NEW GROUP" behind Cancel).
     private func addGroup() {
         let used = Set(controller.vocabulary.groups.map { $0.color.uppercased() })
         let color = keywordGroupPalette.first { !used.contains($0.uppercased()) } ?? keywordGroupPalette[0]
-        if let group = controller.createKeywordGroup(name: "NEW GROUP", color: color) {
-            editingGroup = group
-        }
+        editingGroup = KeywordGroupRecord(name: "NEW GROUP", color: color, sortOrder: 0)
     }
 
     private func beginRename(_ id: Int64, tree: KeywordTree) {
@@ -437,7 +439,7 @@ private struct GroupEditSheet: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Edit Group")
+            Text(group.id == nil ? "New Group" : "Edit Group")
                 .font(.headline)
 
             TextField("Name", text: $name)
