@@ -186,6 +186,39 @@ extension LibraryController {
         emitCatalogEvent(.photosUpdated(carriers))
     }
 
+    /// U35: lifts a NESTED keyword (subtree included) to the top level of
+    /// `groupId` — the sorting step after a Lightroom import. A same-named
+    /// top-level keyword absorbs it (assignments union, children merge), so
+    /// the in-memory tree AND join table are reloaded wholesale from the
+    /// transaction's result. Not undoable: a merge has no clean inverse.
+    func moveKeywordToTopLevel(_ id: Int64, groupId: Int64?) {
+        guard let snapshot, snapshot.keywordTree.node(id) != nil else { return }
+        if let groupId, !snapshot.keywordGroups.contains(where: { $0.id == groupId }) { return }
+        // Every carrier of the subtree gets a new derived path ("JAHRE >
+        // 2008" → "2008") — captured BEFORE the move while the ids exist.
+        let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
+        struct MoveResult {
+            var records: [KeywordRecord]
+            var keywordIdsByPhoto: [Int64: Set<Int64>]
+        }
+        let result: MoveResult? = writeSync { db in
+            try KeywordDAO.moveToTopLevel(id, groupId: groupId, in: db)
+            return MoveResult(
+                records: try KeywordDAO.fetchAll(db),
+                keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db)
+            )
+        }
+        guard let result else { return }
+        mutateSnapshot {
+            $0.keywordTree = KeywordTree(records: result.records)
+            $0.keywordIdsByPhoto = result.keywordIdsByPhoto
+        }
+        refreshVocabulary()
+        invalidateFacts(forPhotoIds: carriers)
+        emitCatalogEvent(.photosUpdated(carriers))
+        markNeedsFileWrite(carriers)
+    }
+
     // MARK: Groups
 
     /// Appends a group (end of the Q18 order) and returns it — the editor opens

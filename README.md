@@ -36,6 +36,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 - **Hierarchical keyword tree** (`PEOPLE > ANNA`) with color-coded keyword groups.
 - **Keyword chips** on the selection: type a bare name and it resolves to the full path in your vocabulary; renaming a node updates every photo instantly.
 - **Keyword browser** in the inspector: the whole hierarchy with per-keyword photo counts; click any keyword to filter the library by it (descendants included).
+- **Reorganize imported hierarchies:** move a nested keyword to the top level of any group — subtree included, and a same-named keyword absorbs it (photo assignments merge).
 - **Keyboard and MIDI shortcuts** for your most-used keywords.
 
 ### Smart collections

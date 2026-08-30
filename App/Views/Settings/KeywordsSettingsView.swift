@@ -416,6 +416,24 @@ struct KeywordsSettingsView: View {
                     }
                     .disabled(current == nil)
                 }
+            } else {
+                // U35: a NESTED keyword is LIFTED to the group's top level,
+                // subtree included — the sorting step for imported Lightroom
+                // hierarchies ("JAHRE > 2008" → "2008" in YEAR). A same-named
+                // top-level keyword absorbs it.
+                Menu("Move to Group") {
+                    ForEach(controller.vocabulary.groups) { group in
+                        if let groupId = group.id {
+                            Button(group.name) {
+                                controller.moveKeywordToTopLevel(id, groupId: groupId)
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("UNGROUPED") {
+                        controller.moveKeywordToTopLevel(id, groupId: nil)
+                    }
+                }
             }
             Button("Delete", role: .destructive) { pendingKeywordDeletion = id }
         }

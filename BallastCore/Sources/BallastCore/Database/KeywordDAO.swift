@@ -110,6 +110,59 @@ public enum KeywordDAO {
         try KeywordRecord.deleteOne(db, key: id)
     }
 
+    /// U35: moves a keyword (subtree included) to the TOP LEVEL of `groupId`
+    /// — the escape hatch for imported Lightroom hierarchies ("JAHRE > 2008"
+    /// → top-level "2008" in the YEAR group). A same-named top-level keyword
+    /// absorbs the moved one instead of colliding: photo assignments union,
+    /// same-named children merge recursively, the source node is deleted.
+    /// Returns the surviving top-level id.
+    @discardableResult
+    public static func moveToTopLevel(_ id: Int64, groupId: Int64?, in db: Database) throws -> Int64 {
+        guard let node = try KeywordRecord.fetchOne(db, key: id) else { return id }
+        let twin = try KeywordRecord
+            .filter(Column("parentId") == nil && Column("name") == node.name && Column("id") != id)
+            .fetchOne(db)
+        if let twin, let twinId = twin.id {
+            try merge(id, into: twinId, in: db)
+            try KeywordRecord.filter(key: twinId)
+                .updateAll(db, Column("groupId").set(to: groupId))
+            return twinId
+        }
+        try KeywordRecord.filter(key: id).updateAll(
+            db,
+            Column("parentId").set(to: nil as Int64?),
+            Column("groupId").set(to: groupId)
+        )
+        return id
+    }
+
+    /// Folds `sourceId` into `targetId`: assignments union (idempotent),
+    /// same-named children merge recursively, the rest re-hang under the
+    /// target; the source row is deleted (FK cascade drops its assignments).
+    private static func merge(_ sourceId: Int64, into targetId: Int64, in db: Database) throws {
+        try db.execute(
+            sql: """
+                INSERT OR IGNORE INTO photoKeyword (photoId, keywordId)
+                SELECT photoId, ? FROM photoKeyword WHERE keywordId = ?
+                """,
+            arguments: [targetId, sourceId]
+        )
+        let children = try KeywordRecord.filter(Column("parentId") == sourceId).fetchAll(db)
+        for child in children {
+            guard let childId = child.id else { continue }
+            if let twin = try KeywordRecord
+                .filter(Column("parentId") == targetId && Column("name") == child.name)
+                .fetchOne(db), let twinId = twin.id
+            {
+                try merge(childId, into: twinId, in: db)
+            } else {
+                try KeywordRecord.filter(key: childId)
+                    .updateAll(db, Column("parentId").set(to: targetId))
+            }
+        }
+        try KeywordRecord.deleteOne(db, key: sourceId)
+    }
+
     public static func setGroup(_ groupId: Int64?, forKeywordId id: Int64, in db: Database) throws {
         try KeywordRecord.filter(key: id)
             .updateAll(db, Column("groupId").set(to: groupId))
