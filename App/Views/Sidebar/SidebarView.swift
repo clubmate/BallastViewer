@@ -237,6 +237,9 @@ struct SidebarView: View {
             )
             .contextMenu {
                 Button("Edit Smart Collection") { sidebar.beginEditing(collection) }
+                // U45: sibling copy "NAME (COPY)" with the same rules, ready
+                // to be edited; children are not cloned.
+                Button("Duplicate") { controller.duplicateCollection(collectionId) }
                 // U41: a child inherits this collection's (and its ancestors')
                 // rules; it is created in the parent's group.
                 Button("New Child Collection") {

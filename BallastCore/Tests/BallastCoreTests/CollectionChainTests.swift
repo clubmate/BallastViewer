@@ -146,4 +146,71 @@ import Testing
             _ = grandchild
         }
     }
+
+    /// U45: a duplicate is a sibling ("NAME (COPY)", unique per level) with
+    /// the rules and match mode copied; children stay with the original.
+    @Test func duplicateCopiesRulesAsSiblingWithoutChildren() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let group = try CollectionDAO.createGroup(name: "G", in: db)
+            let source = try CollectionDAO.createCollection(
+                name: "STRASSE", inGroup: group.id!, matchAll: false, in: db
+            )
+            _ = try CollectionDAO.createCollection(
+                name: "CHILD", inGroup: group.id!, parentId: source.id, in: db
+            )
+            try CollectionDAO.saveRules(
+                [
+                    (type: "keyword", operation: "contains", value: "STRASSE"),
+                    (type: "rating", operation: "equals", value: "3"),
+                ],
+                forCollection: source.id!, in: db
+            )
+
+            let duplicated = try CollectionDAO.duplicateCollection(source.id!, in: db)
+            let copy = try #require(duplicated).collection
+            #expect(copy.name == "STRASSE (COPY)")
+            #expect(copy.groupId == source.groupId)
+            #expect(copy.parentId == nil)
+            #expect(copy.matchAll == false)
+            let copiedRules = try CollectionRuleRecord
+                .filter(Column("collectionId") == copy.id!)
+                .order(Column("sortOrder")).fetchAll(db)
+            #expect(copiedRules.map(\.value) == ["STRASSE", "3"])
+            // The original's child was NOT cloned.
+            let children = try SmartCollectionRecord
+                .filter(Column("parentId") == copy.id!).fetchCount(db)
+            #expect(children == 0)
+        }
+    }
+
+    /// The unique-name walk: duplicating twice yields (COPY) then (COPY 2);
+    /// scoped per sibling level, so a CHILD of another parent may reuse it.
+    @Test func duplicateNamesStayUniquePerSiblingLevel() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let group = try CollectionDAO.createGroup(name: "G", in: db)
+            let source = try CollectionDAO.createCollection(name: "X", inGroup: group.id!, in: db)
+            let first = try CollectionDAO.duplicateCollection(source.id!, in: db)
+            let second = try CollectionDAO.duplicateCollection(source.id!, in: db)
+            #expect(try #require(first).collection.name == "X (COPY)")
+            #expect(try #require(second).collection.name == "X (COPY 2)")
+
+            // Same name below a parent is a different level — no clash.
+            let child = try CollectionDAO.createCollection(
+                name: "X", inGroup: group.id!, parentId: source.id, in: db
+            )
+            let childCopy = try CollectionDAO.duplicateCollection(child.id!, in: db)
+            #expect(try #require(childCopy).collection.name == "X (COPY)")
+            #expect(try #require(childCopy).collection.parentId == source.id)
+        }
+    }
+
+    @Test func duplicatingAMissingCollectionReturnsNil() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let result = try CollectionDAO.duplicateCollection(999, in: db)
+            #expect(result?.collection == nil)
+        }
+    }
 }

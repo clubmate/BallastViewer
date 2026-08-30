@@ -73,6 +73,21 @@ extension LibraryController {
         return created.id
     }
 
+    /// U45: context-menu duplicate — sibling copy named "NAME (COPY)", rules
+    /// and match mode included, children not. Returns the new id.
+    @discardableResult
+    func duplicateCollection(_ id: Int64) -> Int64? {
+        guard let duplicated = writeSync({ db in
+            try CollectionDAO.duplicateCollection(id, in: db)
+        }) ?? nil else { return nil }
+        mutateSnapshot { snapshot in
+            snapshot.collections.append(duplicated.collection)
+            snapshot.rules.append(contentsOf: duplicated.rules)
+        }
+        emitCatalogEvent(.collectionsChanged)
+        return duplicated.collection.id
+    }
+
     /// U41 confirmation number for the sidebar's delete alert.
     func collectionDescendantCount(_ id: Int64) -> Int {
         guard let snapshot else { return 0 }

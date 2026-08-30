@@ -45,6 +45,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 
 - Rule-based collections (keyword, rating, filename, keyword count, keyword group, dates) with AND/OR matching, organised in sidebar groups.
 - **Child collections** for persistent drill-downs: nest a collection under another and it narrows the parent's result with its own rules — inherited rules show greyed out in the editor, multiple levels fold out in the sidebar.
+- **Duplicate** any collection from its context menu: the copy lands next to the original as "NAME (COPY)" with the same rules, ready to be tweaked.
 - Fixed sidebar filters for every rating level — including UNRATED — plus ALL PHOTOS and LAST IMPORT.
 
 ### Metadata — Lightroom-compatible, automatic
