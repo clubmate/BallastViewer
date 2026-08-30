@@ -8,6 +8,7 @@ import BallastCore
 ///
 /// Hooks: BV_TEST_CREATE=<name> · BV_TEST_OPEN=<name> · BV_TEST_IMPORT=<abs path>
 /// (twice with BV_TEST_RESCAN=1) · BV_TEST_NONRECURSIVE=1 · BV_TEST_REMOVE=<abs path>
+/// · BV_TEST_LRCAT=<abs path> (U30 Lightroom metadata import, bypassing the panel)
 /// · BV_TEST_CULL=1 (step-6 acceptance flow) · BV_TEST_KEYWORDS=1 (step-8
 /// acceptance flow) · BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
 /// BV_TEST_SINGLE=1 (single view, no quit) ·
@@ -59,6 +60,17 @@ enum TestHooks {
                 await controller.importFolders([folderURL], recursive: recursive)
                 printImportState(controller, label: "rescan")
             }
+        }
+        // U30: Lightroom metadata import without the open panel (the fixture
+        // .lrcat lives in the container's temp dir, readable in the sandbox).
+        if let path = env["BV_TEST_LRCAT"] {
+            await controller.importLightroomMetadata(from: URL(fileURLWithPath: path))
+            print(
+                "BVLR info=\(quoted(controller.infoMessage))",
+                "error=\(quoted(controller.errorMessage))",
+                "bulkRun=\(controller.fileWriteThrough?.isBulkRun == true)",
+                "pending=\(controller.fileWriteThrough?.pendingCount ?? -1)"
+            )
         }
         if let path = env["BV_TEST_REMOVE"] {
             if let folder = controller.snapshot?.folders.first(where: { $0.path == path }) {
