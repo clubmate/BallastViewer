@@ -419,6 +419,8 @@ private struct BottomBar: View {
             if center.viewMode == .grid {
                 SearchField(center: center, controller: controller)
 
+                RatingFilterControl(center: center)
+
                 Spacer()
 
                 // No step: — a stepped macOS slider draws tick marks; the
@@ -441,9 +443,15 @@ private struct BottomBar: View {
                 .fixedSize()
             } else {
                 Spacer()
-                if !center.searchText.isEmpty {
+                if !center.searchText.isEmpty || center.ratingFilter != nil {
+                    // U38: the rating chip is part of the search — the single-
+                    // mode reminder label shows it too.
+                    let rating = center.ratingFilter.map { $0 == 0 ? "unrated" : "★\($0)" }
+                    let parts = [
+                        center.searchText.isEmpty ? nil : center.searchText, rating,
+                    ].compactMap(\.self).joined(separator: " · ")
                     Text(
-                        "Active search: \(center.searchText) "
+                        "Active search: \(parts) "
                             + "(\(center.anchorPosition.map { String($0 + 1) } ?? "–")/\(center.visiblePhotos.count))"
                     )
                     .monospacedDigit()
@@ -455,6 +463,47 @@ private struct BottomBar: View {
         }
         .padding(.horizontal, 8)
         .frame(height: PanelMetrics.footerHeight)
+    }
+}
+
+/// U38: exact-rating filter chips next to the search field — star.slash for
+/// unrated, then ★1–5. One value at a time; clicking the active value turns
+/// the filter off. ANDed with the text search (and the active collection);
+/// stays applied across mode switches like the search itself (U5).
+private struct RatingFilterControl: View {
+    let center: CenterViewModel
+
+    var body: some View {
+        let active = center.ratingFilter
+        HStack(spacing: 3) {
+            Button {
+                center.ratingFilter = active == 0 ? nil : 0
+            } label: {
+                Image(systemName: "star.slash")
+                    .font(.callout)
+                    .foregroundStyle(
+                        active == 0 ? AnyShapeStyle(Color.yellow) : AnyShapeStyle(.secondary)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Only unrated photos")
+            ForEach(1...5, id: \.self) { star in
+                // Cumulative display (filter 4 fills ★1–4), exact filtering (Q9).
+                let filled = active.map { $0 >= star && $0 != 0 } ?? false
+                Button {
+                    center.ratingFilter = active == star ? nil : star
+                } label: {
+                    Image(systemName: filled ? "star.fill" : "star")
+                        .font(.callout)
+                        .foregroundStyle(
+                            filled ? AnyShapeStyle(Color.yellow) : AnyShapeStyle(.secondary)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Only \(star)-star photos")
+            }
+        }
+        .padding(.leading, 4)
     }
 }
 

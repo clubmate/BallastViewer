@@ -28,7 +28,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 - **The neighbour rule:** rating a photo inside a filtered view advances to its neighbour instead of jumping to the top — cull forward without ever touching the mouse.
 - **Stable random order:** a Random sort that keeps its order while you work, so rating a photo never reshuffles the list under your hands.
 - **Instant rotation** via stored orientation — display-only, files untouched, no re-decode.
-- **Search** matches keywords and filenames, on top of the active collection; space-separated terms combine with OR (`PARIS ROME`), and `LOCATION > ROME` stays one path term.
+- **Search** matches keywords and filenames, on top of the active collection; space-separated terms combine with OR (`PARIS ROME`), and `LOCATION > ROME` stays one path term. Star chips beside the field add an exact-rating filter on top.
 - **Full undo** for ratings, rotations, keyword changes, and even folder removal.
 
 ### Keywords

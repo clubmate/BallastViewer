@@ -122,6 +122,17 @@ final class CenterViewModel {
     }
     @ObservationIgnored private var searchDebounce: Task<Void, Never>?
 
+    /// U38: exact-rating filter from the star chips next to the search field
+    /// (nil = off, 0 = unrated, Q9 exact semantics like the sidebar rows).
+    /// ANDed with the text search and the active collection. A click applies
+    /// immediately — no debounce, unlike typing.
+    var ratingFilter: Int? {
+        didSet {
+            guard oldValue != ratingFilter else { return }
+            applyFilterChange()
+        }
+    }
+
     /// Applies a pending debounced search immediately (perf probe, test hooks).
     func applySearchNow() {
         searchDebounce?.cancel()
@@ -220,9 +231,11 @@ final class CenterViewModel {
     }
 
     /// U29: inspector keyword-tree click — global keyword filter that replaces
-    /// the sidebar selection and discards an active search.
+    /// the sidebar selection and discards an active search (U38: the rating
+    /// chips are part of that search).
     func filterByKeyword(_ id: Int64) {
         if !searchText.isEmpty { searchText = "" }
+        if ratingFilter != nil { ratingFilter = nil }
         selectSidebarItem(.keyword(id))
     }
 
@@ -308,6 +321,8 @@ final class CenterViewModel {
     /// facts (incl. the pre-folded filename) are fetched once per photo and
     /// shared by both filters.
     private func passesFilter(_ photo: PhotoRecord, search: SearchFilter.FoldedQuery?) -> Bool {
+        // Cheapest test first — no facts fetch needed (U38).
+        if let ratingFilter, photo.rating != ratingFilter { return false }
         guard let snapshot = controller.snapshot else { return false }
         let facts = controller.queryFacts(for: photo)
         guard SidebarFilter.matches(
