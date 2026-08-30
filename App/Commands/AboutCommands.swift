@@ -1,8 +1,11 @@
 import SwiftUI
 
 /// BallastViewer ▸ About — the standard panel with the house motto as
-/// credits and no build number.
+/// credits and no build number — plus Check for Updates… (U31) right below,
+/// where macOS apps keep it.
 struct AboutCommands: Commands {
+    let updater: AppUpdater
+
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About BallastViewer") {
@@ -16,6 +19,8 @@ struct AboutCommands: Commands {
                     ),
                 ])
             }
+            Button("Check for Updates…") { updater.checkForUpdates() }
+                .disabled(updater.isWorking)
         }
     }
 }

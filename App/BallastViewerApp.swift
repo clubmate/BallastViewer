@@ -16,6 +16,7 @@ struct BallastViewerApp: App {
     @State private var settingsRouter = SettingsRouter()
     @State private var photoPicker = PhotoPickerModel()
     @State private var keywordPanel: KeywordPanelModel
+    @State private var updater = AppUpdater()
 
     init() {
         let controller = LibraryController()
@@ -69,7 +70,7 @@ struct BallastViewerApp: App {
                 }
         }
         .commands {
-            AboutCommands()
+            AboutCommands(updater: updater)
             // No File menu by design: the single Window scene has nothing to
             // put there. ⌘W lives in the app menu so Settings can still be closed.
             CommandGroup(after: .appSettings) {
