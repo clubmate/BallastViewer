@@ -79,12 +79,3 @@ jobs:
             ## What's new
 
             ${{ steps.notes.outputs.notes }}
-
-            ---
-
-            Automatic build of `${{ github.sha }}`.
-
-            The app is ad-hoc signed, not notarized. After unzipping, macOS will refuse to open it once.
-            Either right-click the app ▸ Open ▸ Open, or run in Terminal:
-
-                xattr -dr com.apple.quarantine ~/Downloads/BallastViewer.app
