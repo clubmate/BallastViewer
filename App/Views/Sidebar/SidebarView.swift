@@ -195,15 +195,10 @@ struct SidebarView: View {
                 count: sidebar.counts.collections[collectionId]
             ) {
                 HStack(spacing: 4) {
-                    // Guide lines: one hairline per ancestor level, each
-                    // sitting exactly under that ancestor's chevron column —
-                    // the vertical line ties a subtree to its parent.
+                    // One empty column per ancestor level (user pick
+                    // 2026-08-30: indent only, no guide lines).
                     ForEach(0..<outlineRow.depth, id: \.self) { _ in
-                        Rectangle()
-                            .fill(.secondary.opacity(0.35))
-                            .frame(width: 1)
-                            .frame(maxHeight: .infinity)
-                            .frame(width: Self.outlineColumnWidth)
+                        Color.clear.frame(width: Self.outlineColumnWidth)
                     }
                     // The chevron column is reserved on EVERY row so siblings
                     // align whether or not they can disclose.
