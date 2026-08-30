@@ -27,7 +27,7 @@ extension LibraryController {
     }
 
     func importLightroomMetadata(from url: URL) async {
-        guard let pipeline = writePipeline, snapshot != nil else { return }
+        guard let pipeline = writePipeline, let library, snapshot != nil else { return }
         guard !isBusy else {
             errorMessage = Self.busyMessage
             return
@@ -58,7 +58,25 @@ extension LibraryController {
             errorMessage = "Could not read “\(url.lastPathComponent)”.\n\(error.localizedDescription)"
         case .success(let matched):
             do {
-                let matches = matched.matches
+                // U43: photos an earlier import already covered are skipped —
+                // the user may have reorganized their keywords since, and
+                // re-merging would re-create the old Lightroom paths. The
+                // matcher still saw ALL photos (ambiguity detection must not
+                // shift); only the resulting matches are filtered here.
+                let mergedIds = try await library.pool.read {
+                    try PhotoDAO.lightroomMergedPhotoIds($0)
+                }
+                var freshMatches = matched.matches.filter { !mergedIds.contains($0.photoId) }
+                var skipped = matched.matches.count - freshMatches.count
+                if freshMatches.isEmpty, skipped > 0 {
+                    // The whole catalog hits already-imported photos — a
+                    // deliberate full re-import (say, after rating more photos
+                    // in Lightroom) is still possible, but only on request.
+                    guard Self.confirmReimportAll(photoCount: skipped) else { return }
+                    freshMatches = matched.matches
+                    skipped = 0
+                }
+                let matches = freshMatches
                 let ambiguousIds = matched.ambiguousPhotoIds
                 // Ambiguous candidates get a dated review keyword + a smart
                 // collection listing them ("keyword equals <name>") — same
@@ -92,7 +110,7 @@ extension LibraryController {
                     fileWriteThrough?.beginBulkRun()
                 }
                 infoMessage = Self.lightroomSummary(
-                    matched: matched, summary: applied.merge, issueName: issueName
+                    matched: matched, skipped: skipped, summary: applied.merge, issueName: issueName
                 )
             } catch {
                 errorMessage = "Lightroom import failed.\n\(error.localizedDescription)"
@@ -131,8 +149,29 @@ extension LibraryController {
         return try LightroomCatalogReader.read(at: copy)
     }
 
+    /// All matched photos were already covered by an earlier import, so the
+    /// normal skip (U43) would make this run a no-op. Asks whether to
+    /// deliberately re-apply the catalog to all of them anyway — e.g. after
+    /// rating more photos in Lightroom. Headless hook runs auto-confirm; a
+    /// modal alert would hang them.
+    private static func confirmReimportAll(photoCount: Int) -> Bool {
+        guard !TestHooks.suppressesAlerts else { return true }
+        let subject = photoCount == 1
+            ? "The matched photo was"
+            : "All \(photoCount) matched photos were"
+        let alert = NSAlert()
+        alert.messageText = "Import metadata again?"
+        alert.informativeText = "\(subject) already enriched by an earlier Lightroom import."
+            + " Importing again re-applies the catalog's ratings and keywords —"
+            + " keywords you have since renamed or moved will come back"
+            + " at their old Lightroom paths."
+        alert.addButton(withTitle: "Import Again")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     private static func lightroomSummary(
-        matched: LightroomMatchResult, summary: LightroomMergeSummary, issueName: String
+        matched: LightroomMatchResult, skipped: Int, summary: LightroomMergeSummary, issueName: String
     ) -> String {
         func count(_ n: Int, _ noun: String) -> String {
             "\(n) \(noun)\(n == 1 ? "" : "s")"
@@ -143,6 +182,10 @@ extension LibraryController {
         } else {
             message = "Matched \(count(matched.matches.count, "photo"))"
                 + " (\(matched.pathMatches) by path, \(matched.filenameMatches) by filename)."
+            if skipped > 0 {
+                message += " \(count(skipped, "photo")) from an earlier import"
+                    + " \(skipped == 1 ? "was" : "were") left untouched."
+            }
             if summary.changedPhotoIds.isEmpty {
                 message += " Everything was already up to date."
             } else {

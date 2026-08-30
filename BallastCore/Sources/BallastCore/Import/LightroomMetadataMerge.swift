@@ -132,7 +132,7 @@ public struct LightroomMergeSummary: Sendable, Equatable {
 /// rewrite — rerunning the same import must not touch a single file.
 public enum LightroomImportDAO {
     public static func merge(
-        _ matches: [LightroomMatch], in db: Database
+        _ matches: [LightroomMatch], mergedAt: Date = Date(), in db: Database
     ) throws -> LightroomMergeSummary {
         var summary = LightroomMergeSummary()
         guard !matches.isEmpty else { return summary }
@@ -184,6 +184,15 @@ public enum LightroomImportDAO {
 
         try PhotoDAO.setRatings(ratingUpdates, in: db)
         summary.ratingsApplied = ratingUpdates.count
+        // Every matched photo is stamped — no-op matches too: "already up to
+        // date" is just as covered. Later imports skip stamped photos so
+        // keywords the user reorganized in between are not re-created at
+        // their old Lightroom paths (U43).
+        try PhotoDAO.setLightroomMerged(
+            mergedAt,
+            forPhotoIds: matches.map(\.photoId).filter { ratingById[$0] != nil },
+            in: db
+        )
         // Flagged inside the SAME transaction: if the app dies before the
         // write-through runs, the next library open re-queues these files.
         summary.changedPhotoIds = changed.sorted()

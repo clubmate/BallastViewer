@@ -154,6 +154,16 @@ public enum LibrarySchema {
             )
         }
 
+        migrator.registerMigration("v7-lightroom-merged") { db in
+            // U43: when a Lightroom import covered a photo (even as a no-op),
+            // the run's date lands here. Later imports skip flagged photos so
+            // keywords the user reorganized since are not re-created at their
+            // old Lightroom paths. NULL = never covered by an import.
+            try db.alter(table: "photo") { t in
+                t.add(column: "lightroomMergedAt", .datetime)
+            }
+        }
+
         return migrator
     }
 

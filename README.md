@@ -55,6 +55,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 ### Lightroom Classic import
 
 - **Library ▸ Import Metadata from Lightroom…** reads a `.lrcat` catalog directly and merges its ratings and keyword hierarchies into photos already in your library — additive, idempotent, and safe: photos are matched by path (with a unique-filename fallback for moved files), anything ambiguous is skipped, tagged with a dated review keyword, and collected in an automatically created smart collection for you to inspect.
+- Imports are **incremental**: photos an earlier import already covered are left alone on later runs, so you can import and reorganize your library folder by folder — keywords you have renamed or moved in between are not re-created at their old Lightroom paths. A deliberate full re-import is still one confirmation away.
 
 ### MIDI controllers
 

@@ -399,6 +399,105 @@ private func makeLightroomCatalog(
         }
     }
 
+    /// U43: every matched photo is stamped `lightroomMergedAt` — no-op matches
+    /// included — so a later import run can skip photos an earlier run already
+    /// covered. Unmatched photos and vanished match targets stay unstamped.
+    @Test func mergeStampsMatchedPhotosForLaterSkip() throws {
+        let dbQueue = try makeTestDatabase()
+        let (photoA, photoB, photoC) = try dbQueue.write { db -> (Int64, Int64, Int64) in
+            let folderId = try insertFolder(db)
+            let a = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/a.jpg")
+            let b = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/b.jpg", rating: 2)
+            let c = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/c.jpg")
+            return (a, b, c)
+        }
+        let matches = [
+            LightroomMatch(
+                photoId: photoA,
+                entry: LightroomPhotoEntry(path: "/tmp/photos/a.jpg", rating: 4)
+            ),
+            // No-op match: rating already 2, nothing to apply — stamped anyway.
+            LightroomMatch(
+                photoId: photoB,
+                entry: LightroomPhotoEntry(path: "/tmp/photos/b.jpg", rating: 2)
+            ),
+            // Photo deleted since the match was computed — must not resurrect.
+            LightroomMatch(
+                photoId: 999,
+                entry: LightroomPhotoEntry(path: "/tmp/photos/gone.jpg", rating: 3)
+            ),
+        ]
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try dbQueue.write { try LightroomImportDAO.merge(matches, mergedAt: stamp, in: $0) }
+
+        try dbQueue.read { db in
+            let stamped = try PhotoDAO.lightroomMergedPhotoIds(db)
+            #expect(stamped == [photoA, photoB])
+            #expect(!stamped.contains(photoC))
+            let storedStamp = try Date.fetchOne(
+                db, sql: "SELECT lightroomMergedAt FROM photo WHERE id = ?", arguments: [photoA]
+            )
+            #expect(storedStamp == stamp)
+        }
+    }
+
+    /// The controller-side skip contract: matches filtered against the stamp
+    /// set leave reorganized keywords alone, while an unstamped photo still
+    /// receives its metadata.
+    @Test func stampedPhotosCanBeFilteredOutOfASecondRun() throws {
+        let dbQueue = try makeTestDatabase()
+        let (oldPhoto, newPhoto) = try dbQueue.write { db -> (Int64, Int64) in
+            let folderId = try insertFolder(db)
+            let old = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/2009/a.jpg")
+            let new = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/2010/b.jpg")
+            return (old, new)
+        }
+        let oldMatch = LightroomMatch(
+            photoId: oldPhoto,
+            entry: LightroomPhotoEntry(path: "/tmp/photos/2009/a.jpg",
+                                       keywordPaths: [["jahre", "2009"]])
+        )
+        _ = try dbQueue.write { try LightroomImportDAO.merge([oldMatch], in: $0) }
+        // The user reorganizes: JAHRE > 2009 becomes a top-level 2009.
+        try dbQueue.write { db in
+            let node = try KeywordRecord.filter(Column("name") == "2009").fetchOne(db)!
+            try db.execute(
+                sql: "UPDATE keyword SET parentId = NULL WHERE id = ?", arguments: [node.id]
+            )
+            try db.execute(sql: "DELETE FROM keyword WHERE name = 'JAHRE'")
+        }
+
+        // Second run: the catalog still matches both photos, but the stamp
+        // filter drops the covered one before the merge.
+        let secondRun = [
+            oldMatch,
+            LightroomMatch(
+                photoId: newPhoto,
+                entry: LightroomPhotoEntry(path: "/tmp/photos/2010/b.jpg",
+                                           keywordPaths: [["jahre", "2010"]])
+            ),
+        ]
+        let summary = try dbQueue.write { db -> LightroomMergeSummary in
+            let stamped = try PhotoDAO.lightroomMergedPhotoIds(db)
+            let fresh = secondRun.filter { !stamped.contains($0.photoId) }
+            return try LightroomImportDAO.merge(fresh, in: db)
+        }
+        #expect(summary.changedPhotoIds == [newPhoto])
+
+        try dbQueue.read { db in
+            // JAHRE was NOT re-created for 2009; 2010 arrived under a fresh JAHRE.
+            let names = try String.fetchAll(db, sql: "SELECT name FROM keyword ORDER BY name")
+            #expect(names == ["2009", "2010", "JAHRE"])
+            let node2009 = try KeywordRecord.filter(Column("name") == "2009").fetchOne(db)
+            #expect(node2009?.parentId == nil)
+            let assignments = try Int.fetchOne(
+                db, sql: "SELECT COUNT(*) FROM photoKeyword WHERE photoId = ?",
+                arguments: [oldPhoto]
+            )
+            #expect(assignments == 1)
+        }
+    }
+
     @Test func existingKeywordAssignmentIsNotDuplicated() throws {
         let dbQueue = try makeTestDatabase()
         let photoId = try dbQueue.write { db -> Int64 in

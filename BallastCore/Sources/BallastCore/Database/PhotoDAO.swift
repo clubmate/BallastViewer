@@ -63,6 +63,20 @@ public enum PhotoDAO {
         try Int64.fetchAll(db, sql: "SELECT id FROM photo WHERE needsFileWrite = 1 ORDER BY id")
     }
 
+    /// Stamps the photos a Lightroom import covered (U43) — later imports
+    /// leave stamped photos alone. Same single-row UPDATE shape as above.
+    public static func setLightroomMerged(_ date: Date, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(sql: "UPDATE photo SET lightroomMergedAt = ? WHERE id = ?")
+        for id in ids {
+            try statement.execute(arguments: [date, id])
+        }
+    }
+
+    /// Photos an earlier Lightroom import already covered.
+    public static func lightroomMergedPhotoIds(_ db: Database) throws -> Set<Int64> {
+        Set(try Int64.fetchAll(db, sql: "SELECT id FROM photo WHERE lightroomMergedAt IS NOT NULL"))
+    }
+
     /// Idempotent: assigning an already-assigned keyword is a no-op.
     public static func assignKeyword(_ keywordId: Int64, toPhotoIds ids: [Int64], in db: Database) throws {
         for photoId in ids {
