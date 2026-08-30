@@ -2,9 +2,11 @@ import BallastCore
 import SwiftUI
 
 /// Collapsible status section at the sidebar's bottom (same recipe as the
-/// inspector's KEYWORDS section, U29): visible ONLY during a declared bulk
-/// write run — the Lightroom import's thousands of queued file writes.
-/// Everyday single-photo write-throughs never show it. Shows a progress bar
+/// inspector's KEYWORDS section, U29): visible ONLY during a bulk write run
+/// — the Lightroom import's queued file writes, or (U46) any change that
+/// leaves ≥ `MetadataWriteThrough.bulkRunThreshold` photos pending at once,
+/// such as renaming a keyword hundreds of photos carry. Everyday
+/// single-photo write-throughs never show it. Shows a progress bar
 /// over the run plus any failed files; disappears when the run drains.
 /// Expanded by default; purely informative (the writes run regardless).
 struct FileWriteStatusSection: View {

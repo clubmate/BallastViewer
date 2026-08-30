@@ -52,12 +52,18 @@ final class MetadataWriteThrough {
     /// The photo currently being written — counted as pending until its
     /// outcome lands, so the bar never claims completion early.
     @ObservationIgnored private var inFlightCount = 0
-    /// True while a caller-declared bulk run (the Lightroom import) is being
-    /// written. The sidebar's WRITING FILES section shows ONLY during such a
-    /// run — everyday single-photo writes stay invisible, as before. Cleared
-    /// when the queue drains (kept while failures from the run are open, so
-    /// they stay visible).
+    /// True while a bulk run is being written. The sidebar's WRITING FILES
+    /// section shows ONLY during such a run — everyday single-photo writes
+    /// stay invisible. A run is declared either explicitly by a caller (the
+    /// Lightroom import, whatever its size) or automatically as soon as
+    /// `bulkRunThreshold` photos are pending at once (U46: a keyword rename,
+    /// move or delete touching hundreds of files, a rating on a ⌘A
+    /// selection …). Cleared when the queue drains (kept while failures from
+    /// the run are open, so they stay visible).
     private(set) var isBulkRun = false
+
+    /// Pending photos at which any write burst becomes a visible bulk run.
+    nonisolated static let bulkRunThreshold = 100
 
     /// Declares the just-scheduled work a bulk run worth showing progress for.
     /// Call AFTER scheduling the ids.
@@ -166,6 +172,7 @@ final class MetadataWriteThrough {
             if failedPaths.isEmpty { isBulkRun = false }
         }
         if count != pendingCount { pendingCount = count }
+        if count >= Self.bulkRunThreshold { isBulkRun = true }
     }
 
     private struct Job: Sendable {

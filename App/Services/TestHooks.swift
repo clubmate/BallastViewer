@@ -11,6 +11,7 @@ import BallastCore
 /// · BV_TEST_LRCAT=<abs path> (U30 Lightroom metadata import, bypassing the panel)
 /// · BV_TEST_CULL=1 (step-6 acceptance flow) · BV_TEST_KEYWORDS=1 (step-8
 /// acceptance flow) · BV_TEST_MERGE=1 (U40 rename-collision merge) ·
+/// BV_TEST_BULKWRITE=1 (U46 auto bulk-run progress, needs ≥100 photos) ·
 /// BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
 /// BV_TEST_SINGLE=1 (single view, no quit) ·
 /// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
@@ -92,6 +93,9 @@ enum TestHooks {
         }
         if env["BV_TEST_CHILDCOLL"] != nil {
             runChildCollectionChecks(controller, center: center, sidebar: sidebar)
+        }
+        if env["BV_TEST_BULKWRITE"] != nil {
+            runBulkWriteChecks(controller, center: center)
         }
         if let path = env["BV_TEST_QTN"] {
             runQuarantineProbe(zipAt: path)
@@ -423,6 +427,33 @@ enum TestHooks {
             "sourceGone=\(tree?.node(sourceId) == nil)",
             "bothCarry=\(carriers.count == 2)"
         )
+    }
+
+    /// U46 acceptance, headless: a keyword change touching ≥ 100 photos turns
+    /// the write-through into a visible bulk run WITHOUT anyone declaring
+    /// one; a 2-photo change does not. Prints the state right after the
+    /// mutation (during the debounce window, before any file is written).
+    @MainActor
+    private static func runBulkWriteChecks(_ controller: LibraryController, center: CenterViewModel) {
+        guard let writer = controller.fileWriteThrough,
+              let smallId = controller.createKeyword(baseName: "BULK SMALL", parentId: nil, groupId: nil),
+              let bigId = controller.createKeyword(baseName: "BULK BIG", parentId: nil, groupId: nil)
+        else {
+            print("BVBULK error=setup")
+            return
+        }
+        let all = center.visiblePhotos.map(\.id)
+        guard all.count >= MetadataWriteThrough.bulkRunThreshold else {
+            print("BVBULK error=needs-\(MetadataWriteThrough.bulkRunThreshold)-photos have=\(all.count)")
+            return
+        }
+        controller.assignKeyword(id: smallId, toPhotoIds: Array(all.prefix(2)))
+        print("BVBULK small bulkRun=\(writer.isBulkRun) pending=\(writer.pendingCount)")
+        controller.assignKeyword(id: bigId, toPhotoIds: all)
+        print("BVBULK assign bulkRun=\(writer.isBulkRun) pending=\(writer.pendingCount) total=\(writer.runTotal)")
+        // A rename of a keyword carried by every photo re-flags them all.
+        controller.renameKeyword(bigId, to: "BULK RENAMED")
+        print("BVBULK rename bulkRun=\(writer.isBulkRun) pending=\(writer.pendingCount) total=\(writer.runTotal)")
     }
 
     /// U41 acceptance, headless: a child collection ANDs the parent's rules

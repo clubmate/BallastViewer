@@ -51,7 +51,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 ### Metadata — Lightroom-compatible, automatic
 
 - Ratings and keywords are written into your image files **automatically** (debounced, crash-safe): `xmp:Rating`, `dc:subject`, and the hierarchical `lr:hierarchicalSubject` — the exact format Lightroom Classic reads and writes.
-- A **bulk progress panel** appears in the sidebar when thousands of files are being written (e.g. after a Lightroom import).
+- A **bulk progress panel** appears in the sidebar whenever a change touches 100 or more files at once — a Lightroom import, or renaming or moving a keyword that hundreds of photos carry — so you can see the files being written and when it is safe to quit.
 
 ### Lightroom Classic import
 
