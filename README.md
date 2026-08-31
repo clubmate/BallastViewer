@@ -23,7 +23,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 
 ### Culling
 
-- **Grid and single view** with instant switching, zoomable thumbnails, and full-resolution single view. The single view's footer always names the active filter — the selected collection, star row, or keyword, plus any search — so you never wonder why photos are hidden.
+- **Grid and single view** with instant switching, zoomable thumbnails, and full-resolution single view — double-click a photo to enter it, double-click again to return to the grid. The single view's footer always names the active filter — the selected collection, star row, or keyword, plus any search — so you never wonder why photos are hidden.
 - **Ratings 0–5**, applied to the whole selection at once; batches are one undo step. ⌘A selects every visible photo.
 - **The neighbour rule:** rating a photo inside a filtered view advances to its neighbour instead of jumping to the top — cull forward without ever touching the mouse.
 - **Stable random order:** a Random sort that keeps its order while you work, so rating a photo never reshuffles the list under your hands.

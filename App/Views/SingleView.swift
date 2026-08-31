@@ -14,6 +14,10 @@ struct SingleView: View {
     /// paying a cold full decode with a spinner per step.
     var neighbors: [GridPhoto] = []
     let pipeline: ThumbnailPipeline
+    /// Double-click anywhere on the photo surface — MainWindow wires this to
+    /// switch back to grid mode (mirror of the grid's double-click into
+    /// single mode).
+    var onDoubleClick: () -> Void = {}
 
     /// Results carry the path AND orientation they were loaded for: when
     /// stepping quickly, the body renders for the NEW photo while the state
@@ -68,11 +72,17 @@ struct SingleView: View {
         case .loaded(let image, let path, _) where path == photo.path:
             // Decoded unrotated; the stored orientation is applied at the
             // layer level so the rotate action is instant (Q5).
-            SingleImageSurface(image: image, orientation: photo.orientation)
+            SingleImageSurface(
+                image: image, orientation: photo.orientation,
+                onDoubleClick: onDoubleClick
+            )
         case .loaded(let image, _, let orientation):
             // Stale: the previous photo bridges the gap while the new decode
             // runs — with ITS orientation, so nothing flashes mis-rotated.
-            SingleImageSurface(image: image, orientation: orientation)
+            SingleImageSurface(
+                image: image, orientation: orientation,
+                onDoubleClick: onDoubleClick
+            )
         case .failed(let path) where path == photo.path:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.largeTitle)
@@ -88,6 +98,7 @@ struct SingleView: View {
 struct SingleImageSurface: NSViewRepresentable {
     let image: CGImage
     let orientation: Int
+    var onDoubleClick: () -> Void = {}
 
     func makeNSView(context: Context) -> SingleImageNSView {
         SingleImageNSView()
@@ -95,10 +106,12 @@ struct SingleImageSurface: NSViewRepresentable {
 
     func updateNSView(_ view: SingleImageNSView, context: Context) {
         view.display(image: image, orientation: orientation)
+        view.onDoubleClick = onDoubleClick
     }
 }
 
 final class SingleImageNSView: NSView {
+    var onDoubleClick: (() -> Void)?
     private let imageLayer = CALayer()
     private var transform = OrientationTransform.forEXIF(1)
 
@@ -117,6 +130,14 @@ final class SingleImageNSView: NSView {
         CATransaction.withoutAnimation {
             imageLayer.contents = image
             applyLayout()
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2 {
+            onDoubleClick?()
+        } else {
+            super.mouseDown(with: event)
         }
     }
 

@@ -255,7 +255,8 @@ struct MainWindow: View {
                     SingleView(
                         photo: center.anchorPhoto,
                         neighbors: center.anchorNeighbors,
-                        pipeline: pipeline
+                        pipeline: pipeline,
+                        onDoubleClick: { center.viewMode = .grid }
                     )
                 }
             }
