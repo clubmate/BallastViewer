@@ -251,23 +251,54 @@ struct InspectorView: View {
             Text(chip.path)
                 .font(.title3)
                 .lineLimit(1)
+                .opacity(chip.isPending ? 0.7 : 1)
             Spacer()
-            Button {
-                controller.removeKeyword(id: chip.id, fromPhotoIds: selectedIds)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.bold())
+            if chip.isPending {
+                // U48: an AI suggestion under review — accept promotes it to a
+                // normal keyword (and into the file), reject removes it and
+                // is remembered across runs.
+                Button {
+                    controller.acceptPendingKeyword(id: chip.id, forPhotoIds: selectedIds)
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.caption.bold())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.green)
+                .help("Accept suggestion")
+                Button {
+                    controller.rejectPendingKeyword(id: chip.id, forPhotoIds: selectedIds)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.bold())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .help("Reject suggestion")
+            } else {
+                Button {
+                    controller.removeKeyword(id: chip.id, fromPhotoIds: selectedIds)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.bold())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .background(color.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            color.opacity(chip.isPending ? 0.08 : 0.2),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(color, lineWidth: 1)
+                .strokeBorder(
+                    color,
+                    style: StrokeStyle(lineWidth: 1, dash: chip.isPending ? [4, 3] : [])
+                )
         )
     }
 

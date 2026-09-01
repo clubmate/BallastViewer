@@ -100,13 +100,112 @@ public enum PhotoDAO {
         }
     }
 
-    /// Replaces a photo's entire assignment set — metadata Load, where the
-    /// file's keyword list wins wholesale (spec §6.4).
+    /// Replaces a photo's entire CONFIRMED assignment set — metadata Load,
+    /// where the file's keyword list wins wholesale (spec §6.4). Pending AI
+    /// suggestions and rejection memory survive the Load (they are user-review
+    /// state, not file state); a pending keyword that IS in the file gets
+    /// promoted to confirmed by the upsert.
     public static func setKeywords(_ keywordIds: [Int64], forPhotoId photoId: Int64, in db: Database) throws {
-        try PhotoKeywordRecord.filter(Column("photoId") == photoId).deleteAll(db)
+        try db.execute(
+            sql: "DELETE FROM photoKeyword WHERE photoId = ? AND status = 'confirmed'",
+            arguments: [photoId]
+        )
+        let statement = try db.cachedStatement(
+            sql: """
+                INSERT INTO photoKeyword (photoId, keywordId, status) VALUES (?, ?, 'confirmed')
+                ON CONFLICT(photoId, keywordId) DO UPDATE SET status = 'confirmed'
+                """
+        )
         for keywordId in keywordIds {
-            try PhotoKeywordRecord(photoId: photoId, keywordId: keywordId)
-                .insert(db, onConflict: .ignore)
+            try statement.execute(arguments: [photoId, keywordId])
+        }
+    }
+
+    // MARK: AI suggestions (U48)
+
+    /// Pending suggestions as keyword-id sets per photo id — the snapshot's
+    /// second map, same shape as `fetchKeywordIdsByPhoto`.
+    public static func fetchPendingKeywordIdsByPhoto(_ db: Database) throws -> [Int64: Set<Int64>] {
+        var result: [Int64: Set<Int64>] = [:]
+        let cursor = try Row.fetchCursor(
+            db, sql: "SELECT photoId, keywordId FROM photoKeyword WHERE status = 'pending'")
+        while let row = try cursor.next() {
+            let photoId: Int64 = row[0]
+            let keywordId: Int64 = row[1]
+            result[photoId, default: []].insert(keywordId)
+        }
+        return result
+    }
+
+    /// Inserts suggestion pairs as pending. OR IGNORE on purpose: an existing
+    /// CONFIRMED row must never be demoted by a suggestion run.
+    public static func assignPendingKeywords(_ pairs: [PhotoKeywordPair], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "INSERT OR IGNORE INTO photoKeyword (photoId, keywordId, status) VALUES (?, ?, 'pending')"
+        )
+        for pair in pairs {
+            try statement.execute(arguments: [pair.photoId, pair.keywordId])
+        }
+    }
+
+    /// Accept: pending → confirmed (only rows actually pending).
+    public static func confirmPendingKeyword(_ keywordId: Int64, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "UPDATE photoKeyword SET status = 'confirmed' WHERE photoId = ? AND keywordId = ? AND status = 'pending'"
+        )
+        for id in ids {
+            try statement.execute(arguments: [id, keywordId])
+        }
+    }
+
+    /// Undo of an accept: confirmed → pending.
+    public static func demoteKeywordToPending(_ keywordId: Int64, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "UPDATE photoKeyword SET status = 'pending' WHERE photoId = ? AND keywordId = ? AND status = 'confirmed'"
+        )
+        for id in ids {
+            try statement.execute(arguments: [id, keywordId])
+        }
+    }
+
+    /// Reject (or restore-undo): drops the pending rows outright. Confirmed
+    /// rows are untouched.
+    public static func deletePendingKeyword(_ keywordId: Int64, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "DELETE FROM photoKeyword WHERE photoId = ? AND keywordId = ? AND status = 'pending'"
+        )
+        for id in ids {
+            try statement.execute(arguments: [id, keywordId])
+        }
+    }
+
+    // MARK: Rejection memory (U48)
+
+    public static func fetchRejectedPairs(_ db: Database) throws -> Set<PhotoKeywordPair> {
+        var result = Set<PhotoKeywordPair>()
+        let cursor = try Row.fetchCursor(db, sql: "SELECT photoId, keywordId FROM rejectedSuggestion")
+        while let row = try cursor.next() {
+            result.insert(PhotoKeywordPair(photoId: row[0], keywordId: row[1]))
+        }
+        return result
+    }
+
+    public static func insertRejected(_ keywordId: Int64, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "INSERT OR IGNORE INTO rejectedSuggestion (photoId, keywordId) VALUES (?, ?)"
+        )
+        for id in ids {
+            try statement.execute(arguments: [id, keywordId])
+        }
+    }
+
+    /// Undo of a reject: the tombstones go away again.
+    public static func deleteRejected(_ keywordId: Int64, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "DELETE FROM rejectedSuggestion WHERE photoId = ? AND keywordId = ?"
+        )
+        for id in ids {
+            try statement.execute(arguments: [id, keywordId])
         }
     }
 

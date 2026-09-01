@@ -7,11 +7,14 @@ public struct KeywordChip: Equatable, Identifiable, Sendable {
     public var path: String
     /// Effective group colour ("#RRGGBB"); nil = ungrouped → grey.
     public var colorHex: String?
+    /// U48: an AI suggestion awaiting review — renders dashed with ✓/✗.
+    public var isPending: Bool
 
-    public init(id: Int64, path: String, colorHex: String?) {
+    public init(id: Int64, path: String, colorHex: String?, isPending: Bool = false) {
         self.id = id
         self.path = path
         self.colorHex = colorHex
+        self.isPending = isPending
     }
 }
 

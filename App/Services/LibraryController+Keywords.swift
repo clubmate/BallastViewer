@@ -55,6 +55,9 @@ extension LibraryController {
             for photoId in photoIds
             where !(snapshot.keywordIdsByPhoto[photoId]?.contains(keywordId) ?? false) {
                 snapshot.keywordIdsByPhoto[photoId, default: []].insert(keywordId)
+                // Manually assigning a keyword the AI suggested is an implicit
+                // accept (U48) — the DB upsert flips the same row.
+                snapshot.pendingKeywordIdsByPhoto[photoId]?.remove(keywordId)
                 changed.append(photoId)
             }
         }
@@ -198,18 +201,21 @@ extension LibraryController {
         struct MergeResult {
             var records: [KeywordRecord]
             var keywordIdsByPhoto: [Int64: Set<Int64>]
+            var pendingKeywordIdsByPhoto: [Int64: Set<Int64>]
         }
         let result: MergeResult? = writeSync { db in
             try KeywordDAO.merge(id, into: targetId, in: db)
             return MergeResult(
                 records: try KeywordDAO.fetchAll(db),
-                keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db)
+                keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db),
+                pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db)
             )
         }
         guard let result else { return }
         mutateSnapshot {
             $0.keywordTree = KeywordTree(records: result.records)
             $0.keywordIdsByPhoto = result.keywordIdsByPhoto
+            $0.pendingKeywordIdsByPhoto = result.pendingKeywordIdsByPhoto
         }
         refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)
@@ -239,6 +245,11 @@ extension LibraryController {
             snapshot.keywordTree = snapshot.keywordTree.deletingSubtree(id)
             for photoId in carriers {
                 snapshot.keywordIdsByPhoto[photoId]?.subtract(removedIds)
+            }
+            // Pending suggestions of deleted keywords die with them (the DB
+            // rows go via FK cascade; the map must follow).
+            for photoId in snapshot.pendingKeywordIdsByPhoto.keys {
+                snapshot.pendingKeywordIdsByPhoto[photoId]?.subtract(removedIds)
             }
         }
         refreshVocabulary()
@@ -289,18 +300,21 @@ extension LibraryController {
         struct MoveResult {
             var records: [KeywordRecord]
             var keywordIdsByPhoto: [Int64: Set<Int64>]
+            var pendingKeywordIdsByPhoto: [Int64: Set<Int64>]
         }
         let result: MoveResult? = writeSync { db in
             try KeywordDAO.moveToTopLevel(id, groupId: groupId, in: db)
             return MoveResult(
                 records: try KeywordDAO.fetchAll(db),
-                keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db)
+                keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db),
+                pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db)
             )
         }
         guard let result else { return }
         mutateSnapshot {
             $0.keywordTree = KeywordTree(records: result.records)
             $0.keywordIdsByPhoto = result.keywordIdsByPhoto
+            $0.pendingKeywordIdsByPhoto = result.pendingKeywordIdsByPhoto
         }
         refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)

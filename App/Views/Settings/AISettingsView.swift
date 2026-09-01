@@ -10,6 +10,7 @@ struct AISettingsView: View {
     @Environment(LibraryController.self) private var controller
     @Environment(CenterViewModel.self) private var center
     @Environment(EmbeddingModelStore.self) private var models
+    @Environment(SuggestionRunner.self) private var runner
     @AppStorage("aiSuggestionThreshold") private var threshold = 0.25
     @State private var filter = ""
     @State private var preview = PreviewState.idle
@@ -20,8 +21,44 @@ struct AISettingsView: View {
             thresholdSection
             descriptionsSection
             previewSection
+            runSection
         }
         .formStyle(.grouped)
+    }
+
+    // MARK: Suggestion run (Stage 2)
+
+    private var runSection: some View {
+        Section("Suggestions") {
+            HStack {
+                Button("Suggest Keywords for All Photos") {
+                    runner.run(controller: controller, models: models, threshold: Float(threshold))
+                }
+                .disabled(models.state != .ready || runner.isRunning)
+                if runner.isRunning {
+                    Button("Cancel") { runner.cancel() }
+                }
+            }
+            switch runner.phase {
+            case .idle:
+                if let summary = runner.summary {
+                    Text(summary).font(.caption)
+                } else {
+                    Text("Scores every photo against every described keyword. Matches attach as PENDING chips in the inspector — accept ✓ or reject ✗ each one; nothing is written to files until you accept.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            case .preparing:
+                ProgressView { Text("Embedding keyword descriptions…") }
+            case .scanning(let done, let total, let found):
+                ProgressView(value: Double(done), total: Double(max(1, total))) {
+                    Text("Scanning photo \(done + 1) of \(total) — \(found) suggestions so far")
+                }
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 
     // MARK: Model
@@ -242,7 +279,7 @@ struct AISettingsView: View {
                     preview = .running(index, photos.count)
                     guard let box = await thumbnails.thumbnail(forPath: photo.path, longEdge: 256)
                     else { continue }
-                    let mtime = Self.mtime(of: photo.path)
+                    let mtime = EmbeddingStore.mtime(of: photo.path)
                     let vector: [Float]
                     if let cached = try await store.embedding(
                         forPath: photo.path, mtime: mtime,
@@ -273,11 +310,6 @@ struct AISettingsView: View {
         }
     }
 
-    private static func mtime(of path: String) -> Int {
-        let date = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate])
-            as? Date
-        return Int(date?.timeIntervalSince1970 ?? 0)
-    }
 }
 
 /// One keyword row: derived path label + description field. Commits on

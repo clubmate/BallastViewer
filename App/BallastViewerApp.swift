@@ -18,6 +18,7 @@ struct BallastViewerApp: App {
     @State private var keywordPanel: KeywordPanelModel
     @State private var updater = AppUpdater()
     @State private var embeddingModels = EmbeddingModelStore()
+    @State private var suggestionRunner = SuggestionRunner()
 
     init() {
         // U42: BEFORE anything reads UserDefaults — the sandboxed builds kept
@@ -104,6 +105,7 @@ struct BallastViewerApp: App {
                 .environment(midiService)
                 .environment(settingsRouter)
                 .environment(embeddingModels)
+                .environment(suggestionRunner)
         }
     }
 }

@@ -241,6 +241,19 @@ final class CenterViewModel {
             summary.chips = KeywordChipBuilder.chips(
                 forKeywordIds: common, tree: snapshot.keywordTree, groups: snapshot.keywordGroups
             )
+            // U48: pending AI suggestions render behind the confirmed chips,
+            // same Q14 intersection semantics — ✓/✗ acts on every selected photo.
+            let pendingCommon = KeywordChipBuilder.commonKeywordIds(
+                photoIds: ids, keywordIdsByPhoto: snapshot.pendingKeywordIdsByPhoto
+            )
+            summary.chips += KeywordChipBuilder.chips(
+                forKeywordIds: pendingCommon, tree: snapshot.keywordTree,
+                groups: snapshot.keywordGroups
+            ).map { chip in
+                var pending = chip
+                pending.isPending = true
+                return pending
+            }
         }
         if summary != selectionSummary {
             selectionSummary = summary

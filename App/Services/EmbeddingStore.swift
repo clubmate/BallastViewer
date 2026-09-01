@@ -40,6 +40,13 @@ actor EmbeddingStore {
         }
     }
 
+    /// Whole-second file mtime — the freshness half of the cache key.
+    nonisolated static func mtime(of path: String) -> Int {
+        let date = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate])
+            as? Date
+        return Int(date?.timeIntervalSince1970 ?? 0)
+    }
+
     func store(_ vector: [Float], forPath path: String, mtime: Int, modelVersion: String) throws {
         let data = vector.withUnsafeBufferPointer { Data(buffer: $0) }
         try dbQueue.write { db in

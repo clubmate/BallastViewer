@@ -202,6 +202,87 @@ import Testing
         }
     }
 
+    @Test func pendingLifecycleRoundTrips() throws {
+        // Stage 2: suggest → (accept ⇄ demote) and suggest → reject → restore.
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let folderId = try insertFolder(db)
+            let photoId = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/a.jpg")
+            let keywordId = try KeywordDAO.ensurePath(["HANDY"], groupId: nil, in: db)
+            let pair = PhotoKeywordPair(photoId: photoId, keywordId: keywordId)
+
+            try PhotoDAO.assignPendingKeywords([pair], in: db)
+            #expect(try PhotoDAO.fetchPendingKeywordIdsByPhoto(db) == [photoId: [keywordId]])
+            #expect(try PhotoDAO.fetchKeywordIdsByPhoto(db).isEmpty)
+
+            try PhotoDAO.confirmPendingKeyword(keywordId, forPhotoIds: [photoId], in: db)
+            #expect(try PhotoDAO.fetchPendingKeywordIdsByPhoto(db).isEmpty)
+            #expect(try PhotoDAO.fetchKeywordIdsByPhoto(db) == [photoId: [keywordId]])
+
+            try PhotoDAO.demoteKeywordToPending(keywordId, forPhotoIds: [photoId], in: db)
+            #expect(try PhotoDAO.fetchPendingKeywordIdsByPhoto(db) == [photoId: [keywordId]])
+            #expect(try PhotoDAO.fetchKeywordIdsByPhoto(db).isEmpty)
+
+            try PhotoDAO.deletePendingKeyword(keywordId, forPhotoIds: [photoId], in: db)
+            try PhotoDAO.insertRejected(keywordId, forPhotoIds: [photoId], in: db)
+            #expect(try PhotoKeywordRecord.fetchCount(db) == 0)
+            #expect(try PhotoDAO.fetchRejectedPairs(db) == [pair])
+
+            try PhotoDAO.deleteRejected(keywordId, forPhotoIds: [photoId], in: db)
+            #expect(try PhotoDAO.fetchRejectedPairs(db).isEmpty)
+        }
+    }
+
+    @Test func suggestionRunNeverDemotesConfirmed() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let folderId = try insertFolder(db)
+            let photoId = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/a.jpg")
+            let keywordId = try KeywordDAO.ensurePath(["HANDY"], groupId: nil, in: db)
+            try PhotoDAO.assignKeyword(keywordId, toPhotoIds: [photoId], in: db)
+            try PhotoDAO.assignPendingKeywords(
+                [PhotoKeywordPair(photoId: photoId, keywordId: keywordId)], in: db
+            )
+            #expect(try PhotoKeywordRecord.fetchOne(db)?.status == .confirmed)
+            // Deletes/demotes of pending never touch a confirmed row either.
+            try PhotoDAO.deletePendingKeyword(keywordId, forPhotoIds: [photoId], in: db)
+            #expect(try PhotoKeywordRecord.fetchCount(db) == 1)
+        }
+    }
+
+    @Test func metadataLoadPreservesReviewState() throws {
+        // spec §6.4 Load replaces the CONFIRMED set wholesale — but pending
+        // suggestions and rejection memory are user-review state, not file
+        // state, and survive. A pending keyword present in the file becomes
+        // confirmed.
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let folderId = try insertFolder(db)
+            let photoId = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/a.jpg")
+            let old = try KeywordDAO.ensurePath(["OLD"], groupId: nil, in: db)
+            let pendingOnly = try KeywordDAO.ensurePath(["BEINE"], groupId: nil, in: db)
+            let pendingInFile = try KeywordDAO.ensurePath(["HANDY"], groupId: nil, in: db)
+            let rejected = try KeywordDAO.ensurePath(["FALSCH"], groupId: nil, in: db)
+            try PhotoDAO.assignKeyword(old, toPhotoIds: [photoId], in: db)
+            try PhotoDAO.assignPendingKeywords(
+                [
+                    PhotoKeywordPair(photoId: photoId, keywordId: pendingOnly),
+                    PhotoKeywordPair(photoId: photoId, keywordId: pendingInFile),
+                ], in: db
+            )
+            try PhotoDAO.insertRejected(rejected, forPhotoIds: [photoId], in: db)
+
+            // The file carries HANDY plus a new keyword; OLD is gone from it.
+            let new = try KeywordDAO.ensurePath(["NEU"], groupId: nil, in: db)
+            try PhotoDAO.setKeywords([pendingInFile, new], forPhotoId: photoId, in: db)
+
+            #expect(try PhotoDAO.fetchKeywordIdsByPhoto(db) == [photoId: [pendingInFile, new]])
+            #expect(try PhotoDAO.fetchPendingKeywordIdsByPhoto(db) == [photoId: [pendingOnly]])
+            #expect(try PhotoDAO.fetchRejectedPairs(db)
+                == [PhotoKeywordPair(photoId: photoId, keywordId: rejected)])
+        }
+    }
+
     @Test func aiDescriptionRoundTripsAndBlankClears() throws {
         let dbQueue = try makeTestDatabase()
         try dbQueue.write { db in

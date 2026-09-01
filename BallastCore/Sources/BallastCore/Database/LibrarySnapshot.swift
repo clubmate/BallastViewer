@@ -9,7 +9,13 @@ public struct LibrarySnapshot: Sendable {
     public var folders: [FolderRecord]
     public var photos: [PhotoRecord]
     /// Keyword ids per photo id — the in-memory form of the join table.
+    /// CONFIRMED assignments only; pending AI suggestions live in
+    /// `pendingKeywordIdsByPhoto` so nothing confirmed-only (write-through,
+    /// facts, counts) ever sees them (U48).
     public var keywordIdsByPhoto: [Int64: Set<Int64>]
+    /// Pending AI suggestions per photo id (U48). Rejections are DB-only —
+    /// nothing in the hot path needs them.
+    public var pendingKeywordIdsByPhoto: [Int64: Set<Int64>] = [:]
     public var keywordTree: KeywordTree
     public var keywordGroups: [KeywordGroupRecord]
     public var smartGroups: [SmartGroupRecord]
@@ -61,6 +67,7 @@ public struct LibrarySnapshot: Sendable {
             folders: try FolderRecord.order(Column("dateAdded")).fetchAll(db),
             photos: try PhotoRecord.fetchAll(db),
             keywordIdsByPhoto: keywordIdsByPhoto,
+            pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db),
             keywordTree: KeywordTree(records: try KeywordDAO.fetchAll(db)),
             keywordGroups: try KeywordDAO.fetchGroups(db),
             smartGroups: try SmartGroupRecord.order(Column("sortOrder")).fetchAll(db),
