@@ -14,7 +14,9 @@ import BallastCore
 /// BV_TEST_BULKWRITE=1 (U46 auto bulk-run progress, needs ≥100 photos) ·
 /// BV_TEST_AIREVIEW=1 (U48 pending-suggestion review flow, model-free, needs ≥4 photos) ·
 /// BV_TEST_AISCORES=1 (U48 score-scale diagnostic: text vs prototype score
-/// distributions per described keyword — needs the model and prompts) ·
+/// distributions per described keyword — needs the model and prompts; without
+/// BV_TEST_OPEN it waits for the launch auto-reopen and runs on the LAST
+/// OPENED library, i.e. the user's real one) ·
 /// BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
 /// BV_TEST_SINGLE=1 (single view, no quit) ·
 /// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
@@ -581,10 +583,19 @@ enum TestHooks {
     /// means the prototype inflates scores past the text-calibrated threshold.
     @MainActor
     private static func runAIScoreDiagnostic(_ controller: LibraryController, models: EmbeddingModelStore) async {
+        // No explicit BV_TEST_OPEN: the launch auto-reopen of the last library
+        // is still in the open queue — the diagnostic is meant for the user's
+        // real library, so wait for it (a big library takes a moment).
+        var waited = 0
+        while controller.snapshot == nil, waited < 600 {
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
         guard let snapshot = controller.snapshot, let thumbnails = controller.thumbnails else {
-            print("BVAISCORES error=no-library")
+            print("BVAISCORES error=no-library (nothing reopened within 30 s; pass BV_TEST_OPEN=<name>)")
             return
         }
+        print("BVAISCORES library=\(controller.libraryURL?.lastPathComponent ?? "?") photos=\(snapshot.photos.count)")
         guard let service = models.service() else {
             print("BVAISCORES error=model-not-ready state=\(models.state)")
             return
@@ -610,6 +621,9 @@ enum TestHooks {
                     for: chunk, service: service, store: store, thumbnails: thumbnails
                 ) {
                     vectors[id] = vector
+                }
+                if start % 1000 == 0, start > 0 {
+                    print("BVAISCORES embedding \(start) of \(photos.count)")
                 }
             }
             print("BVAISCORES photos=\(vectors.count) keywords=\(specs.count) threshold=\(threshold)")
