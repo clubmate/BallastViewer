@@ -135,6 +135,7 @@ final class SuggestionRunner {
         store: EmbeddingStore,
         thumbnails: ThumbnailPipeline,
         learning: Bool = true,
+        rejected: Set<PhotoKeywordPair> = [],
         progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
     ) async throws -> [(path: String, spec: KeywordScoringSpec)] {
         let described = snapshot.keywordTree.allRecords
@@ -170,10 +171,17 @@ final class SuggestionRunner {
                 carriersByKeyword[keywordId, default: []].append(photoId)
             }
         }
+        // Rejected photos per described keyword — the veto side (only photos
+        // still in the catalog; tombstones of deleted photos cascade away).
+        var rejectedByKeyword: [Int64: [Int64]] = [:]
+        for pair in rejected where describedIds.contains(pair.keywordId) && photosById[pair.photoId] != nil {
+            rejectedByKeyword[pair.keywordId, default: []].append(pair.photoId)
+        }
         // The library sample only matters when some keyword has examples;
         // a text-only setup skips the extra embeddings entirely.
         let sample = carriersByKeyword.isEmpty ? [] : libraryMeanSample(snapshot.photos)
-        let exampleTotal = carriersByKeyword.values.reduce(0) { $0 + $1.count } + sample.count
+        let exampleTotal = carriersByKeyword.values.reduce(0) { $0 + $1.count }
+            + rejectedByKeyword.values.reduce(0) { $0 + $1.count } + sample.count
         var examplesDone = 0
 
         var sampleEmbeddings: [(id: Int64, vector: [Float])] = []
@@ -200,21 +208,27 @@ final class SuggestionRunner {
             for variant in SuggestionEngine.promptVariants(record.aiDescription ?? "") {
                 textEmbeddings.append(try await service.textEmbedding(promptText(for: variant)))
             }
-            var exampleEmbeddings: [[Float]] = []
-            for photoId in carriersByKeyword[keywordId] ?? [] {
-                try Task.checkCancellation()
-                examplesDone += 1
-                guard let photo = photosById[photoId] else { continue }
-                if let vector = try await embedding(
-                    for: photo, service: service, store: store, thumbnails: thumbnails
-                ) {
-                    exampleEmbeddings.append(vector)
+            // Carriers and rejected photos, cache-first, through the same
+            // prefetch window as the scan.
+            func embedAll(_ ids: [Int64]) async throws -> [[Float]] {
+                let records = ids.compactMap { photosById[$0] }
+                var vectors: [[Float]] = []
+                for start in stride(from: 0, to: records.count, by: prefetchWindow) {
+                    try Task.checkCancellation()
+                    let chunk = records[start ..< min(start + prefetchWindow, records.count)]
+                    vectors.append(contentsOf: try await embeddings(
+                        for: chunk, service: service, store: store, thumbnails: thumbnails
+                    ).map(\.vector))
+                    examplesDone += chunk.count
+                    if let progress {
+                        let done = examplesDone
+                        await MainActor.run { progress(done, exampleTotal) }
+                    }
                 }
-                if let progress {
-                    let done = examplesDone
-                    await MainActor.run { progress(done, exampleTotal) }
-                }
+                return vectors
             }
+            let exampleEmbeddings = try await embedAll(carriersByKeyword[keywordId] ?? [])
+            let rejectedEmbeddings = try await embedAll(rejectedByKeyword[keywordId] ?? [])
             let prototype = SuggestionEngine.prototype(of: exampleEmbeddings)
             // Ordinary photos only: the keyword's own carriers would pull the
             // baseline toward the prototype (decisive in small libraries).
@@ -229,7 +243,9 @@ final class SuggestionRunner {
                     exampleCount: exampleEmbeddings.count,
                     prototypeBaseline: prototype.map {
                         SuggestionEngine.prototypeBaseline(prototype: $0, sample: ordinary)
-                    } ?? 0
+                    } ?? 0,
+                    exampleEmbeddings: exampleEmbeddings,
+                    rejectedEmbeddings: rejectedEmbeddings
                 )
             ))
         }
@@ -289,6 +305,7 @@ final class SuggestionRunner {
                     store: store,
                     thumbnails: thumbnails,
                     learning: learning,
+                    rejected: rejected,
                     progress: { [weak self] done, total in
                         self?.phase = .preparing(done: done, total: total)
                     }
@@ -296,6 +313,7 @@ final class SuggestionRunner {
                 let examples = specs.reduce(0) { $0 + $1.exampleCount }
 
                 var found = 0
+                var vetoed = 0
                 var done = 0
                 var batch: [Int64: [Float]] = [:]
                 var batchSkip = Set<PhotoKeywordPair>()
@@ -305,15 +323,16 @@ final class SuggestionRunner {
 
                 @MainActor func flush() {
                     guard !batch.isEmpty else { return }
-                    let suggestions = SuggestionEngine.suggestions(
+                    let scored = SuggestionEngine.scored(
                         photoEmbeddings: batch,
                         specs: specs,
                         threshold: threshold,
                         skip: batchSkip.union(rejected)
                     )
-                    if !suggestions.isEmpty {
-                        controller?.applySuggestions(suggestions.map(\.pair), libraryUUID: libraryUUID)
-                        found += suggestions.count
+                    vetoed += scored.vetoed
+                    if !scored.kept.isEmpty {
+                        controller?.applySuggestions(scored.kept.map(\.pair), libraryUUID: libraryUUID)
+                        found += scored.kept.count
                     }
                     batch.removeAll(keepingCapacity: true)
                     batchSkip.removeAll(keepingCapacity: true)
@@ -356,6 +375,7 @@ final class SuggestionRunner {
                     ? "Cancelled after \(done) of \(photos.count) photos in “\(scopeName)” — \(found) suggestion\(found == 1 ? "" : "s") so far."
                     : "\(found) suggestion\(found == 1 ? "" : "s") across \(photos.count) photos in “\(scopeName)”"
                         + (examples > 0 ? ", learned from \(examples) confirmed example\(examples == 1 ? "" : "s")" : "")
+                        + (vetoed > 0 ? "; \(vetoed) held back as look-alike\(vetoed == 1 ? "" : "s") of rejected photos" : "")
                         + "."
                 self?.phase = .idle
             } catch is CancellationError {

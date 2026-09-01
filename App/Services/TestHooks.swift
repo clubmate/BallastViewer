@@ -609,8 +609,10 @@ enum TestHooks {
         )
         do {
             let store = try await EmbeddingStore.open(libraryUUID: snapshot.meta.libraryUUID)
+            let rejectedPairs = controller.fetchRejectedSuggestionPairs()
             let specs = try await SuggestionRunner.buildSpecs(
-                snapshot: snapshot, service: service, store: store, thumbnails: thumbnails
+                snapshot: snapshot, service: service, store: store, thumbnails: thumbnails,
+                rejected: rejectedPairs
             )
             guard !specs.isEmpty else {
                 print("BVAISCORES error=no-prompts")
@@ -647,16 +649,24 @@ enum TestHooks {
             for (path, spec) in specs {
                 var carrierText: [Float] = [], carrierRaw: [Float] = [], carrierExcess: [Float] = [], carrierBlend: [Float] = []
                 var otherText: [Float] = [], otherRaw: [Float] = [], otherExcess: [Float] = [], otherBlend: [Float] = []
+                var rejectedBlend: [Float] = []
+                var vetoedOverThreshold = 0
                 for (photoId, vector) in vectors {
                     let text = spec.textEmbeddings.map { EmbeddingMath.cosine(vector, $0) }.max() ?? 0
                     let raw = spec.prototypeEmbedding.map { EmbeddingMath.cosine(vector, $0) } ?? 0
                     let excess = SuggestionEngine.prototypeExcess(photo: vector, spec: spec) ?? 0
                     let blend = SuggestionEngine.score(photo: vector, spec: spec)
                     let isCarrier = snapshot.keywordIdsByPhoto[photoId]?.contains(spec.keywordId) == true
+                    let isRejected = rejectedPairs.contains(PhotoKeywordPair(photoId: photoId, keywordId: spec.keywordId))
                     if isCarrier {
                         carrierText.append(text); carrierRaw.append(raw); carrierExcess.append(excess); carrierBlend.append(blend)
+                    } else if isRejected {
+                        rejectedBlend.append(blend)
                     } else {
                         otherText.append(text); otherRaw.append(raw); otherExcess.append(excess); otherBlend.append(blend)
+                        if blend >= threshold, SuggestionEngine.isVetoed(photo: vector, spec: spec) {
+                            vetoedOverThreshold += 1
+                        }
                     }
                 }
                 let alpha = spec.exampleCount == 0 ? 1 : 8 / (8 + Float(spec.exampleCount))
@@ -670,7 +680,10 @@ enum TestHooks {
                 print("BVAISCORES [\(path)] others   " + line("text  ", otherText))
                 print("BVAISCORES [\(path)] others   " + line("raw   ", otherRaw))
                 print("BVAISCORES [\(path)] others   " + line("excess", otherExcess))
-                print("BVAISCORES [\(path)] others   " + line("blend ", otherBlend))
+                print("BVAISCORES [\(path)] others   " + line("blend ", otherBlend) + " vetoed=\(vetoedOverThreshold)")
+                if !rejectedBlend.isEmpty {
+                    print("BVAISCORES [\(path)] rejected " + line("blend ", rejectedBlend) + " (\(rejectedBlend.count) tombstones, never re-suggested)")
+                }
             }
         } catch {
             print("BVAISCORES error=\(error.localizedDescription)")

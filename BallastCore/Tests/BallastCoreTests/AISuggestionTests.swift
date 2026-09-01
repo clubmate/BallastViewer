@@ -184,6 +184,51 @@ import Testing
     }
 }
 
+@Suite struct RejectionVetoTests {
+    // 2-D stand-ins: [1,0] is the keyword's look, [0,1] something unrelated.
+    private let text: [Float] = [1, 0]
+
+    @Test func lookAlikeOfARejectedPhotoIsHeldBack() {
+        // One accepted example at [1,0], one rejected near-miss at ~[0.8,0.6].
+        let rejected: [Float] = EmbeddingMath.l2Normalized([0.8, 0.6])
+        let spec = KeywordScoringSpec(
+            keywordId: 10, textEmbeddings: [text],
+            exampleEmbeddings: [[1, 0]], rejectedEmbeddings: [rejected]
+        )
+        // A photo almost identical to the rejected one: closer to it than to
+        // the example, well over the floor → vetoed.
+        let sibling: [Float] = EmbeddingMath.l2Normalized([0.78, 0.62])
+        #expect(SuggestionEngine.isVetoed(photo: sibling, spec: spec))
+        // A photo right at the example: closer to the example → kept.
+        #expect(!SuggestionEngine.isVetoed(photo: [0.99, 0.14], spec: spec))
+        // The scored pass counts the veto instead of suggesting the pair.
+        let result = SuggestionEngine.scored(
+            photoEmbeddings: [1: sibling, 2: [0.99, 0.14]], specs: [spec], threshold: 0.5
+        )
+        #expect(result.kept.map(\.pair.photoId) == [2])
+        #expect(result.vetoed == 1)
+    }
+
+    @Test func vetoNeedsRealResemblanceAndAnyRejection() {
+        // A rejection far away (cosine below the 0.6 floor) says nothing,
+        // even when there are no examples to be closer to.
+        let spec = KeywordScoringSpec(
+            keywordId: 10, textEmbeddings: [text], rejectedEmbeddings: [[0, 1]]
+        )
+        #expect(!SuggestionEngine.isVetoed(photo: [1, 0], spec: spec))
+        // The same photo very close to a rejection with no examples → vetoed
+        // on the floor alone.
+        let close = KeywordScoringSpec(
+            keywordId: 10, textEmbeddings: [text], rejectedEmbeddings: [[1, 0]]
+        )
+        #expect(SuggestionEngine.isVetoed(photo: [0.98, 0.2], spec: close))
+        // No rejections → never vetoed.
+        let none = KeywordScoringSpec(keywordId: 10, textEmbeddings: [text], exampleEmbeddings: [[0, 1]])
+        #expect(!SuggestionEngine.isVetoed(photo: [1, 0], spec: none))
+        #expect(SuggestionEngine.rejectionVetoFloor == 0.6)
+    }
+}
+
 @Suite struct PendingReviewSidebarTests {
     @Test func encodedRoundTripAndDisplayName() {
         let item = SidebarItem.pendingReview

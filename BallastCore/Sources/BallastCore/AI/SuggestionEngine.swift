@@ -32,19 +32,34 @@ public struct KeywordScoringSpec: Sendable {
     /// scale the threshold is calibrated for. Measured 2026-09-02 (12-photo
     /// demo): unrelated photos p50 0.4 / max 0.75 raw, ≈ 0 after subtraction.
     public var prototypeBaseline: Float
+    /// The individual confirmed example embeddings (what the prototype was
+    /// averaged from) — the nearest-neighbour side of the rejection veto.
+    public var exampleEmbeddings: [[Float]]
+    /// Embeddings of photos whose suggestion of this keyword the user
+    /// REJECTED. Rejections are near-misses by construction (they scored over
+    /// threshold once), so "looks more like something rejected than like
+    /// anything accepted" is a strong signal — and burst siblings of a
+    /// rejected frame are caught exactly. Deliberately NOT a negative
+    /// prototype: rejections have mixed reasons, and if they resemble the
+    /// positives a mean vector would cancel the positive signal for everyone.
+    public var rejectedEmbeddings: [[Float]]
 
     public init(
         keywordId: Int64,
         textEmbeddings: [[Float]],
         prototypeEmbedding: [Float]? = nil,
         exampleCount: Int = 0,
-        prototypeBaseline: Float = 0
+        prototypeBaseline: Float = 0,
+        exampleEmbeddings: [[Float]] = [],
+        rejectedEmbeddings: [[Float]] = []
     ) {
         self.keywordId = keywordId
         self.textEmbeddings = textEmbeddings
         self.prototypeEmbedding = prototypeEmbedding
         self.exampleCount = exampleCount
         self.prototypeBaseline = prototypeBaseline
+        self.exampleEmbeddings = exampleEmbeddings
+        self.rejectedEmbeddings = rejectedEmbeddings
     }
 }
 
@@ -119,26 +134,69 @@ public enum SuggestionEngine {
         return alpha * textScore + (1 - alpha) * excess
     }
 
+    /// A rejected look-alike must be at least this similar before it can veto
+    /// — CLIP image-image cosines: burst siblings / same scene ≈ 0.85–0.95,
+    /// same subject elsewhere ≈ 0.6–0.75, unrelated ≈ 0.3–0.5. Below the
+    /// floor a lone rejection is simply too far away to say anything.
+    public static let rejectionVetoFloor: Float = 0.6
+
+    /// The rejection veto: the photo resembles a rejected photo MORE than it
+    /// resembles any confirmed example (nearest neighbour on each side), and
+    /// that resemblance is at least `rejectionVetoFloor`. With no examples
+    /// only the floor decides. Checked only for candidates already over the
+    /// threshold — a full pass over every photo × every example would not be.
+    public static func isVetoed(photo: [Float], spec: KeywordScoringSpec) -> Bool {
+        guard !spec.rejectedEmbeddings.isEmpty else { return false }
+        let nearestRejected = spec.rejectedEmbeddings
+            .map { EmbeddingMath.cosine(photo, $0) }.max() ?? 0
+        guard nearestRejected >= rejectionVetoFloor else { return false }
+        let nearestExample = spec.exampleEmbeddings
+            .map { EmbeddingMath.cosine(photo, $0) }.max() ?? 0
+        return nearestRejected > nearestExample
+    }
+
+    public struct Scored: Sendable {
+        /// Pairs at or above threshold that survived the veto, best first.
+        public var kept: [Suggestion]
+        /// Pairs at or above threshold held back as look-alikes of rejected photos.
+        public var vetoed: Int
+    }
+
     /// All pairs scoring at or above `threshold`, minus `skip` (already
-    /// assigned, already pending, or previously rejected). Sorted by score
-    /// descending so callers can present or batch the strongest first.
+    /// assigned, already pending, or previously rejected) and minus the
+    /// rejection veto. `kept` is sorted by score descending so callers can
+    /// present or batch the strongest first.
+    public static func scored(
+        photoEmbeddings: [Int64: [Float]],
+        specs: [KeywordScoringSpec],
+        threshold: Float,
+        skip: Set<PhotoKeywordPair> = []
+    ) -> Scored {
+        var kept: [Suggestion] = []
+        var vetoed = 0
+        for (photoId, embedding) in photoEmbeddings {
+            for spec in specs {
+                let pair = PhotoKeywordPair(photoId: photoId, keywordId: spec.keywordId)
+                guard !skip.contains(pair) else { continue }
+                let value = score(photo: embedding, spec: spec)
+                guard value >= threshold else { continue }
+                if isVetoed(photo: embedding, spec: spec) {
+                    vetoed += 1
+                } else {
+                    kept.append(Suggestion(pair: pair, score: value))
+                }
+            }
+        }
+        return Scored(kept: kept.sorted { $0.score > $1.score }, vetoed: vetoed)
+    }
+
+    /// `scored(...).kept` — the pairs to apply.
     public static func suggestions(
         photoEmbeddings: [Int64: [Float]],
         specs: [KeywordScoringSpec],
         threshold: Float,
         skip: Set<PhotoKeywordPair> = []
     ) -> [Suggestion] {
-        var result: [Suggestion] = []
-        for (photoId, embedding) in photoEmbeddings {
-            for spec in specs {
-                let pair = PhotoKeywordPair(photoId: photoId, keywordId: spec.keywordId)
-                guard !skip.contains(pair) else { continue }
-                let value = score(photo: embedding, spec: spec)
-                if value >= threshold {
-                    result.append(Suggestion(pair: pair, score: value))
-                }
-            }
-        }
-        return result.sorted { $0.score > $1.score }
+        scored(photoEmbeddings: photoEmbeddings, specs: specs, threshold: threshold, skip: skip).kept
     }
 }
