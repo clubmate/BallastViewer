@@ -124,7 +124,7 @@ import Testing
     @Test func encodedRoundTripAndDisplayName() {
         let item = SidebarItem.pendingReview
         #expect(SidebarItem(encoded: item.encoded) == item)
-        #expect(item.displayName(collections: [], keywordTree: KeywordTree(records: [])) == "REVIEW SUGGESTIONS")
+        #expect(item.displayName(collections: [], keywordTree: KeywordTree(records: [])) == "REVIEW AUTO-KEYWORDS")
     }
 
     @Test func filterMatchesOnlyPhotosWithPendings() {

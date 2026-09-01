@@ -56,7 +56,7 @@ struct SidebarView: View {
                         row(item: .pendingReview, count: sidebar.pendingReviewCount) {
                             HStack(spacing: 4) {
                                 Image(systemName: "sparkles").font(.caption2)
-                                Text("REVIEW SUGGESTIONS")
+                                Text("REVIEW AUTO-KEYWORDS")
                             }
                         }
                     }

@@ -63,7 +63,7 @@ public enum SidebarItem: Hashable, Sendable {
             let path = keywordTree.path(of: id)
             return path.isEmpty ? "?" : path
         case .pendingReview:
-            return "REVIEW SUGGESTIONS"
+            return "REVIEW AUTO-KEYWORDS"
         }
     }
 

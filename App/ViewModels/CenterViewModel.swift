@@ -315,7 +315,7 @@ final class CenterViewModel {
     }
 
     /// U48 Stage 3: the review queue's membership set, only maintained while
-    /// the REVIEW SUGGESTIONS row is active (cheap — O(photos with pendings)).
+    /// the REVIEW AUTO-KEYWORDS row is active (cheap — O(photos with pendings)).
     private func refreshPendingReviewPhotoIds() {
         guard activeItem == .pendingReview else {
             if !pendingReviewPhotoIds.isEmpty { pendingReviewPhotoIds = [] }
