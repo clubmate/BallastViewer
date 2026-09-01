@@ -67,6 +67,8 @@ struct BallastViewerApp: App {
                 .environment(appearance)
                 .environment(keywordPanel)
                 .environment(updater)
+                .environment(embeddingModels)
+                .environment(suggestionRunner)
                 .background(PhotoPickerAutoOpen())
                 .task {
                     await TestHooks.runIfRequested(

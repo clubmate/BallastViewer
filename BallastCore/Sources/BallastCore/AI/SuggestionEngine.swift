@@ -11,25 +11,27 @@ public struct PhotoKeywordPair: Hashable, Sendable {
     }
 }
 
-/// Everything the engine knows about one AI-enabled keyword (U48). The
-/// prototype fields stay dormant until Stage 4 (prototype learning): with
+/// Everything the engine knows about one AI-enabled keyword (U48). With
 /// `exampleCount == 0` scoring is exactly the text-description similarity.
 public struct KeywordScoringSpec: Sendable {
     public var keywordId: Int64
-    /// Embedding of the user's description ("a photo of …"), L2-normalized.
-    public var textEmbedding: [Float]
+    /// One embedding per prompt variant ("a photo of …", L2-normalized). A
+    /// keyword covering unrelated looks ("phone user OR red car") describes
+    /// each as its own variant — the text score is the BEST variant, because
+    /// one embedding of an "or" sentence is a washed-out average of both.
+    public var textEmbeddings: [[Float]]
     /// Mean embedding of confirmed example photos, L2-normalized (Stage 4).
     public var prototypeEmbedding: [Float]?
     public var exampleCount: Int
 
     public init(
         keywordId: Int64,
-        textEmbedding: [Float],
+        textEmbeddings: [[Float]],
         prototypeEmbedding: [Float]? = nil,
         exampleCount: Int = 0
     ) {
         self.keywordId = keywordId
-        self.textEmbedding = textEmbedding
+        self.textEmbeddings = textEmbeddings
         self.prototypeEmbedding = prototypeEmbedding
         self.exampleCount = exampleCount
     }
@@ -64,9 +66,20 @@ public enum SuggestionEngine {
         return normalized
     }
 
-    /// Score of one photo against one keyword spec.
+    /// Splits a stored description into its prompt variants — "|" separates
+    /// independent looks of the same keyword. Blank variants are dropped.
+    public static func promptVariants(_ description: String) -> [String] {
+        description.split(separator: "|")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Score of one photo against one keyword spec: best prompt variant,
+    /// blended with the example prototype when one exists.
     public static func score(photo: [Float], spec: KeywordScoringSpec) -> Float {
-        let textScore = EmbeddingMath.cosine(photo, spec.textEmbedding)
+        let textScore = spec.textEmbeddings
+            .map { EmbeddingMath.cosine(photo, $0) }
+            .max() ?? 0
         guard let prototype = spec.prototypeEmbedding, spec.exampleCount > 0 else {
             return textScore
         }

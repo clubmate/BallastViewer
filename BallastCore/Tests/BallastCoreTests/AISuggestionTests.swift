@@ -70,7 +70,7 @@ import Testing
 
 @Suite struct SuggestionEngineTests {
     private func specs(_ pairs: [(Int64, [Float])]) -> [KeywordScoringSpec] {
-        pairs.map { KeywordScoringSpec(keywordId: $0.0, textEmbedding: $0.1) }
+        pairs.map { KeywordScoringSpec(keywordId: $0.0, textEmbeddings: [$0.1]) }
     }
 
     @Test func thresholdCutsAndSortsDescending() {
@@ -102,6 +102,23 @@ import Testing
             ).isEmpty)
     }
 
+    @Test func multiPromptScoresTheBestVariant() {
+        // "phone user OR red car": two variants, the photo matches variant 2.
+        let spec = KeywordScoringSpec(keywordId: 10, textEmbeddings: [[1, 0], [0, 1]])
+        #expect(abs(SuggestionEngine.score(photo: [0, 1], spec: spec) - 1) < 1e-6)
+        #expect(abs(SuggestionEngine.score(photo: [1, 0], spec: spec) - 1) < 1e-6)
+        // No variants at all → score 0, never a crash.
+        let empty = KeywordScoringSpec(keywordId: 10, textEmbeddings: [])
+        #expect(SuggestionEngine.score(photo: [1, 0], spec: empty) == 0)
+    }
+
+    @Test func promptVariantsSplitOnPipe() {
+        #expect(SuggestionEngine.promptVariants("a person using a phone | a red car")
+            == ["a person using a phone", "a red car"])
+        #expect(SuggestionEngine.promptVariants("a toilet") == ["a toilet"])
+        #expect(SuggestionEngine.promptVariants(" | | ").isEmpty)
+    }
+
     @Test func prototypeIsTheNormalizedMean() {
         // Stage 4: mean of [1,0] and [0,1] → normalized [0.707, 0.707].
         let prototype = SuggestionEngine.prototype(of: [[1, 0], [0, 1]])
@@ -119,7 +136,7 @@ import Testing
         // → 50/50 blend of description and prototype similarity.
         let spec = KeywordScoringSpec(
             keywordId: 10,
-            textEmbedding: [1, 0],
+            textEmbeddings: [[1, 0]],
             prototypeEmbedding: [0, 1],
             exampleCount: 8
         )

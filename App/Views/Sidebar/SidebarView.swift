@@ -7,6 +7,9 @@ import UniformTypeIdentifiers
 /// footer. Selection = accent background; counts as pill badges.
 struct SidebarView: View {
     @Environment(LibraryController.self) private var controller
+    @Environment(EmbeddingModelStore.self) private var models
+    @Environment(SuggestionRunner.self) private var runner
+    @AppStorage("aiSuggestionThreshold") private var aiThreshold = AISettingsView.defaultThreshold
     let sidebar: SidebarViewModel
     let center: CenterViewModel
 
@@ -31,6 +34,12 @@ struct SidebarView: View {
 
                     row(item: .allPhotos, count: sidebar.counts.allPhotos) {
                         Text("ALL PHOTOS")
+                    }
+                    .contextMenu {
+                        Button("Auto-Tag Photos") {
+                            autoTagPhotos(matching: .allPhotos, scopeName: "ALL PHOTOS")
+                        }
+                        .disabled(runner.isRunning)
                     }
                     row(item: .lastImport, count: sidebar.counts.lastImport) {
                         Text("LAST IMPORT")
@@ -77,6 +86,7 @@ struct SidebarView: View {
                 )
             }
 
+            AutoTagStatusSection()
             FileWriteStatusSection()
             Divider()
             HStack {
@@ -261,8 +271,43 @@ struct SidebarView: View {
                 Button("Delete", role: .destructive) {
                     sidebar.pendingCollectionDeletion = collection
                 }
+                Divider()
+                // U48: auto-tagging is scoped — right-click decides WHAT gets
+                // scanned; prompts and threshold live in Settings ▸ AI.
+                Button("Auto-Tag Photos") {
+                    autoTagPhotos(matching: .collection(collectionId), scopeName: collection.name)
+                }
+                .disabled(runner.isRunning)
             }
         }
+    }
+
+    // MARK: Auto-tagging (U48)
+
+    /// Collects the photos the sidebar item matches and hands them to the
+    /// app-wide runner; progress surfaces in `AutoTagStatusSection`.
+    private func autoTagPhotos(matching item: SidebarItem, scopeName: String) {
+        guard let snapshot = controller.snapshot else { return }
+        let compiled = CompiledRuleChain.chains(
+            collections: snapshot.collections,
+            rulesByCollection: snapshot.makeRulesByCollection()
+        )
+        let photos = snapshot.photos.filter { photo in
+            SidebarFilter.matches(
+                photo,
+                facts: controller.queryFacts(for: photo),
+                item: item,
+                compiledCollections: compiled,
+                lastImportBatchId: snapshot.meta.lastImportBatchId
+            )
+        }
+        runner.run(
+            controller: controller,
+            models: models,
+            threshold: Float(aiThreshold),
+            photos: photos,
+            scopeName: scopeName
+        )
     }
 }
 

@@ -1,70 +1,29 @@
 import BallastCore
 import SwiftUI
 
-/// Settings ▸ AI (U48): teach keywords ("what does HANDY mean?"), manage the
-/// local MobileCLIP model, calibrate the match threshold, and preview scores
-/// for the current grid selection. Descriptions are opt-in — a keyword
-/// without one never takes part in AI suggestions. Everything runs on-device;
-/// nothing leaves the machine except the one-time model download.
+/// Settings ▸ AI (U48): the model download, the match threshold, and the
+/// keyword prompts ("what does HANDY look like?"). Prompts are opt-in — a
+/// keyword without one never takes part in auto-tagging. The runs themselves
+/// start from the sidebar (right-click a smart collection or ALL PHOTOS ▸
+/// Auto-Tag Photos); progress shows in the sidebar's AUTO-TAGGING section.
+/// Everything runs on-device; nothing leaves the machine except the one-time
+/// model download.
 struct AISettingsView: View {
+    static let defaultThreshold = 0.25
+
     @Environment(LibraryController.self) private var controller
-    @Environment(CenterViewModel.self) private var center
     @Environment(EmbeddingModelStore.self) private var models
-    @Environment(SuggestionRunner.self) private var runner
-    @AppStorage("aiSuggestionThreshold") private var threshold = 0.25
-    @State private var filter = ""
-    @State private var preview = PreviewState.idle
+    @AppStorage("aiSuggestionThreshold") private var threshold = AISettingsView.defaultThreshold
+    @State private var newKeywordId: Int64?
+    @State private var newPrompt = ""
 
     var body: some View {
         Form {
             modelSection
             thresholdSection
-            descriptionsSection
-            previewSection
-            runSection
+            promptsSection
         }
         .formStyle(.grouped)
-    }
-
-    // MARK: Suggestion run (Stage 2)
-
-    private var runSection: some View {
-        Section("Suggestions") {
-            HStack {
-                Button("Suggest Keywords for All Photos") {
-                    runner.run(controller: controller, models: models, threshold: Float(threshold))
-                }
-                .disabled(models.state != .ready || runner.isRunning)
-                if runner.isRunning {
-                    Button("Cancel") { runner.cancel() }
-                }
-            }
-            switch runner.phase {
-            case .idle:
-                if let summary = runner.summary {
-                    Text(summary).font(.caption)
-                } else {
-                    Text("Scores every photo against every described keyword. Matches attach as PENDING chips in the inspector — accept ✓ or reject ✗ each one; nothing is written to files until you accept.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            case .preparing(let done, let total):
-                if total > 0 {
-                    ProgressView(value: Double(done), total: Double(max(1, total))) {
-                        Text("Learning from confirmed examples (\(done) of \(total))…")
-                    }
-                } else {
-                    ProgressView { Text("Embedding keyword descriptions…") }
-                }
-            case .scanning(let done, let total, let found):
-                ProgressView(value: Double(done), total: Double(max(1, total))) {
-                    Text("Scanning photo \(done + 1) of \(total) — \(found) suggestions so far")
-                }
-            case .failed(let message):
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-            }
-        }
     }
 
     // MARK: Model
@@ -107,233 +66,142 @@ struct AISettingsView: View {
 
     private var thresholdSection: some View {
         Section("Sensitivity") {
-            Slider(value: $threshold, in: 0.15 ... 0.40) {
-                Text("Match Threshold: \(threshold, format: .number.precision(.fractionLength(2)))")
+            HStack(spacing: 12) {
+                Slider(value: $threshold, in: 0.15 ... 0.40) {
+                    Text("Match Threshold: \(threshold, format: .number.precision(.fractionLength(2)))")
+                }
+                Button("Reset") { threshold = Self.defaultThreshold }
+                    .disabled(abs(threshold - Self.defaultThreshold) < 0.001)
+                    .help("Back to the default (\(Self.defaultThreshold, format: .number.precision(.fractionLength(2))))")
             }
-            Text("Lower finds more photos (more mistakes), higher finds fewer (more precise). Use the preview below to calibrate.")
+            Text("Lower finds more photos (more mistakes), higher finds fewer (more precise).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: Descriptions
+    // MARK: Prompts
 
-    private var describedCount: Int {
-        controller.snapshot?.keywordTree.allRecords.filter { $0.aiDescription != nil }.count ?? 0
-    }
-
-    private var keywordRows: [(id: Int64, path: String, description: String)] {
+    private var describedRows: [(id: Int64, path: String, prompt: String)] {
         guard let tree = controller.snapshot?.keywordTree else { return [] }
-        let folded = filter.lowercased()
         return tree.allIdsDepthFirst().compactMap { id in
-            guard let node = tree.node(id) else { return nil }
-            let path = tree.path(of: id)
-            if !folded.isEmpty, !path.lowercased().contains(folded),
-               !(node.aiDescription?.lowercased().contains(folded) ?? false) {
-                return nil
-            }
-            return (id: id, path: path, description: node.aiDescription ?? "")
+            guard let prompt = tree.node(id)?.aiDescription else { return nil }
+            return (id: id, path: tree.path(of: id), prompt: prompt)
         }
     }
 
-    private var descriptionsSection: some View {
+    /// Every keyword not yet described, in tree order with full paths.
+    private var selectableKeywords: [(id: Int64, path: String)] {
+        guard let tree = controller.snapshot?.keywordTree else { return [] }
+        return tree.allIdsDepthFirst().compactMap { id in
+            guard tree.node(id)?.aiDescription == nil else { return nil }
+            return (id: id, path: tree.path(of: id))
+        }
+    }
+
+    private var promptsSection: some View {
         Section {
-            TextField("Filter keywords", text: $filter)
-                .textFieldStyle(.roundedBorder)
-            if keywordRows.isEmpty {
-                Text(controller.snapshot == nil ? "Open a library first." : "No keywords match.")
+            if describedRows.isEmpty {
+                Text(controller.snapshot == nil
+                    ? "Open a library first."
+                    : "No keywords set up for auto-tagging yet — add one below.")
                     .foregroundStyle(.secondary)
             }
-            ForEach(keywordRows, id: \.id) { row in
-                KeywordDescriptionField(id: row.id, path: row.path, initialText: row.description)
+            ForEach(describedRows, id: \.id) { row in
+                DescribedKeywordRow(id: row.id, path: row.path, initialPrompt: row.prompt)
             }
+            addRow
         } header: {
-            Text("Keyword Descriptions (\(describedCount) described)")
+            Text("Auto-Tagging Keywords (\(describedRows.count))")
         } footer: {
-            Text("Describe in ENGLISH what a matching photo shows, e.g. “someone talking on a phone”. Keywords without a description are never suggested.")
+            Text("Describe in ENGLISH what a matching photo shows, caption-style: “a person using a phone”. Separate independent looks of the SAME keyword with | — “a person using a phone | a red car” matches either. Then right-click a smart collection (or ALL PHOTOS) in the sidebar and choose Auto-Tag Photos.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: Preview
-
-    private enum PreviewState: Equatable {
-        case idle
-        case running(Int, Int)
-        case done([PreviewRow])
-        case failed(String)
-    }
-
-    private struct PreviewRow: Equatable, Identifiable {
-        var id: Int64
-        var filename: String
-        var scores: [PreviewScore]
-    }
-
-    private struct PreviewScore: Equatable, Identifiable {
-        var id: Int64
-        var path: String
-        var score: Float
-    }
-
-    private var previewSection: some View {
-        Section("Preview") {
-            HStack {
-                Button("Preview Matches for Selection") { runPreview() }
-                    .disabled(models.state != .ready || isPreviewRunning)
-                Spacer()
-                Text("\(center.selection.selectedIds.count) selected")
-                    .foregroundStyle(.secondary)
-            }
-            switch preview {
-            case .idle:
-                Text("Select photos in the grid, then preview their scores per described keyword. Scores at or above the threshold would become suggestions.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            case .running(let done, let total):
-                ProgressView(value: Double(done), total: Double(max(1, total))) {
-                    Text("Scoring photo \(done + 1) of \(total)…")
-                }
-            case .failed(let message):
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-            case .done(let rows):
-                if rows.isEmpty {
-                    Text("Nothing to score.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(rows) { row in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(row.filename).fontWeight(.medium)
-                        ForEach(row.scores) { entry in
-                            HStack(spacing: 6) {
-                                Image(
-                                    systemName: entry.score >= Float(threshold)
-                                        ? "checkmark.circle.fill" : "circle"
-                                )
-                                .foregroundStyle(
-                                    entry.score >= Float(threshold) ? .green : .secondary
-                                )
-                                Text(entry.path)
-                                Spacer()
-                                Text("\(entry.score, format: .number.precision(.fractionLength(3)))")
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary)
-                            }
-                            .font(.caption)
-                        }
-                    }
-                    .padding(.vertical, 2)
+    private var addRow: some View {
+        HStack(spacing: 8) {
+            Picker("", selection: $newKeywordId) {
+                Text("Choose Keyword…").tag(Int64?.none)
+                ForEach(selectableKeywords, id: \.id) { keyword in
+                    Text(keyword.path).tag(Int64?.some(keyword.id))
                 }
             }
-        }
-    }
-
-    private var isPreviewRunning: Bool {
-        if case .running = preview { return true }
-        return false
-    }
-
-    /// The CLIP prompt for one description. CLIP was trained on caption-style
-    /// text, so bare fragments score better wrapped in "a photo of …".
-    static func promptText(for description: String) -> String {
-        let lowered = description.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return lowered.hasPrefix("a photo") ? lowered : "a photo of \(lowered)"
-    }
-
-    private func runPreview() {
-        guard let snapshot = controller.snapshot, let thumbnails = controller.thumbnails else {
-            preview = .failed("Open a library first.")
-            return
-        }
-        guard let service = models.service() else {
-            preview = .failed("The model is not ready.")
-            return
-        }
-        let described = snapshot.keywordTree.allRecords
-            .filter { $0.aiDescription != nil && $0.id != nil }
-        guard !described.isEmpty else {
-            preview = .failed("No keyword has a description yet.")
-            return
-        }
-        let selectedIds = center.selection.selectedIds
-        // The preview is a calibration tool, not the bulk run — cap it so the
-        // settings window stays responsive.
-        let photos = Array(
-            snapshot.photos.filter { $0.id.map(selectedIds.contains) ?? false }.prefix(24)
-        )
-        guard !photos.isEmpty else {
-            preview = .failed("Select photos in the grid first.")
-            return
-        }
-        let libraryUUID = snapshot.meta.libraryUUID
-        preview = .running(0, photos.count)
-        Task {
-            do {
-                let store = try EmbeddingStore(libraryUUID: libraryUUID)
-                // The exact specs a run would use — prototypes included
-                // (Stage 4), so calibration shows the real blended scores.
-                let specs = try await SuggestionRunner.buildSpecs(
-                    snapshot: snapshot, service: service, store: store, thumbnails: thumbnails
-                )
-                var rows: [PreviewRow] = []
-                for (index, photo) in photos.enumerated() {
-                    preview = .running(index, photos.count)
-                    guard let vector = try await SuggestionRunner.embedding(
-                        for: photo, service: service, store: store, thumbnails: thumbnails
-                    ) else { continue }
-                    let scores = specs.enumerated()
-                        .map { offset, built in
-                            PreviewScore(
-                                id: Int64(offset), path: built.path,
-                                score: SuggestionEngine.score(photo: vector, spec: built.spec)
-                            )
-                        }
-                        .sorted { $0.score > $1.score }
-                    rows.append(PreviewRow(id: photo.id ?? 0, filename: photo.filename, scores: scores))
-                }
-                preview = .done(rows)
-            } catch {
-                preview = .failed(error.localizedDescription)
+            .labelsHidden()
+            .frame(maxWidth: 220)
+            TextField("Prompt, e.g. “a person using a phone”", text: $newPrompt)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(addPrompt)
+            Button {
+                addPrompt()
+            } label: {
+                Image(systemName: "plus.circle.fill")
             }
+            .buttonStyle(.plain)
+            .disabled(newKeywordId == nil
+                || newPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .help("Add keyword to auto-tagging")
         }
     }
 
+    private func addPrompt() {
+        let prompt = newPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let id = newKeywordId, !prompt.isEmpty else { return }
+        controller.setKeywordAIDescription(id, description: prompt)
+        newKeywordId = nil
+        newPrompt = ""
+    }
 }
 
-/// One keyword row: derived path label + description field. Commits on
-/// submit and on focus loss — not per keystroke (each commit is a
-/// synchronous DB write).
-private struct KeywordDescriptionField: View {
+/// One configured keyword: path label, editable prompt (committed on submit /
+/// focus loss — not per keystroke, each commit is a synchronous DB write),
+/// and a remove button that takes the keyword out of auto-tagging.
+private struct DescribedKeywordRow: View {
     @Environment(LibraryController.self) private var controller
     let id: Int64
     let path: String
-    let initialText: String
-    @State private var text = ""
+    let initialPrompt: String
+    @State private var prompt = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        LabeledContent(path) {
-            TextField("No description — not suggested", text: $text)
+        HStack(spacing: 8) {
+            Text(path)
+                .fontWeight(.medium)
+                .lineLimit(1)
+                .frame(maxWidth: 220, alignment: .leading)
+            TextField("", text: $prompt)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 280)
-                .multilineTextAlignment(.leading)
                 .focused($focused)
                 .onSubmit(commit)
                 .onChange(of: focused) { _, isFocused in
                     if !isFocused { commit() }
                 }
+            Button {
+                controller.setKeywordAIDescription(id, description: nil)
+            } label: {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Remove from auto-tagging (the keyword itself stays)")
         }
-        .onAppear { text = initialText }
-        .onChange(of: initialText) { _, fresh in
-            if !focused { text = fresh }
+        .onAppear { prompt = initialPrompt }
+        .onChange(of: initialPrompt) { _, fresh in
+            if !focused { prompt = fresh }
         }
     }
 
     private func commit() {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed != initialText else { return }
-        controller.setKeywordAIDescription(id, description: trimmed.isEmpty ? nil : trimmed)
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != initialPrompt else { return }
+        // A blanked field would silently drop the keyword — keep the last
+        // prompt instead; removal is the explicit minus button.
+        guard !trimmed.isEmpty else {
+            prompt = initialPrompt
+            return
+        }
+        controller.setKeywordAIDescription(id, description: trimmed)
     }
 }
