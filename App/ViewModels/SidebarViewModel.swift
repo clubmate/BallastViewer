@@ -10,7 +10,7 @@ final class SidebarViewModel {
     @ObservationIgnored private unowned let controller: LibraryController
 
     private(set) var counts = SidebarCounts()
-    /// U48: photos with ≥1 pending AI suggestion. The REVIEW AUTO-KEYWORDS row
+    /// U48: photos with ≥1 pending AI suggestion. The REVIEW KEYWORDS row
     /// shows only while this is non-zero. Recomputed whole on every event —
     /// O(photos with pendings), not O(catalog).
     private(set) var pendingReviewCount = 0

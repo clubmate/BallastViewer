@@ -101,16 +101,23 @@ struct AISettingsView: View {
 
     private var promptsSection: some View {
         Section {
-            if describedRows.isEmpty {
-                Text(controller.snapshot == nil
-                    ? "Open a library first."
-                    : "No keywords set up for auto-tagging yet — add one below.")
-                    .foregroundStyle(.secondary)
+            // One Form row for the whole table: the grouped form lays out
+            // direct section children with its own label/control heuristic,
+            // which fights the fixed keyword column + full-width prompt field.
+            VStack(spacing: 10) {
+                if describedRows.isEmpty {
+                    Text(controller.snapshot == nil
+                        ? "Open a library first."
+                        : "No keywords set up for auto-tagging yet — add one below.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ForEach(describedRows, id: \.id) { row in
+                    DescribedKeywordRow(id: row.id, path: row.path, initialPrompt: row.prompt)
+                }
+                Divider()
+                addRow
             }
-            ForEach(describedRows, id: \.id) { row in
-                DescribedKeywordRow(id: row.id, path: row.path, initialPrompt: row.prompt)
-            }
-            addRow
         } header: {
             Text("Auto-Tagging Keywords (\(describedRows.count))")
         } footer: {
@@ -119,6 +126,10 @@ struct AISettingsView: View {
                 .foregroundStyle(.secondary)
         }
     }
+
+    /// Shared first-column width so the configured rows and the add row line
+    /// up as a proper table.
+    static let keywordColumnWidth: CGFloat = 180
 
     private var addRow: some View {
         HStack(spacing: 8) {
@@ -129,9 +140,11 @@ struct AISettingsView: View {
                 }
             }
             .labelsHidden()
-            .frame(maxWidth: 220)
-            TextField("Prompt, e.g. “a person using a phone”", text: $newPrompt)
+            .frame(width: Self.keywordColumnWidth, alignment: .leading)
+            TextField("Prompt", text: $newPrompt)
+                .labelsHidden()
                 .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: .infinity)
                 .onSubmit(addPrompt)
             Button {
                 addPrompt()
@@ -167,12 +180,18 @@ private struct DescribedKeywordRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // Head-truncated: deep paths ("PEOPLE > … > ANNA") keep their
+            // meaningful tail visible; the full path shows on mouseover.
             Text(path)
                 .fontWeight(.medium)
                 .lineLimit(1)
-                .frame(maxWidth: 220, alignment: .leading)
+                .truncationMode(.head)
+                .frame(width: AISettingsView.keywordColumnWidth, alignment: .leading)
+                .help(path)
             TextField("", text: $prompt)
+                .labelsHidden()
                 .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: .infinity)
                 .focused($focused)
                 .onSubmit(commit)
                 .onChange(of: focused) { _, isFocused in
