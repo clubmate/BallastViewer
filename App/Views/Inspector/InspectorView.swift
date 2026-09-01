@@ -256,12 +256,16 @@ struct InspectorView: View {
             if chip.isPending {
                 // U48: an AI suggestion under review — accept promotes it to a
                 // normal keyword (and into the file), reject removes it and
-                // is remembered across runs.
+                // is remembered across runs. Generous hit areas: these two are
+                // clicked hundreds of times per review pass (user request
+                // 2026-09-02: the caption-sized glyphs were hard to hit).
                 Button {
                     controller.acceptPendingKeyword(id: chip.id, forPhotoIds: selectedIds)
                 } label: {
                     Image(systemName: "checkmark")
-                        .font(.caption.bold())
+                        .font(.body.bold())
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.green)
@@ -270,7 +274,9 @@ struct InspectorView: View {
                     controller.rejectPendingKeyword(id: chip.id, forPhotoIds: selectedIds)
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.caption.bold())
+                        .font(.body.bold())
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.red)

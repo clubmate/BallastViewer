@@ -336,6 +336,23 @@ import Testing
         }
     }
 
+    @Test func mergeKeepsTheSurvivorsPromptOrInheritsTheSources() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            // Target has no prompt → inherits the source's.
+            let a = try KeywordDAO.ensurePath(["ALT"], groupId: nil, in: db)
+            let b = try KeywordDAO.ensurePath(["NEU"], groupId: nil, in: db)
+            try KeywordDAO.setAIDescription("a toilet", forKeywordId: a, in: db)
+            try KeywordDAO.merge(a, into: b, in: db)
+            #expect(try KeywordRecord.fetchOne(db, key: b)?.aiDescription == "a toilet")
+            // Target has its own prompt → keeps it.
+            let c = try KeywordDAO.ensurePath(["DRITTES"], groupId: nil, in: db)
+            try KeywordDAO.setAIDescription("a red car", forKeywordId: c, in: db)
+            try KeywordDAO.merge(b, into: c, in: db)
+            #expect(try KeywordRecord.fetchOne(db, key: c)?.aiDescription == "a red car")
+        }
+    }
+
     @Test func aiDescriptionRoundTripsAndBlankClears() throws {
         let dbQueue = try makeTestDatabase()
         try dbQueue.write { db in

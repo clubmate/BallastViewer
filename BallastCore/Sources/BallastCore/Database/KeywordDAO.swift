@@ -174,6 +174,15 @@ public enum KeywordDAO {
                 """,
             arguments: [targetId, sourceId]
         )
+        // U48: the survivor inherits the source's AI prompt when it has none
+        // of its own — a merge must not silently drop auto-tagging setup.
+        try db.execute(
+            sql: """
+                UPDATE keyword SET aiDescription = (SELECT aiDescription FROM keyword WHERE id = ?)
+                WHERE id = ? AND aiDescription IS NULL
+                """,
+            arguments: [sourceId, targetId]
+        )
         let children = try KeywordRecord.filter(Column("parentId") == sourceId).fetchAll(db)
         for child in children {
             guard let childId = child.id else { continue }
