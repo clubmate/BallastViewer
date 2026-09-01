@@ -134,11 +134,30 @@ final class SuggestionRunner {
         service: EmbeddingService,
         store: EmbeddingStore,
         thumbnails: ThumbnailPipeline,
+        learning: Bool = true,
         progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
     ) async throws -> [(path: String, spec: KeywordScoringSpec)] {
         let described = snapshot.keywordTree.allRecords
             .filter { $0.aiDescription != nil && $0.id != nil }
         guard !described.isEmpty else { return [] }
+        // Learning off (Settings ▸ AI, the default): pure text scoring — no
+        // carriers, no prototypes, no library sample. Scores then depend on
+        // the prompt alone and stay identical from run to run.
+        guard learning else {
+            var specs: [(path: String, spec: KeywordScoringSpec)] = []
+            for record in described {
+                try Task.checkCancellation()
+                var textEmbeddings: [[Float]] = []
+                for variant in SuggestionEngine.promptVariants(record.aiDescription ?? "") {
+                    textEmbeddings.append(try await service.textEmbedding(promptText(for: variant)))
+                }
+                specs.append((
+                    path: snapshot.keywordTree.path(of: record.id!),
+                    spec: KeywordScoringSpec(keywordId: record.id!, textEmbeddings: textEmbeddings)
+                ))
+            }
+            return specs
+        }
         var photosById: [Int64: PhotoRecord] = [:]
         for photo in snapshot.photos {
             if let id = photo.id { photosById[id] = photo }
@@ -225,6 +244,7 @@ final class SuggestionRunner {
         controller: LibraryController,
         models: EmbeddingModelStore,
         threshold: Float,
+        learning: Bool,
         photos: [PhotoRecord],
         scopeName: String
     ) {
@@ -268,6 +288,7 @@ final class SuggestionRunner {
                     service: service,
                     store: store,
                     thumbnails: thumbnails,
+                    learning: learning,
                     progress: { [weak self] done, total in
                         self?.phase = .preparing(done: done, total: total)
                     }

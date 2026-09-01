@@ -13,10 +13,16 @@ struct AISettingsView: View {
     /// UserDefaults key of the match threshold — shared with the sidebar
     /// (run start) and the score diagnostic hook.
     static let thresholdKey = "aiSuggestionThreshold"
+    /// UserDefaults key of the prototype-learning switch. OFF by default
+    /// (user decision 2026-09-02): text-only scoring is predictable — the
+    /// same prompt scores the same today and in a month, and a bad match is
+    /// always the prompt's fault. Learning is an amplifier for later.
+    static let learningKey = "aiPrototypeLearning"
 
     @Environment(LibraryController.self) private var controller
     @Environment(EmbeddingModelStore.self) private var models
     @AppStorage(AISettingsView.thresholdKey) private var threshold = AISettingsView.defaultThreshold
+    @AppStorage(AISettingsView.learningKey) private var learning = false
     @State private var newKeywordId: Int64?
     @State private var newPrompt = ""
 
@@ -24,6 +30,7 @@ struct AISettingsView: View {
         Form {
             modelSection
             thresholdSection
+            learningSection
             promptsSection
         }
         .formStyle(.grouped)
@@ -78,6 +85,19 @@ struct AISettingsView: View {
                     .help("Back to the default (\(Self.defaultThreshold, format: .number.precision(.fractionLength(2))))")
             }
             Text("Lower finds more photos (more mistakes), higher finds fewer (more precise).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: Learning
+
+    private var learningSection: some View {
+        Section("Learning") {
+            Toggle("Learn from confirmed photos", isOn: $learning)
+            Text(learning
+                ? "Each run also looks at the photos that already carry a keyword and prefers photos that resemble them — the more confirmed photos, the more they count over the prompt. Scores change as your library grows; each run starts by embedding a 256-photo sample of the library."
+                : "Off: photos are scored by the prompt alone. Predictable — the same prompt gives the same scores every run; a wrong match is always the prompt.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

@@ -595,7 +595,10 @@ enum TestHooks {
             print("BVAISCORES error=no-library (nothing reopened within 30 s; pass BV_TEST_OPEN=<name>)")
             return
         }
-        print("BVAISCORES library=\(controller.libraryURL?.lastPathComponent ?? "?") photos=\(snapshot.photos.count)")
+        // Always measured WITH learning — this is the tool for deciding
+        // whether to switch it on; the setting itself is reported.
+        let learningOn = UserDefaults.standard.bool(forKey: AISettingsView.learningKey)
+        print("BVAISCORES library=\(controller.libraryURL?.lastPathComponent ?? "?") photos=\(snapshot.photos.count) learningSetting=\(learningOn ? "on" : "off") (measured with learning)")
         guard let service = models.service() else {
             print("BVAISCORES error=model-not-ready state=\(models.state)")
             return

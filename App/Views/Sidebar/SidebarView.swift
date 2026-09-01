@@ -10,6 +10,7 @@ struct SidebarView: View {
     @Environment(EmbeddingModelStore.self) private var models
     @Environment(SuggestionRunner.self) private var runner
     @AppStorage(AISettingsView.thresholdKey) private var aiThreshold = AISettingsView.defaultThreshold
+    @AppStorage(AISettingsView.learningKey) private var aiLearning = false
     let sidebar: SidebarViewModel
     let center: CenterViewModel
 
@@ -305,6 +306,7 @@ struct SidebarView: View {
             controller: controller,
             models: models,
             threshold: Float(aiThreshold),
+            learning: aiLearning,
             photos: photos,
             scopeName: scopeName
         )
