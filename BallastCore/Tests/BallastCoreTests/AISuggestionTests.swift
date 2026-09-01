@@ -102,6 +102,18 @@ import Testing
             ).isEmpty)
     }
 
+    @Test func prototypeIsTheNormalizedMean() {
+        // Stage 4: mean of [1,0] and [0,1] → normalized [0.707, 0.707].
+        let prototype = SuggestionEngine.prototype(of: [[1, 0], [0, 1]])
+        #expect(prototype != nil)
+        #expect(abs(prototype![0] - 0.7071) < 1e-3)
+        #expect(abs(prototype![1] - 0.7071) < 1e-3)
+        // No examples → no prototype; opposing examples cancel to zero → nil,
+        // never NaN.
+        #expect(SuggestionEngine.prototype(of: []) == nil)
+        #expect(SuggestionEngine.prototype(of: [[1, 0], [-1, 0]]) == nil)
+    }
+
     @Test func prototypeBlendsInWithExampleCount() {
         // Stage 4 contract, pinned now: α = k/(k+n) with k = 8. Eight examples
         // → 50/50 blend of description and prototype similarity.

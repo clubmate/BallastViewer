@@ -50,8 +50,22 @@ public enum SuggestionEngine {
         k / (k + Float(max(0, exampleCount)))
     }
 
+    /// Stage 4: the L2-normalized mean of the example embeddings — "what this
+    /// keyword's confirmed photos look like". Nil when there are no examples
+    /// (or they cancel out to a zero vector, which must not produce NaNs).
+    public static func prototype(of embeddings: [[Float]]) -> [Float]? {
+        guard let first = embeddings.first else { return nil }
+        var mean = [Float](repeating: 0, count: first.count)
+        for embedding in embeddings where embedding.count == mean.count {
+            for i in mean.indices { mean[i] += embedding[i] }
+        }
+        let normalized = EmbeddingMath.l2Normalized(mean)
+        guard normalized.contains(where: { $0 != 0 }) else { return nil }
+        return normalized
+    }
+
     /// Score of one photo against one keyword spec.
-    static func score(photo: [Float], spec: KeywordScoringSpec) -> Float {
+    public static func score(photo: [Float], spec: KeywordScoringSpec) -> Float {
         let textScore = EmbeddingMath.cosine(photo, spec.textEmbedding)
         guard let prototype = spec.prototypeEmbedding, spec.exampleCount > 0 else {
             return textScore

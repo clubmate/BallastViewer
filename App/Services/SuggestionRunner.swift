@@ -11,7 +11,9 @@ import Observation
 final class SuggestionRunner {
     enum Phase: Equatable {
         case idle
-        case preparing
+        /// Embedding descriptions and example photos (Stage 4 prototypes);
+        /// (done, total) counts the example embeddings.
+        case preparing(done: Int, total: Int)
         case scanning(done: Int, total: Int, found: Int)
         case failed(String)
     }
@@ -34,6 +36,97 @@ final class SuggestionRunner {
         task?.cancel()
     }
 
+    /// One photo's embedding, cache-first — shared by the run, the example
+    /// (prototype) pass, and the settings preview.
+    nonisolated static func embedding(
+        for photo: PhotoRecord,
+        service: EmbeddingService,
+        store: EmbeddingStore,
+        thumbnails: ThumbnailPipeline
+    ) async throws -> [Float]? {
+        let mtime = EmbeddingStore.mtime(of: photo.path)
+        if let cached = try await store.embedding(
+            forPath: photo.path, mtime: mtime, modelVersion: EmbeddingModelStore.modelVersion
+        ) {
+            return cached
+        }
+        guard let box = await thumbnails.thumbnail(forPath: photo.path, longEdge: 256) else {
+            return nil
+        }
+        let fresh = try await service.imageEmbedding(box, orientation: photo.orientation)
+        try await store.store(
+            fresh, forPath: photo.path, mtime: mtime,
+            modelVersion: EmbeddingModelStore.modelVersion
+        )
+        return fresh
+    }
+
+    /// Stage 4: one scoring spec per described keyword — text embedding PLUS
+    /// the prototype learned from the keyword's CONFIRMED carriers (manual
+    /// and accepted alike; no provenance needed). The blend weight moves from
+    /// description to examples as `exampleCount` grows (α = 8/(8+n), pinned
+    /// by SuggestionEngineTests). Used identically by the run and the
+    /// preview, so calibration always shows the scores a run would use.
+    nonisolated static func buildSpecs(
+        snapshot: LibrarySnapshot,
+        service: EmbeddingService,
+        store: EmbeddingStore,
+        thumbnails: ThumbnailPipeline,
+        progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> [(path: String, spec: KeywordScoringSpec)] {
+        let described = snapshot.keywordTree.allRecords
+            .filter { $0.aiDescription != nil && $0.id != nil }
+        guard !described.isEmpty else { return [] }
+        var photosById: [Int64: PhotoRecord] = [:]
+        for photo in snapshot.photos {
+            if let id = photo.id { photosById[id] = photo }
+        }
+        // Invert the confirmed map once for the described ids only.
+        let describedIds = Set(described.compactMap(\.id))
+        var carriersByKeyword: [Int64: [Int64]] = [:]
+        for (photoId, keywordIds) in snapshot.keywordIdsByPhoto {
+            for keywordId in keywordIds where describedIds.contains(keywordId) {
+                carriersByKeyword[keywordId, default: []].append(photoId)
+            }
+        }
+        let exampleTotal = carriersByKeyword.values.reduce(0) { $0 + $1.count }
+        var examplesDone = 0
+
+        var specs: [(path: String, spec: KeywordScoringSpec)] = []
+        for record in described {
+            try Task.checkCancellation()
+            let keywordId = record.id!
+            let textEmbedding = try await service.textEmbedding(
+                AISettingsView.promptText(for: record.aiDescription ?? "")
+            )
+            var exampleEmbeddings: [[Float]] = []
+            for photoId in carriersByKeyword[keywordId] ?? [] {
+                try Task.checkCancellation()
+                examplesDone += 1
+                guard let photo = photosById[photoId] else { continue }
+                if let vector = try await embedding(
+                    for: photo, service: service, store: store, thumbnails: thumbnails
+                ) {
+                    exampleEmbeddings.append(vector)
+                }
+                if let progress {
+                    let done = examplesDone
+                    await MainActor.run { progress(done, exampleTotal) }
+                }
+            }
+            specs.append((
+                path: snapshot.keywordTree.path(of: keywordId),
+                spec: KeywordScoringSpec(
+                    keywordId: keywordId,
+                    textEmbedding: textEmbedding,
+                    prototypeEmbedding: SuggestionEngine.prototype(of: exampleEmbeddings),
+                    exampleCount: exampleEmbeddings.count
+                )
+            ))
+        }
+        return specs
+    }
+
     func run(controller: LibraryController, models: EmbeddingModelStore, threshold: Float) {
         guard !isRunning else { return }
         guard let snapshot = controller.snapshot, let thumbnails = controller.thumbnails else {
@@ -51,28 +144,32 @@ final class SuggestionRunner {
             return
         }
         summary = nil
-        phase = .preparing
+        phase = .preparing(done: 0, total: 0)
         // The run scores against a point-in-time copy; `applySuggestions`
         // re-checks every pair against the LIVE snapshot, so edits made while
         // the run is going can only remove suggestions, never corrupt state.
         let rejected = controller.fetchRejectedSuggestionPairs()
         let photos = snapshot.photos
-        let tree = snapshot.keywordTree
         let libraryUUID = snapshot.meta.libraryUUID
         let confirmedByPhoto = snapshot.keywordIdsByPhoto
         let pendingByPhoto = snapshot.pendingKeywordIdsByPhoto
 
         task = Task { [weak self, weak controller] in
             do {
-                var specs: [KeywordScoringSpec] = []
-                for record in described {
-                    try Task.checkCancellation()
-                    let embedding = try await service.textEmbedding(
-                        AISettingsView.promptText(for: record.aiDescription ?? "")
-                    )
-                    specs.append(KeywordScoringSpec(keywordId: record.id!, textEmbedding: embedding))
-                }
                 let store = try EmbeddingStore(libraryUUID: libraryUUID)
+                // Stage 4: specs carry the prototype learned from each
+                // keyword's confirmed carriers; their embeddings land in the
+                // store, so the scan below hits the cache for them.
+                let specs = try await Self.buildSpecs(
+                    snapshot: snapshot,
+                    service: service,
+                    store: store,
+                    thumbnails: thumbnails,
+                    progress: { [weak self] done, total in
+                        self?.phase = .preparing(done: done, total: total)
+                    }
+                ).map(\.spec)
+                let examples = specs.reduce(0) { $0 + $1.exampleCount }
 
                 var found = 0
                 var done = 0
@@ -100,22 +197,9 @@ final class SuggestionRunner {
                     guard let id = photo.id else { continue }
                     self?.phase = .scanning(done: done, total: photos.count, found: found)
                     done += 1
-                    let mtime = EmbeddingStore.mtime(of: photo.path)
-                    var vector = try await store.embedding(
-                        forPath: photo.path, mtime: mtime,
-                        modelVersion: EmbeddingModelStore.modelVersion
-                    )
-                    if vector == nil {
-                        guard let box = await thumbnails.thumbnail(forPath: photo.path, longEdge: 256)
-                        else { continue }
-                        let fresh = try await service.imageEmbedding(box, orientation: photo.orientation)
-                        try await store.store(
-                            fresh, forPath: photo.path, mtime: mtime,
-                            modelVersion: EmbeddingModelStore.modelVersion
-                        )
-                        vector = fresh
-                    }
-                    guard let vector else { continue }
+                    guard let vector = try await Self.embedding(
+                        for: photo, service: service, store: store, thumbnails: thumbnails
+                    ) else { continue }
                     batch[id] = vector
                     for keywordId in (confirmedByPhoto[id] ?? []).union(pendingByPhoto[id] ?? []) {
                         batchSkip.insert(PhotoKeywordPair(photoId: id, keywordId: keywordId))
@@ -128,7 +212,9 @@ final class SuggestionRunner {
                 let cancelled = Task.isCancelled
                 self?.summary = cancelled
                     ? "Cancelled after \(done) of \(photos.count) photos — \(found) suggestion\(found == 1 ? "" : "s") so far."
-                    : "\(found) suggestion\(found == 1 ? "" : "s") across \(photos.count) photos. Review them via the pending chips in the inspector."
+                    : "\(found) suggestion\(found == 1 ? "" : "s") across \(photos.count) photos"
+                        + (examples > 0 ? ", learned from \(examples) confirmed example\(examples == 1 ? "" : "s")" : "")
+                        + ". Review them via the pending chips in the inspector."
                 self?.phase = .idle
             } catch is CancellationError {
                 self?.summary = "Cancelled."

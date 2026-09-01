@@ -48,8 +48,14 @@ struct AISettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            case .preparing:
-                ProgressView { Text("Embedding keyword descriptions…") }
+            case .preparing(let done, let total):
+                if total > 0 {
+                    ProgressView(value: Double(done), total: Double(max(1, total))) {
+                        Text("Learning from confirmed examples (\(done) of \(total))…")
+                    }
+                } else {
+                    ProgressView { Text("Embedding keyword descriptions…") }
+                }
             case .scanning(let done, let total, let found):
                 ProgressView(value: Double(done), total: Double(max(1, total))) {
                     Text("Scanning photo \(done + 1) of \(total) — \(found) suggestions so far")
@@ -261,43 +267,27 @@ struct AISettingsView: View {
             preview = .failed("Select photos in the grid first.")
             return
         }
-        let tree = snapshot.keywordTree
         let libraryUUID = snapshot.meta.libraryUUID
         preview = .running(0, photos.count)
         Task {
             do {
-                var specs: [(path: String, embedding: [Float])] = []
-                for record in described {
-                    let embedding = try await service.textEmbedding(
-                        Self.promptText(for: record.aiDescription ?? "")
-                    )
-                    specs.append((path: tree.path(of: record.id!), embedding: embedding))
-                }
                 let store = try EmbeddingStore(libraryUUID: libraryUUID)
+                // The exact specs a run would use — prototypes included
+                // (Stage 4), so calibration shows the real blended scores.
+                let specs = try await SuggestionRunner.buildSpecs(
+                    snapshot: snapshot, service: service, store: store, thumbnails: thumbnails
+                )
                 var rows: [PreviewRow] = []
                 for (index, photo) in photos.enumerated() {
                     preview = .running(index, photos.count)
-                    guard let box = await thumbnails.thumbnail(forPath: photo.path, longEdge: 256)
-                    else { continue }
-                    let mtime = EmbeddingStore.mtime(of: photo.path)
-                    let vector: [Float]
-                    if let cached = try await store.embedding(
-                        forPath: photo.path, mtime: mtime,
-                        modelVersion: EmbeddingModelStore.modelVersion
-                    ) {
-                        vector = cached
-                    } else {
-                        vector = try await service.imageEmbedding(box, orientation: photo.orientation)
-                        try await store.store(
-                            vector, forPath: photo.path, mtime: mtime,
-                            modelVersion: EmbeddingModelStore.modelVersion
-                        )
-                    }
+                    guard let vector = try await SuggestionRunner.embedding(
+                        for: photo, service: service, store: store, thumbnails: thumbnails
+                    ) else { continue }
                     let scores = specs.enumerated()
-                        .map { offset, spec in
+                        .map { offset, built in
                             PreviewScore(
-                                id: Int64(offset), path: spec.path,
-                                score: EmbeddingMath.cosine(vector, spec.embedding)
+                                id: Int64(offset), path: built.path,
+                                score: SuggestionEngine.score(photo: vector, spec: built.spec)
                             )
                         }
                         .sorted { $0.score > $1.score }
