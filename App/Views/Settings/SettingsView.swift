@@ -20,6 +20,9 @@ struct SettingsView: View {
             KeywordsSettingsView()
                 .tabItem { Label("Keywords", systemImage: "tag") }
                 .tag(SettingsRouter.Tab.keywords)
+            AISettingsView()
+                .tabItem { Label("AI", systemImage: "sparkles") }
+                .tag(SettingsRouter.Tab.ai)
             ShortcutsSettingsView()
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
                 .tag(SettingsRouter.Tab.shortcuts)

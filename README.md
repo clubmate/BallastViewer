@@ -40,6 +40,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 - **Reorganize imported hierarchies:** move a nested keyword to the top level of any group — subtree included, and a same-named keyword absorbs it (photo assignments merge).
 - **Merge on rename:** renaming a keyword to a name that already exists next to it offers to merge the two — photo assignments combine, sub-keywords fold in.
 - **Keyboard and MIDI shortcuts** for your most-used keywords.
+- **AI keyword suggestions (in progress):** describe a visual keyword in plain English ("someone talking on a phone") and BallastViewer scores your photos against it — entirely on-device via Apple's MobileCLIP, nothing leaves your Mac. Today the Settings ▸ AI tab hosts the model download, per-keyword descriptions, and a live scoring preview for the current selection; suggested keywords arriving as reviewable pending chips comes next. Keywords without a description are never touched.
 
 ### Smart collections
 

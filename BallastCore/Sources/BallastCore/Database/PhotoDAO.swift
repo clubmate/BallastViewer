@@ -77,11 +77,18 @@ public enum PhotoDAO {
         Set(try Int64.fetchAll(db, sql: "SELECT id FROM photo WHERE lightroomMergedAt IS NOT NULL"))
     }
 
-    /// Idempotent: assigning an already-assigned keyword is a no-op.
+    /// Idempotent: assigning an already-assigned keyword is a no-op. A row
+    /// sitting at `pending` (AI suggestion, U48) is promoted to `confirmed` —
+    /// manually assigning a suggested keyword is an implicit accept.
     public static func assignKeyword(_ keywordId: Int64, toPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: """
+                INSERT INTO photoKeyword (photoId, keywordId, status) VALUES (?, ?, 'confirmed')
+                ON CONFLICT(photoId, keywordId) DO UPDATE SET status = 'confirmed'
+                """
+        )
         for photoId in ids {
-            try PhotoKeywordRecord(photoId: photoId, keywordId: keywordId)
-                .insert(db, onConflict: .ignore)
+            try statement.execute(arguments: [photoId, keywordId])
         }
     }
 
@@ -106,11 +113,17 @@ public enum PhotoDAO {
     /// The join table as keyword-id sets per photo id — the snapshot's
     /// in-memory form, built straight off a row cursor with positional
     /// column access (no intermediate row array or tuple list).
+    ///
+    /// CONFIRMED rows only — this single filter is what keeps pending AI
+    /// suggestions (U48) out of the XMP write-through, search facts, chips,
+    /// and counts, which all derive from the snapshot map built here.
     public static func fetchKeywordIdsByPhoto(_ db: Database) throws -> [Int64: Set<Int64>] {
         var result: [Int64: Set<Int64>] = [:]
-        let photoCount = try Int.fetchOne(db, sql: "SELECT COUNT(DISTINCT photoId) FROM photoKeyword") ?? 0
+        let photoCount = try Int.fetchOne(
+            db, sql: "SELECT COUNT(DISTINCT photoId) FROM photoKeyword WHERE status = 'confirmed'") ?? 0
         result.reserveCapacity(photoCount)
-        let cursor = try Row.fetchCursor(db, sql: "SELECT photoId, keywordId FROM photoKeyword")
+        let cursor = try Row.fetchCursor(
+            db, sql: "SELECT photoId, keywordId FROM photoKeyword WHERE status = 'confirmed'")
         while let row = try cursor.next() {
             let photoId: Int64 = row[0]
             let keywordId: Int64 = row[1]

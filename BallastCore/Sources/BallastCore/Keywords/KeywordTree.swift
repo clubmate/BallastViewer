@@ -242,6 +242,17 @@ public struct KeywordTree: Sendable {
         })
     }
 
+    /// Mirrors `KeywordDAO.setAIDescription` (U48): swaps one node's AI
+    /// description (nil = opted out of suggestions).
+    public func settingAIDescription(_ description: String?, of id: Int64) -> KeywordTree {
+        KeywordTree(records: allRecords.map { record in
+            guard record.id == id else { return record }
+            var changed = record
+            changed.aiDescription = description
+            return changed
+        })
+    }
+
     /// Mirrors the FK `onDelete: .setNull` of a group deletion: members become
     /// ad-hoc keywords (C3).
     public func removingGroup(_ groupId: Int64) -> KeywordTree {

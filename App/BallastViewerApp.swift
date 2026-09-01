@@ -17,6 +17,7 @@ struct BallastViewerApp: App {
     @State private var photoPicker = PhotoPickerModel()
     @State private var keywordPanel: KeywordPanelModel
     @State private var updater = AppUpdater()
+    @State private var embeddingModels = EmbeddingModelStore()
 
     init() {
         // U42: BEFORE anything reads UserDefaults — the sandboxed builds kept
@@ -96,11 +97,13 @@ struct BallastViewerApp: App {
         Settings {
             SettingsView()
                 .environment(controller)
+                .environment(center)
                 .environment(keyMap)
                 .environment(midiMap)
                 .environment(appearance)
                 .environment(midiService)
                 .environment(settingsRouter)
+                .environment(embeddingModels)
         }
     }
 }

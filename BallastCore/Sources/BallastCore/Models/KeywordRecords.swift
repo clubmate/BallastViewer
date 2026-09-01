@@ -15,12 +15,22 @@ public struct KeywordRecord: Codable, Hashable, Sendable, FetchableRecord, Mutab
     public var groupId: Int64?
     /// Single path component, ALWAYS UPPERCASE (invariant enforced by KeywordDAO).
     public var name: String
+    /// U48: short English description driving the AI suggestion run. NULL =
+    /// this keyword opted out of AI suggestions.
+    public var aiDescription: String?
 
-    public init(id: Int64? = nil, parentId: Int64? = nil, groupId: Int64? = nil, name: String) {
+    public init(
+        id: Int64? = nil,
+        parentId: Int64? = nil,
+        groupId: Int64? = nil,
+        name: String,
+        aiDescription: String? = nil
+    ) {
         self.id = id
         self.parentId = parentId
         self.groupId = groupId
         self.name = name
+        self.aiDescription = aiDescription
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
@@ -60,9 +70,34 @@ public struct KeywordGroupRecord: Codable, Hashable, Sendable, Identifiable, Fet
     ]
 }
 
+/// U48: lifecycle of a keyword assignment. `pending` rows are AI suggestions
+/// awaiting review — they never reach the XMP write-through, search, or
+/// counts. Rejections live in `rejectedSuggestion`, not here (a tombstone row
+/// would occupy the PK and swallow later manual assignments).
+public enum PhotoKeywordStatus: String, Codable, Sendable {
+    case confirmed
+    case pending
+}
+
 /// Join row assigning a keyword to a photo.
 public struct PhotoKeywordRecord: Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {
     public static let databaseTableName = "photoKeyword"
+
+    public var photoId: Int64
+    public var keywordId: Int64
+    public var status: PhotoKeywordStatus
+
+    public init(photoId: Int64, keywordId: Int64, status: PhotoKeywordStatus = .confirmed) {
+        self.photoId = photoId
+        self.keywordId = keywordId
+        self.status = status
+    }
+}
+
+/// U48: a rejected AI suggestion — remembered so later runs never re-suggest
+/// the same (photo, keyword) pair.
+public struct RejectedSuggestionRecord: Codable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "rejectedSuggestion"
 
     public var photoId: Int64
     public var keywordId: Int64

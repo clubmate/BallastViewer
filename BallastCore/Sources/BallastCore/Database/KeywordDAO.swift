@@ -154,10 +154,23 @@ public enum KeywordDAO {
     }
 
     private static func mergeUnchecked(_ sourceId: Int64, into targetId: Int64, in db: Database) throws {
+        // Assignments keep their U48 status; where source and target disagree
+        // a confirmed row wins over a pending suggestion.
         try db.execute(
             sql: """
-                INSERT OR IGNORE INTO photoKeyword (photoId, keywordId)
-                SELECT photoId, ? FROM photoKeyword WHERE keywordId = ?
+                INSERT INTO photoKeyword (photoId, keywordId, status)
+                SELECT photoId, ?, status FROM photoKeyword WHERE keywordId = ?
+                ON CONFLICT(photoId, keywordId) DO UPDATE SET status = 'confirmed'
+                    WHERE excluded.status = 'confirmed' AND status = 'pending'
+                """,
+            arguments: [targetId, sourceId]
+        )
+        // Rejection memory (U48) survives the merge — without this the FK
+        // cascade on the source row would forget the user's rejections.
+        try db.execute(
+            sql: """
+                INSERT OR IGNORE INTO rejectedSuggestion (photoId, keywordId)
+                SELECT photoId, ? FROM rejectedSuggestion WHERE keywordId = ?
                 """,
             arguments: [targetId, sourceId]
         )
@@ -180,6 +193,15 @@ public enum KeywordDAO {
     public static func setGroup(_ groupId: Int64?, forKeywordId id: Int64, in db: Database) throws {
         try KeywordRecord.filter(key: id)
             .updateAll(db, Column("groupId").set(to: groupId))
+    }
+
+    /// U48: the keyword's AI description. Blank clears it — the keyword drops
+    /// out of the suggestion run entirely.
+    public static func setAIDescription(_ description: String?, forKeywordId id: Int64, in db: Database) throws {
+        let trimmed = description?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        try KeywordRecord.filter(key: id)
+            .updateAll(db, Column("aiDescription").set(to: value))
     }
 
     public static func fetchAll(_ db: Database) throws -> [KeywordRecord] {

@@ -1,0 +1,85 @@
+import Foundation
+
+/// One (photo, keyword) assignment candidate.
+public struct PhotoKeywordPair: Hashable, Sendable {
+    public var photoId: Int64
+    public var keywordId: Int64
+
+    public init(photoId: Int64, keywordId: Int64) {
+        self.photoId = photoId
+        self.keywordId = keywordId
+    }
+}
+
+/// Everything the engine knows about one AI-enabled keyword (U48). The
+/// prototype fields stay dormant until Stage 4 (prototype learning): with
+/// `exampleCount == 0` scoring is exactly the text-description similarity.
+public struct KeywordScoringSpec: Sendable {
+    public var keywordId: Int64
+    /// Embedding of the user's description ("a photo of …"), L2-normalized.
+    public var textEmbedding: [Float]
+    /// Mean embedding of confirmed example photos, L2-normalized (Stage 4).
+    public var prototypeEmbedding: [Float]?
+    public var exampleCount: Int
+
+    public init(
+        keywordId: Int64,
+        textEmbedding: [Float],
+        prototypeEmbedding: [Float]? = nil,
+        exampleCount: Int = 0
+    ) {
+        self.keywordId = keywordId
+        self.textEmbedding = textEmbedding
+        self.prototypeEmbedding = prototypeEmbedding
+        self.exampleCount = exampleCount
+    }
+}
+
+/// Pure scoring core of the AI keywording (U48): photo embeddings × keyword
+/// specs → suggestions above threshold. Platform code (CoreML, ImageIO) stays
+/// in the app target; this is what the tests pin down.
+public enum SuggestionEngine {
+    public struct Suggestion: Equatable, Sendable {
+        public var pair: PhotoKeywordPair
+        public var score: Float
+    }
+
+    /// The prototype's weight grows with the number of examples:
+    /// `α = k / (k + n)` is the text description's share.
+    static func textWeight(exampleCount: Int, k: Float = 8) -> Float {
+        k / (k + Float(max(0, exampleCount)))
+    }
+
+    /// Score of one photo against one keyword spec.
+    static func score(photo: [Float], spec: KeywordScoringSpec) -> Float {
+        let textScore = EmbeddingMath.cosine(photo, spec.textEmbedding)
+        guard let prototype = spec.prototypeEmbedding, spec.exampleCount > 0 else {
+            return textScore
+        }
+        let alpha = textWeight(exampleCount: spec.exampleCount)
+        return alpha * textScore + (1 - alpha) * EmbeddingMath.cosine(photo, prototype)
+    }
+
+    /// All pairs scoring at or above `threshold`, minus `skip` (already
+    /// assigned, already pending, or previously rejected). Sorted by score
+    /// descending so callers can present or batch the strongest first.
+    public static func suggestions(
+        photoEmbeddings: [Int64: [Float]],
+        specs: [KeywordScoringSpec],
+        threshold: Float,
+        skip: Set<PhotoKeywordPair> = []
+    ) -> [Suggestion] {
+        var result: [Suggestion] = []
+        for (photoId, embedding) in photoEmbeddings {
+            for spec in specs {
+                let pair = PhotoKeywordPair(photoId: photoId, keywordId: spec.keywordId)
+                guard !skip.contains(pair) else { continue }
+                let value = score(photo: embedding, spec: spec)
+                if value >= threshold {
+                    result.append(Suggestion(pair: pair, score: value))
+                }
+            }
+        }
+        return result.sorted { $0.score > $1.score }
+    }
+}

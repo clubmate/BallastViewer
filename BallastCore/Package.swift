@@ -15,6 +15,9 @@ let package = Package(
             name: "BallastCore",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift")
+            ],
+            resources: [
+                .copy("AI/Resources")
             ]
         ),
         .testTarget(

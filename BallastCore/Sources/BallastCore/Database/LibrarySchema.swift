@@ -164,6 +164,32 @@ public enum LibrarySchema {
             }
         }
 
+        migrator.registerMigration("v8-ai-suggestions") { db in
+            // U48: short English description driving the MobileCLIP text
+            // embedding. NULL = keyword opted out of AI suggestions entirely.
+            try db.alter(table: "keyword") { t in
+                t.add(column: "aiDescription", .text)
+            }
+            // U48: 'confirmed' | 'pending'. Pending = AI suggestion awaiting
+            // review — never file-written, never a query fact.
+            try db.alter(table: "photoKeyword") { t in
+                t.add(column: "status", .text).notNull().defaults(to: "confirmed")
+            }
+            // U48: rejected suggestions, remembered so re-runs skip them.
+            // Deliberately NOT a photoKeyword status: a tombstone row there
+            // would occupy the PK and swallow later manual assignments.
+            try db.create(table: "rejectedSuggestion", options: [.withoutRowID]) { t in
+                t.column("photoId", .integer).notNull()
+                    .references("photo", onDelete: .cascade)
+                t.column("keywordId", .integer).notNull()
+                    .references("keyword", onDelete: .cascade)
+                t.primaryKey(["photoId", "keywordId"])
+            }
+            try db.create(
+                index: "rejectedSuggestion_keywordId", on: "rejectedSuggestion", columns: ["keywordId"]
+            )
+        }
+
         return migrator
     }
 
