@@ -12,6 +12,9 @@ public enum SidebarItem: Hashable, Sendable {
     /// this keyword or any descendant. Not a sidebar row — selecting it
     /// deselects every sidebar entry visually.
     case keyword(Int64)
+    /// U48 Stage 3: photos with at least one pending AI suggestion — the
+    /// review queue. The row appears only while suggestions are waiting.
+    case pendingReview
 
     public var encoded: String {
         switch self {
@@ -20,6 +23,7 @@ public enum SidebarItem: Hashable, Sendable {
         case .rating(let stars): "rating:\(stars)"
         case .collection(let id): "collection:\(id)"
         case .keyword(let id): "keyword:\(id)"
+        case .pendingReview: "pendingReview"
         }
     }
 
@@ -58,6 +62,8 @@ public enum SidebarItem: Hashable, Sendable {
         case .keyword(let id):
             let path = keywordTree.path(of: id)
             return path.isEmpty ? "?" : path
+        case .pendingReview:
+            return "REVIEW SUGGESTIONS"
         }
     }
 
@@ -66,6 +72,8 @@ public enum SidebarItem: Hashable, Sendable {
             self = .allPhotos
         } else if encoded == "lastImport" {
             self = .lastImport
+        } else if encoded == "pendingReview" {
+            self = .pendingReview
         } else if encoded.hasPrefix("rating:"), let stars = Int(encoded.dropFirst(7)),
                   (0...5).contains(stars) {
             self = .rating(stars)
@@ -91,6 +99,9 @@ public enum SidebarFilter {
     /// - `keyword`: the photo carries any keyword in `activeKeywordSubtree`
     ///   (the selected keyword plus its descendants, precomputed by the
     ///   caller — U29). An empty set matches nothing.
+    /// - `pendingReview`: the photo is in `pendingPhotoIds` (photos with ≥1
+    ///   pending AI suggestion, precomputed by the caller — U48). An empty
+    ///   set matches nothing.
     ///
     /// Callers compile the chains once (`CompiledRuleChain.chains`) instead
     /// of re-parsing rules for every photo.
@@ -100,7 +111,8 @@ public enum SidebarFilter {
         item: SidebarItem,
         compiledCollections: [Int64: CompiledRuleChain],
         lastImportBatchId: Int64?,
-        activeKeywordSubtree: Set<Int64> = []
+        activeKeywordSubtree: Set<Int64> = [],
+        pendingPhotoIds: Set<Int64> = []
     ) -> Bool {
         switch item {
         case .allPhotos:
@@ -115,6 +127,8 @@ public enum SidebarFilter {
             return compiled.matches(photo, facts: facts())
         case .keyword:
             return !activeKeywordSubtree.isDisjoint(with: facts().keywordIds)
+        case .pendingReview:
+            return photo.id.map { pendingPhotoIds.contains($0) } ?? false
         }
     }
 }

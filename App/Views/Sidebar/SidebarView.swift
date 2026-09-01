@@ -49,6 +49,17 @@ struct SidebarView: View {
                     row(item: .rating(0), count: sidebar.counts.ratings[0]) {
                         Image(systemName: "star.slash").font(.caption2)
                     }
+                    // U48: the AI review queue — visible only while pending
+                    // suggestions exist (or while it is the active filter, so
+                    // the row never vanishes under the user mid-review).
+                    if sidebar.pendingReviewCount > 0 || center.activeItem == .pendingReview {
+                        row(item: .pendingReview, count: sidebar.pendingReviewCount) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "sparkles").font(.caption2)
+                                Text("REVIEW SUGGESTIONS")
+                            }
+                        }
+                    }
 
                     ForEach(groupReorder.ordered(sidebar.groups, id: \.id)) { group in
                         groupBlock(group)

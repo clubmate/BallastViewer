@@ -120,6 +120,30 @@ import Testing
     }
 }
 
+@Suite struct PendingReviewSidebarTests {
+    @Test func encodedRoundTripAndDisplayName() {
+        let item = SidebarItem.pendingReview
+        #expect(SidebarItem(encoded: item.encoded) == item)
+        #expect(item.displayName(collections: [], keywordTree: KeywordTree(records: [])) == "REVIEW SUGGESTIONS")
+    }
+
+    @Test func filterMatchesOnlyPhotosWithPendings() {
+        var photo = PhotoRecord(folderId: 1, path: "/tmp/a.jpg")
+        photo.id = 7
+        let facts = PhotoQueryFacts(foldedFilename: "a.jpg")
+        func matches(_ pending: Set<Int64>) -> Bool {
+            SidebarFilter.matches(
+                photo, facts: facts, item: .pendingReview,
+                compiledCollections: [:], lastImportBatchId: nil,
+                pendingPhotoIds: pending
+            )
+        }
+        #expect(matches([7]))
+        #expect(!matches([8]))
+        #expect(!matches([]))  // empty queue matches nothing, like .keyword
+    }
+}
+
 @Suite struct AISchemaTests {
     @Test func v7DatabaseMigratesAndReadsBackConfirmed() throws {
         // A pre-U48 library: rows without a status column come back confirmed

@@ -190,6 +190,8 @@ final class CenterViewModel {
     /// — the per-photo filter tests set intersection instead of walking the
     /// tree. Refreshed at the top of every filter pass; cheap (O(subtree)).
     @ObservationIgnored private var activeKeywordSubtree: Set<Int64> = []
+    /// U48: photos with ≥1 pending suggestion — feeds the .pendingReview filter.
+    @ObservationIgnored private var pendingReviewPhotoIds: Set<Int64> = []
     @ObservationIgnored private var currentLibraryURL: URL?
 
     init(controller: LibraryController) {
@@ -312,6 +314,17 @@ final class CenterViewModel {
         activeKeywordSubtree = Set(tree.descendants(of: id)).union([id])
     }
 
+    /// U48 Stage 3: the review queue's membership set, only maintained while
+    /// the REVIEW SUGGESTIONS row is active (cheap — O(photos with pendings)).
+    private func refreshPendingReviewPhotoIds() {
+        guard activeItem == .pendingReview else {
+            if !pendingReviewPhotoIds.isEmpty { pendingReviewPhotoIds = [] }
+            return
+        }
+        let map = controller.snapshot?.pendingKeywordIdsByPhoto ?? [:]
+        pendingReviewPhotoIds = Set(map.compactMap { $0.value.isEmpty ? nil : $0.key })
+    }
+
     // MARK: Catalog events
 
     private func handle(_ event: CatalogEvent) {
@@ -381,7 +394,8 @@ final class CenterViewModel {
             item: activeItem,
             compiledCollections: compiledCollections,
             lastImportBatchId: snapshot.meta.lastImportBatchId,
-            activeKeywordSubtree: activeKeywordSubtree
+            activeKeywordSubtree: activeKeywordSubtree,
+            pendingPhotoIds: pendingReviewPhotoIds
         ) else { return false }
         guard let search else { return true }
         return search.matches(filename: photo.filename, facts: facts)
@@ -391,6 +405,7 @@ final class CenterViewModel {
     /// change). Single-photo mutations go through `photosDidChange`.
     private func rebuildVisible() {
         refreshActiveKeywordSubtree()
+        refreshPendingReviewPhotoIds()
         let search = SearchFilter.FoldedQuery(searchText)
         let records = (controller.snapshot?.photos ?? []).filter { passesFilter($0, search: search) }
         if sortOption == .random {
@@ -439,8 +454,10 @@ final class CenterViewModel {
     /// Incremental update after in-place photo mutations: O(changed + visible),
     /// never a full refilter of the catalog.
     private func photosDidChange(_ ids: [Int64]) {
-        // A keyword edit may have grown/shrunk the active subtree (U29).
+        // A keyword edit may have grown/shrunk the active subtree (U29);
+        // an accept/reject may have emptied a photo's pending set (U48).
         refreshActiveKeywordSubtree()
+        refreshPendingReviewPhotoIds()
         var removals = Set<Int64>()
         var insertions: [PhotoRecord] = []
         var valueUpdates: [GridPhoto] = []

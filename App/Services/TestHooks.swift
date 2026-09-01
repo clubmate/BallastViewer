@@ -12,6 +12,7 @@ import BallastCore
 /// · BV_TEST_CULL=1 (step-6 acceptance flow) · BV_TEST_KEYWORDS=1 (step-8
 /// acceptance flow) · BV_TEST_MERGE=1 (U40 rename-collision merge) ·
 /// BV_TEST_BULKWRITE=1 (U46 auto bulk-run progress, needs ≥100 photos) ·
+/// BV_TEST_AIREVIEW=1 (U48 pending-suggestion review flow, model-free, needs ≥4 photos) ·
 /// BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
 /// BV_TEST_SINGLE=1 (single view, no quit) ·
 /// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
@@ -96,6 +97,9 @@ enum TestHooks {
         }
         if env["BV_TEST_BULKWRITE"] != nil {
             runBulkWriteChecks(controller, center: center)
+        }
+        if env["BV_TEST_AIREVIEW"] != nil {
+            runAIReviewChecks(controller, center: center, sidebar: sidebar)
         }
         if let path = env["BV_TEST_QTN"] {
             runQuarantineProbe(zipAt: path)
@@ -454,6 +458,77 @@ enum TestHooks {
         // A rename of a keyword carried by every photo re-flags them all.
         controller.renameKeyword(bigId, to: "BULK RENAMED")
         print("BVBULK rename bulkRun=\(writer.isBulkRun) pending=\(writer.pendingCount) total=\(writer.runTotal)")
+    }
+
+    /// U48 Stage 2+3 acceptance, headless and MODEL-FREE (seeds suggestions
+    /// through `applySuggestions` exactly like the runner would): the sidebar
+    /// review count, the .pendingReview filter, accept (→ confirmed +
+    /// needsFileWrite), reject (→ tombstone, NO file write), tombstone
+    /// suppression on a re-run, and manual assign as implicit accept.
+    @MainActor
+    private static func runAIReviewChecks(
+        _ controller: LibraryController, center: CenterViewModel, sidebar: SidebarViewModel
+    ) {
+        guard let keywordId = controller.createKeyword(
+            baseName: "AI REVIEW", parentId: nil, groupId: nil)
+        else {
+            print("BVAIREVIEW error=setup")
+            return
+        }
+        controller.setKeywordAIDescription(keywordId, description: "a test description")
+        let described = controller.snapshot?.keywordTree.node(keywordId)?.aiDescription != nil
+        let all = center.visiblePhotos.map(\.id)
+        guard all.count >= 4 else {
+            print("BVAIREVIEW error=needs-4-photos have=\(all.count)")
+            return
+        }
+        let pairs = all.prefix(3).map { PhotoKeywordPair(photoId: $0, keywordId: keywordId) }
+        controller.applySuggestions(Array(pairs))
+        print("BVAIREVIEW seeded described=\(described) reviewCount=\(sidebar.pendingReviewCount)")
+
+        center.selectSidebarItem(.pendingReview)
+        print("BVAIREVIEW queue visible=\(center.visiblePhotos.count) item=\(center.activeItem.encoded)")
+
+        controller.acceptPendingKeyword(id: keywordId, forPhotoIds: [all[0]])
+        print(
+            "BVAIREVIEW accept",
+            "confirmed=\(controller.snapshot?.keywordIdsByPhoto[all[0]]?.contains(keywordId) == true)",
+            "needsWrite=\(controller.photo(withId: all[0])?.needsFileWrite == true)",
+            "visible=\(center.visiblePhotos.count)",
+            "reviewCount=\(sidebar.pendingReviewCount)"
+        )
+
+        controller.rejectPendingKeyword(id: keywordId, forPhotoIds: [all[1]])
+        let tombstones = controller.fetchRejectedSuggestionPairs()
+        print(
+            "BVAIREVIEW reject",
+            "tombstone=\(tombstones.contains(PhotoKeywordPair(photoId: all[1], keywordId: keywordId)))",
+            "needsWrite=\(controller.photo(withId: all[1])?.needsFileWrite == true)",
+            "visible=\(center.visiblePhotos.count)",
+            "reviewCount=\(sidebar.pendingReviewCount)"
+        )
+
+        // A re-run offers the same pairs again; the runner's skip set (here:
+        // the tombstones) plus the in-memory confirmed/pending checks must
+        // let NOTHING back through.
+        let retry = pairs.filter { !tombstones.contains($0) }
+        controller.applySuggestions(retry)
+        print(
+            "BVAIREVIEW resuggest retried=\(retry.count)",
+            "reviewCount=\(sidebar.pendingReviewCount)",
+            "visible=\(center.visiblePhotos.count)"
+        )
+
+        // Typing the keyword on the last pending photo = implicit accept; the
+        // queue empties and the review view runs dry.
+        controller.assignKeyword(id: keywordId, toPhotoIds: [all[2]])
+        print(
+            "BVAIREVIEW implicitAccept",
+            "confirmed=\(controller.snapshot?.keywordIdsByPhoto[all[2]]?.contains(keywordId) == true)",
+            "pendingGone=\(controller.snapshot?.pendingKeywordIdsByPhoto[all[2]]?.contains(keywordId) != true)",
+            "reviewCount=\(sidebar.pendingReviewCount)",
+            "visible=\(center.visiblePhotos.count)"
+        )
     }
 
     /// U41 acceptance, headless: a child collection ANDs the parent's rules

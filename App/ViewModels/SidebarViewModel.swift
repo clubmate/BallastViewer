@@ -10,6 +10,10 @@ final class SidebarViewModel {
     @ObservationIgnored private unowned let controller: LibraryController
 
     private(set) var counts = SidebarCounts()
+    /// U48: photos with ≥1 pending AI suggestion. The REVIEW SUGGESTIONS row
+    /// shows only while this is non-zero. Recomputed whole on every event —
+    /// O(photos with pendings), not O(catalog).
+    private(set) var pendingReviewCount = 0
     var collapsedGroups: Set<Int64> = [] {
         didSet {
             guard oldValue != collapsedGroups, !isRestoringCollapsedGroups else { return }
@@ -178,7 +182,14 @@ final class SidebarViewModel {
             // Equality guard: a rotation changes no count, and an unguarded
             // assignment would invalidate the sidebar per key repeat.
             if counts != store.counts { counts = store.counts }
+            refreshPendingReviewCount()
         }
+    }
+
+    private func refreshPendingReviewCount() {
+        let fresh = controller.snapshot?.pendingKeywordIdsByPhoto
+            .filter { !$0.value.isEmpty }.count ?? 0
+        if fresh != pendingReviewCount { pendingReviewCount = fresh }
     }
 
     private func rebuildCounts() {
@@ -195,6 +206,7 @@ final class SidebarViewModel {
             facts: { [controller] photo in controller.queryFacts(for: photo) }
         )
         if counts != store.counts { counts = store.counts }
+        refreshPendingReviewCount()
     }
 
     // MARK: Editing
