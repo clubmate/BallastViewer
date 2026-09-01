@@ -147,6 +147,41 @@ import Testing
         textOnly.exampleCount = 0
         #expect(abs(SuggestionEngine.score(photo: [1, 0], spec: textOnly) - 1) < 1e-6)
     }
+
+    @Test func prototypeScoresRelativeToTheLibraryBaseline() {
+        // CLIP image embeddings share a common direction: an unrelated photo
+        // already scores ≈ 0.4 against any prototype. The baseline (prototype
+        // vs. library mean) is subtracted so the blend sees only the EXCESS.
+        let prototype: [Float] = [0, 1]
+        // Sample: one photo at 45° (cos 0.707), one orthogonal (cos 0) → mean
+        // cosine is what an ordinary photo scores, NOT the cosine against a
+        // normalized mean vector (which would be 0.383 here).
+        let sample: [[Float]] = [[0.7071, 0.7071], [1, 0], [0.7071, 0.7071], [1, 0]]
+        let baseline = SuggestionEngine.prototypeBaseline(prototype: prototype, sample: sample)
+        #expect(abs(baseline - 0.35355) < 1e-3)
+        let uniform = SuggestionEngine.prototypeBaseline(prototype: prototype, sample: [[0.7071, 0.7071]])
+        #expect(abs(uniform - 0.7071) < 1e-3)
+        let baselineForBlend = uniform
+        let spec = KeywordScoringSpec(
+            keywordId: 10, textEmbeddings: [[1, 0]],
+            prototypeEmbedding: prototype, exampleCount: 8, prototypeBaseline: baselineForBlend
+        )
+        // An "average" photo: raw prototype cosine 0.707 → excess 0, so the
+        // 50/50 blend is half the text score alone.
+        let average: [Float] = [0.7071, 0.7071]
+        #expect(abs(SuggestionEngine.prototypeExcess(photo: average, spec: spec)!) < 1e-3)
+        #expect(abs(SuggestionEngine.score(photo: average, spec: spec) - 0.5 * 0.7071) < 1e-3)
+        // A photo like the examples: excess 1 − 0.707 ≈ 0.293.
+        let example: [Float] = [0, 1]
+        #expect(abs(SuggestionEngine.prototypeExcess(photo: example, spec: spec)! - 0.2929) < 1e-3)
+        #expect(abs(SuggestionEngine.score(photo: example, spec: spec) - 0.5 * 0.2929) < 1e-3)
+        // No sample → baseline 0 → the raw cosine (old behaviour).
+        #expect(SuggestionEngine.prototypeBaseline(prototype: prototype, sample: []) == 0)
+        // No examples → no excess at all.
+        var textOnly = spec
+        textOnly.exampleCount = 0
+        #expect(SuggestionEngine.prototypeExcess(photo: example, spec: textOnly) == nil)
+    }
 }
 
 @Suite struct PendingReviewSidebarTests {

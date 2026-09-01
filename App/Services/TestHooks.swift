@@ -573,8 +573,9 @@ enum TestHooks {
 
     /// U48 score-scale diagnostic (needs the downloaded model and at least one
     /// prompt; the open library is used as-is). For every described keyword it
-    /// prints how the TEXT score, the PROTOTYPE score, and the BLEND the run
-    /// would use are distributed over the library — carriers (confirmed
+    /// prints how the TEXT score, the RAW prototype cosine, the library-
+    /// relative prototype EXCESS (raw minus baseline — what the blend uses)
+    /// and the BLEND are distributed over the library — carriers (confirmed
     /// examples) versus everything else — plus how many non-carriers each
     /// score puts over the threshold. `over` under blend ≫ `over` under text
     /// means the prototype inflates scores past the text-calibrated threshold.
@@ -627,28 +628,32 @@ enum TestHooks {
             }
 
             for (path, spec) in specs {
-                var carrierText: [Float] = [], carrierProto: [Float] = [], carrierBlend: [Float] = []
-                var otherText: [Float] = [], otherProto: [Float] = [], otherBlend: [Float] = []
+                var carrierText: [Float] = [], carrierRaw: [Float] = [], carrierExcess: [Float] = [], carrierBlend: [Float] = []
+                var otherText: [Float] = [], otherRaw: [Float] = [], otherExcess: [Float] = [], otherBlend: [Float] = []
                 for (photoId, vector) in vectors {
                     let text = spec.textEmbeddings.map { EmbeddingMath.cosine(vector, $0) }.max() ?? 0
-                    let proto = spec.prototypeEmbedding.map { EmbeddingMath.cosine(vector, $0) } ?? 0
+                    let raw = spec.prototypeEmbedding.map { EmbeddingMath.cosine(vector, $0) } ?? 0
+                    let excess = SuggestionEngine.prototypeExcess(photo: vector, spec: spec) ?? 0
                     let blend = SuggestionEngine.score(photo: vector, spec: spec)
                     let isCarrier = snapshot.keywordIdsByPhoto[photoId]?.contains(spec.keywordId) == true
                     if isCarrier {
-                        carrierText.append(text); carrierProto.append(proto); carrierBlend.append(blend)
+                        carrierText.append(text); carrierRaw.append(raw); carrierExcess.append(excess); carrierBlend.append(blend)
                     } else {
-                        otherText.append(text); otherProto.append(proto); otherBlend.append(blend)
+                        otherText.append(text); otherRaw.append(raw); otherExcess.append(excess); otherBlend.append(blend)
                     }
                 }
                 let alpha = spec.exampleCount == 0 ? 1 : 8 / (8 + Float(spec.exampleCount))
                 print("BVAISCORES [\(path)] examples=\(spec.exampleCount) alpha=\(String(format: "%.2f", alpha))"
+                    + " baseline=\(String(format: "%.3f", spec.prototypeBaseline))"
                     + " variants=\(spec.textEmbeddings.count) carriers=\(carrierText.count) others=\(otherText.count)")
-                print("BVAISCORES [\(path)] carriers " + line("text ", carrierText))
-                print("BVAISCORES [\(path)] carriers " + line("proto", carrierProto))
-                print("BVAISCORES [\(path)] carriers " + line("blend", carrierBlend))
-                print("BVAISCORES [\(path)] others   " + line("text ", otherText))
-                print("BVAISCORES [\(path)] others   " + line("proto", otherProto))
-                print("BVAISCORES [\(path)] others   " + line("blend", otherBlend))
+                print("BVAISCORES [\(path)] carriers " + line("text  ", carrierText))
+                print("BVAISCORES [\(path)] carriers " + line("raw   ", carrierRaw))
+                print("BVAISCORES [\(path)] carriers " + line("excess", carrierExcess))
+                print("BVAISCORES [\(path)] carriers " + line("blend ", carrierBlend))
+                print("BVAISCORES [\(path)] others   " + line("text  ", otherText))
+                print("BVAISCORES [\(path)] others   " + line("raw   ", otherRaw))
+                print("BVAISCORES [\(path)] others   " + line("excess", otherExcess))
+                print("BVAISCORES [\(path)] others   " + line("blend ", otherBlend))
             }
         } catch {
             print("BVAISCORES error=\(error.localizedDescription)")

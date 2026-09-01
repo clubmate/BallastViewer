@@ -23,17 +23,28 @@ public struct KeywordScoringSpec: Sendable {
     /// Mean embedding of confirmed example photos, L2-normalized (Stage 4).
     public var prototypeEmbedding: [Float]?
     public var exampleCount: Int
+    /// The prototype's similarity to the LIBRARY MEAN image embedding — the
+    /// score an average, unrelated photo gets against this prototype. CLIP
+    /// image embeddings share a common direction (any two photos sit at
+    /// cosine ≈ 0.4), so a raw prototype cosine carries that floor while a
+    /// text cosine does not (unrelated ≈ 0.1). Subtracting the baseline puts
+    /// "how much MORE like the examples than an average photo" on the text
+    /// scale the threshold is calibrated for. Measured 2026-09-02 (12-photo
+    /// demo): unrelated photos p50 0.4 / max 0.75 raw, ≈ 0 after subtraction.
+    public var prototypeBaseline: Float
 
     public init(
         keywordId: Int64,
         textEmbeddings: [[Float]],
         prototypeEmbedding: [Float]? = nil,
-        exampleCount: Int = 0
+        exampleCount: Int = 0,
+        prototypeBaseline: Float = 0
     ) {
         self.keywordId = keywordId
         self.textEmbeddings = textEmbeddings
         self.prototypeEmbedding = prototypeEmbedding
         self.exampleCount = exampleCount
+        self.prototypeBaseline = prototypeBaseline
     }
 }
 
@@ -74,17 +85,38 @@ public enum SuggestionEngine {
             .filter { !$0.isEmpty }
     }
 
+    /// The prototype's baseline for a library: the MEAN cosine an ordinary
+    /// photo of the library scores against it, taken over a sample of photo
+    /// embeddings (callers leave the keyword's own carriers out of the sample
+    /// — they would lift the baseline toward themselves). Not the cosine
+    /// against a normalized mean vector: that overstates the floor because the
+    /// mean of a cone of unit vectors is shorter than one.
+    public static func prototypeBaseline(prototype: [Float], sample: [[Float]]) -> Float {
+        guard !sample.isEmpty else { return 0 }
+        var sum: Float = 0
+        for vector in sample { sum += EmbeddingMath.cosine(prototype, vector) }
+        return sum / Float(sample.count)
+    }
+
+    /// The photo's prototype similarity RELATIVE to the library: raw cosine
+    /// minus the prototype's baseline (≈ 0 for an unrelated photo, clearly
+    /// positive for one that looks like the confirmed examples).
+    public static func prototypeExcess(photo: [Float], spec: KeywordScoringSpec) -> Float? {
+        guard let prototype = spec.prototypeEmbedding, spec.exampleCount > 0 else { return nil }
+        return EmbeddingMath.cosine(photo, prototype) - spec.prototypeBaseline
+    }
+
     /// Score of one photo against one keyword spec: best prompt variant,
-    /// blended with the example prototype when one exists.
+    /// blended with the library-relative prototype excess when examples exist.
     public static func score(photo: [Float], spec: KeywordScoringSpec) -> Float {
         let textScore = spec.textEmbeddings
             .map { EmbeddingMath.cosine(photo, $0) }
             .max() ?? 0
-        guard let prototype = spec.prototypeEmbedding, spec.exampleCount > 0 else {
+        guard let excess = prototypeExcess(photo: photo, spec: spec) else {
             return textScore
         }
         let alpha = textWeight(exampleCount: spec.exampleCount)
-        return alpha * textScore + (1 - alpha) * EmbeddingMath.cosine(photo, prototype)
+        return alpha * textScore + (1 - alpha) * excess
     }
 
     /// All pairs scoring at or above `threshold`, minus `skip` (already

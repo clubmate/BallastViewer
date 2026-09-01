@@ -33,10 +33,14 @@ final class SuggestionRunner {
     private static let batchSize = 200
     /// Photos embedded concurrently: thumbnail decodes overlap the (actor-
     /// serialized) CoreML inference instead of strictly alternating with it.
-    private static let prefetchWindow = 4
+    nonisolated private static let prefetchWindow = 4
     /// Progress is observable state — one update per photo would re-render
     /// the sidebar thousands of times per second on cache hits.
     private static let progressInterval: Duration = .milliseconds(100)
+    /// Photos embedded to estimate the library-mean image embedding (the
+    /// prototype baseline). 256 unit vectors pin a 512-dim mean well enough;
+    /// they are library photos, so the scan hits the cache for them anyway.
+    nonisolated private static let libraryMeanSampleSize = 256
 
     func cancel() {
         task?.cancel()
@@ -104,12 +108,27 @@ final class SuggestionRunner {
         }
     }
 
+    /// A deterministic, evenly spread sample of the library (every k-th photo
+    /// in catalog order) standing in for "ordinary photos of this library" —
+    /// the prototype baseline is the mean score over it. Deterministic so two
+    /// runs score identically.
+    nonisolated static func libraryMeanSample(_ photos: [PhotoRecord]) -> ArraySlice<PhotoRecord> {
+        guard photos.count > libraryMeanSampleSize else { return photos[...] }
+        let step = photos.count / libraryMeanSampleSize
+        return stride(from: 0, to: photos.count, by: step).prefix(libraryMeanSampleSize)
+            .map { photos[$0] }[...]
+    }
+
     /// Stage 4: one scoring spec per described keyword — text embedding PLUS
     /// the prototype learned from the keyword's CONFIRMED carriers (manual
     /// and accepted alike; no provenance needed). The blend weight moves from
     /// description to examples as `exampleCount` grows (α = 8/(8+n), pinned
-    /// by SuggestionEngineTests). Used identically by the run and the
-    /// preview, so calibration always shows the scores a run would use.
+    /// by SuggestionEngineTests). The prototype is scored RELATIVE to the
+    /// library: its mean cosine over a sample of the whole library (minus the
+    /// keyword's own carriers) is the baseline an unrelated photo would get
+    /// and is subtracted before blending — see `KeywordScoringSpec.prototypeBaseline`.
+    /// Used identically by the run and the diagnostic, so calibration always
+    /// shows the scores a run would use.
     nonisolated static func buildSpecs(
         snapshot: LibrarySnapshot,
         service: EmbeddingService,
@@ -132,8 +151,25 @@ final class SuggestionRunner {
                 carriersByKeyword[keywordId, default: []].append(photoId)
             }
         }
-        let exampleTotal = carriersByKeyword.values.reduce(0) { $0 + $1.count }
+        // The library sample only matters when some keyword has examples;
+        // a text-only setup skips the extra embeddings entirely.
+        let sample = carriersByKeyword.isEmpty ? [] : libraryMeanSample(snapshot.photos)
+        let exampleTotal = carriersByKeyword.values.reduce(0) { $0 + $1.count } + sample.count
         var examplesDone = 0
+
+        var sampleEmbeddings: [(id: Int64, vector: [Float])] = []
+        for start in stride(from: 0, to: sample.count, by: prefetchWindow) {
+            try Task.checkCancellation()
+            let chunk = sample[start ..< min(start + prefetchWindow, sample.count)]
+            sampleEmbeddings.append(contentsOf: try await embeddings(
+                for: chunk, service: service, store: store, thumbnails: thumbnails
+            ))
+            examplesDone += chunk.count
+            if let progress {
+                let done = examplesDone
+                await MainActor.run { progress(done, exampleTotal) }
+            }
+        }
 
         var specs: [(path: String, spec: KeywordScoringSpec)] = []
         for record in described {
@@ -160,13 +196,21 @@ final class SuggestionRunner {
                     await MainActor.run { progress(done, exampleTotal) }
                 }
             }
+            let prototype = SuggestionEngine.prototype(of: exampleEmbeddings)
+            // Ordinary photos only: the keyword's own carriers would pull the
+            // baseline toward the prototype (decisive in small libraries).
+            let carriers = Set(carriersByKeyword[keywordId] ?? [])
+            let ordinary = sampleEmbeddings.filter { !carriers.contains($0.id) }.map(\.vector)
             specs.append((
                 path: snapshot.keywordTree.path(of: keywordId),
                 spec: KeywordScoringSpec(
                     keywordId: keywordId,
                     textEmbeddings: textEmbeddings,
-                    prototypeEmbedding: SuggestionEngine.prototype(of: exampleEmbeddings),
-                    exampleCount: exampleEmbeddings.count
+                    prototypeEmbedding: prototype,
+                    exampleCount: exampleEmbeddings.count,
+                    prototypeBaseline: prototype.map {
+                        SuggestionEngine.prototypeBaseline(prototype: $0, sample: ordinary)
+                    } ?? 0
                 )
             ))
         }
