@@ -181,6 +181,18 @@ public enum PhotoDAO {
         }
     }
 
+    /// Discard (U48 emergency exit): drops the given PENDING pairs without
+    /// leaving rejection memory — a later run may suggest them again.
+    /// Confirmed rows are untouched.
+    public static func deletePendingPairs(_ pairs: [PhotoKeywordPair], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "DELETE FROM photoKeyword WHERE photoId = ? AND keywordId = ? AND status = 'pending'"
+        )
+        for pair in pairs {
+            try statement.execute(arguments: [pair.photoId, pair.keywordId])
+        }
+    }
+
     // MARK: Rejection memory (U48)
 
     public static func fetchRejectedPairs(_ db: Database) throws -> Set<PhotoKeywordPair> {

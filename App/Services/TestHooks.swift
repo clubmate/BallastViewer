@@ -509,7 +509,7 @@ enum TestHooks {
             let photoCount = controller.snapshot?.photos.count ?? 0
             await controller.removeFolder(folder)
             let removedCount = controller.snapshot?.photos.count ?? -1
-            controller.undoManager?.undo()
+            controller.undoManager?.undoNestedGroup()
             var waited = 0
             while (controller.snapshot?.photos.count ?? 0) < photoCount, waited < 200 {
                 try? await Task.sleep(for: .milliseconds(50))
@@ -570,6 +570,18 @@ enum TestHooks {
             "pendingGone=\(controller.snapshot?.pendingKeywordIdsByPhoto[all[2]]?.contains(keywordId) != true)",
             "reviewCount=\(sidebar.pendingReviewCount)",
             "visible=\(center.visiblePhotos.count)"
+        )
+
+        // Emergency exit (2026-09-02): discard drops every pending pair with
+        // NO tombstones, and undo brings them back.
+        let tombstonesBefore = controller.fetchRejectedSuggestionPairs().count
+        controller.discardPendingSuggestions(controller.allPendingSuggestionPairs)
+        let afterDiscard = sidebar.pendingReviewCount
+        let tombstonesAfter = controller.fetchRejectedSuggestionPairs().count
+        controller.undoManager?.undoNestedGroup()
+        print(
+            "BVAIREVIEW discard reviewCount=\(afterDiscard) tombstonesUnchanged=\(tombstonesBefore == tombstonesAfter)",
+            "undoReviewCount=\(sidebar.pendingReviewCount) visible=\(center.visiblePhotos.count)"
         )
     }
 

@@ -122,6 +122,61 @@ extension LibraryController {
         emitCatalogEvent(.photosUpdated(photoIds))
     }
 
+    // MARK: Discard (emergency exit)
+
+    /// Every pending suggestion in the library, as pairs — what "Discard All
+    /// Suggestions" removes.
+    var allPendingSuggestionPairs: [PhotoKeywordPair] {
+        (snapshot?.pendingKeywordIdsByPhoto ?? [:]).flatMap { photoId, keywordIds in
+            keywordIds.map { PhotoKeywordPair(photoId: photoId, keywordId: $0) }
+        }
+    }
+
+    /// The emergency exit after a bad run (user request 2026-09-02): the
+    /// pending suggestions vanish as if the run had never happened — NO
+    /// rejection memory, so a later run may offer them again. Undoable.
+    /// Nothing file-facing changes (pending never was).
+    func discardPendingSuggestions(_ pairs: [PhotoKeywordPair]) {
+        var dropped: [PhotoKeywordPair] = []
+        var changed = Set<Int64>()
+        mutateSnapshot { snapshot in
+            for pair in pairs
+            where snapshot.pendingKeywordIdsByPhoto[pair.photoId]?.contains(pair.keywordId) == true {
+                snapshot.pendingKeywordIdsByPhoto[pair.photoId]?.remove(pair.keywordId)
+                dropped.append(pair)
+                changed.insert(pair.photoId)
+            }
+        }
+        guard !dropped.isEmpty else { return }
+        let restore = dropped
+        registerUndo("Discard Suggestions") { $0.restoreDiscardedSuggestions(restore) }
+        persist { db in try PhotoDAO.deletePendingPairs(restore, in: db) }
+        emitCatalogEvent(.photosUpdated(Array(changed)))
+    }
+
+    /// Undo of a discard: the suggestions come back as pending (skipping any
+    /// pair that became confirmed or pending again in the meantime).
+    func restoreDiscardedSuggestions(_ pairs: [PhotoKeywordPair]) {
+        var fresh: [PhotoKeywordPair] = []
+        var changed = Set<Int64>()
+        mutateSnapshot { snapshot in
+            for pair in pairs {
+                guard snapshot.keywordTree.node(pair.keywordId) != nil,
+                      !(snapshot.keywordIdsByPhoto[pair.photoId]?.contains(pair.keywordId) ?? false),
+                      !(snapshot.pendingKeywordIdsByPhoto[pair.photoId]?.contains(pair.keywordId) ?? false)
+                else { continue }
+                snapshot.pendingKeywordIdsByPhoto[pair.photoId, default: []].insert(pair.keywordId)
+                fresh.append(pair)
+                changed.insert(pair.photoId)
+            }
+        }
+        guard !fresh.isEmpty else { return }
+        let inserts = fresh
+        registerUndo("Discard Suggestions") { $0.discardPendingSuggestions(inserts) }
+        persist { db in try PhotoDAO.assignPendingKeywords(inserts, in: db) }
+        emitCatalogEvent(.photosUpdated(Array(changed)))
+    }
+
     /// One synchronous read per suggestion run — the skip set for the engine.
     func fetchRejectedSuggestionPairs() -> Set<PhotoKeywordPair> {
         writeSync { db in try PhotoDAO.fetchRejectedPairs(db) } ?? []

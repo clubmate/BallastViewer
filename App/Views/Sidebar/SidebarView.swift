@@ -13,6 +13,8 @@ struct SidebarView: View {
     @AppStorage(AISettingsView.learningKey) private var aiLearning = false
     let sidebar: SidebarViewModel
     let center: CenterViewModel
+    /// U48 emergency exit: "Discard All Suggestions…" awaiting confirmation.
+    @State private var confirmDiscardSuggestions = false
 
     /// Groups are drag-ordered; collections inside a group list
     /// alphabetically (U32) and are not draggable.
@@ -69,6 +71,14 @@ struct SidebarView: View {
                                 Text("REVIEW KEYWORDS")
                             }
                         }
+                        .contextMenu {
+                            // The emergency exit after a bad run: every pending
+                            // suggestion goes, nothing is remembered as rejected.
+                            Button("Discard All Suggestions…") {
+                                confirmDiscardSuggestions = true
+                            }
+                            .disabled(runner.isRunning || sidebar.pendingReviewCount == 0)
+                        }
                     }
 
                     ForEach(groupReorder.ordered(sidebar.groups, id: \.id)) { group in
@@ -104,6 +114,16 @@ struct SidebarView: View {
             .frame(height: PanelMetrics.footerHeight)
         }
         .sidebarPrompts(sidebar: sidebar, center: center, controller: controller)
+        .alert("Discard All Suggestions", isPresented: $confirmDiscardSuggestions) {
+            Button("Discard", role: .destructive) {
+                controller.discardPendingSuggestions(controller.allPendingSuggestionPairs)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let pairs = controller.allPendingSuggestionPairs.count
+            let photos = sidebar.pendingReviewCount
+            Text("Remove all \(pairs) pending suggestion\(pairs == 1 ? "" : "s") on \(photos) photo\(photos == 1 ? "" : "s") — as if the run had never happened? Nothing is remembered as rejected, so a later run may suggest them again. Confirmed keywords and files are not affected. This can be undone.")
+        }
     }
 
     // MARK: Rows
