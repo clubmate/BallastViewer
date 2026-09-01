@@ -13,6 +13,8 @@ import BallastCore
 /// acceptance flow) · BV_TEST_MERGE=1 (U40 rename-collision merge) ·
 /// BV_TEST_BULKWRITE=1 (U46 auto bulk-run progress, needs ≥100 photos) ·
 /// BV_TEST_AIREVIEW=1 (U48 pending-suggestion review flow, model-free, needs ≥4 photos) ·
+/// BV_TEST_AISCORES=1 (U48 score-scale diagnostic: text vs prototype score
+/// distributions per described keyword — needs the model and prompts) ·
 /// BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
 /// BV_TEST_SINGLE=1 (single view, no quit) ·
 /// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
@@ -37,7 +39,8 @@ enum TestHooks {
         sidebar: SidebarViewModel,
         dispatcher: ActionDispatcher,
         keyMap: KeyMapStore,
-        midiMap: MidiMapStore
+        midiMap: MidiMapStore,
+        models: EmbeddingModelStore
     ) async {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
@@ -99,7 +102,10 @@ enum TestHooks {
             runBulkWriteChecks(controller, center: center)
         }
         if env["BV_TEST_AIREVIEW"] != nil {
-            runAIReviewChecks(controller, center: center, sidebar: sidebar)
+            await runAIReviewChecks(controller, center: center, sidebar: sidebar)
+        }
+        if env["BV_TEST_AISCORES"] != nil {
+            await runAIScoreDiagnostic(controller, models: models)
         }
         if let path = env["BV_TEST_QTN"] {
             runQuarantineProbe(zipAt: path)
@@ -468,7 +474,7 @@ enum TestHooks {
     @MainActor
     private static func runAIReviewChecks(
         _ controller: LibraryController, center: CenterViewModel, sidebar: SidebarViewModel
-    ) {
+    ) async {
         guard let keywordId = controller.createKeyword(
             baseName: "AI REVIEW", parentId: nil, groupId: nil)
         else {
@@ -483,8 +489,42 @@ enum TestHooks {
             return
         }
         let pairs = all.prefix(3).map { PhotoKeywordPair(photoId: $0, keywordId: keywordId) }
-        controller.applySuggestions(Array(pairs))
+        let libraryUUID = controller.snapshot?.meta.libraryUUID ?? ""
+        controller.applySuggestions(Array(pairs), libraryUUID: libraryUUID)
         print("BVAIREVIEW seeded described=\(described) reviewCount=\(sidebar.pendingReviewCount)")
+
+        // Review fix 2026-09-02: Remove Folder + Undo must bring the pending
+        // suggestions back as PENDING (never as confirmed, file-facing
+        // keywords) and keep the rejection memory. Ids are restored verbatim,
+        // so the flow below continues on the same photos.
+        // Photo 4: suggest → reject (tombstone) → seed again directly, so the
+        // folder carries a pending row AND a tombstone for the same pair.
+        let fourth = [PhotoKeywordPair(photoId: all[3], keywordId: keywordId)]
+        controller.applySuggestions(fourth, libraryUUID: libraryUUID)
+        controller.rejectPendingKeyword(id: keywordId, forPhotoIds: [all[3]])
+        controller.applySuggestions(fourth, libraryUUID: libraryUUID)
+        if let folder = controller.snapshot?.folders.first {
+            let photoCount = controller.snapshot?.photos.count ?? 0
+            await controller.removeFolder(folder)
+            let removedCount = controller.snapshot?.photos.count ?? -1
+            controller.undoManager?.undo()
+            var waited = 0
+            while (controller.snapshot?.photos.count ?? 0) < photoCount, waited < 200 {
+                try? await Task.sleep(for: .milliseconds(50))
+                waited += 1
+            }
+            let pending = controller.snapshot?.pendingKeywordIdsByPhoto
+                .reduce(0) { $0 + ($1.value.contains(keywordId) ? 1 : 0) } ?? -1
+            let confirmed = controller.snapshot?.keywordIdsByPhoto
+                .reduce(0) { $0 + ($1.value.contains(keywordId) ? 1 : 0) } ?? -1
+            let tombstone = controller.fetchRejectedSuggestionPairs()
+                .contains(PhotoKeywordPair(photoId: all[3], keywordId: keywordId))
+            print(
+                "BVAIREVIEW removeUndo removed=\(removedCount) restored=\(controller.snapshot?.photos.count ?? -1)",
+                "pending=\(pending) confirmed=\(confirmed) tombstone=\(tombstone)",
+                "reviewCount=\(sidebar.pendingReviewCount)"
+            )
+        }
 
         center.selectSidebarItem(.pendingReview)
         print("BVAIREVIEW queue visible=\(center.visiblePhotos.count) item=\(center.activeItem.encoded)")
@@ -512,7 +552,7 @@ enum TestHooks {
         // the tombstones) plus the in-memory confirmed/pending checks must
         // let NOTHING back through.
         let retry = pairs.filter { !tombstones.contains($0) }
-        controller.applySuggestions(retry)
+        controller.applySuggestions(retry, libraryUUID: libraryUUID)
         print(
             "BVAIREVIEW resuggest retried=\(retry.count)",
             "reviewCount=\(sidebar.pendingReviewCount)",
@@ -529,6 +569,90 @@ enum TestHooks {
             "reviewCount=\(sidebar.pendingReviewCount)",
             "visible=\(center.visiblePhotos.count)"
         )
+    }
+
+    /// U48 score-scale diagnostic (needs the downloaded model and at least one
+    /// prompt; the open library is used as-is). For every described keyword it
+    /// prints how the TEXT score, the PROTOTYPE score, and the BLEND the run
+    /// would use are distributed over the library — carriers (confirmed
+    /// examples) versus everything else — plus how many non-carriers each
+    /// score puts over the threshold. `over` under blend ≫ `over` under text
+    /// means the prototype inflates scores past the text-calibrated threshold.
+    @MainActor
+    private static func runAIScoreDiagnostic(_ controller: LibraryController, models: EmbeddingModelStore) async {
+        guard let snapshot = controller.snapshot, let thumbnails = controller.thumbnails else {
+            print("BVAISCORES error=no-library")
+            return
+        }
+        guard let service = models.service() else {
+            print("BVAISCORES error=model-not-ready state=\(models.state)")
+            return
+        }
+        let threshold = Float(
+            UserDefaults.standard.object(forKey: AISettingsView.thresholdKey) as? Double
+                ?? AISettingsView.defaultThreshold
+        )
+        do {
+            let store = try await EmbeddingStore.open(libraryUUID: snapshot.meta.libraryUUID)
+            let specs = try await SuggestionRunner.buildSpecs(
+                snapshot: snapshot, service: service, store: store, thumbnails: thumbnails
+            )
+            guard !specs.isEmpty else {
+                print("BVAISCORES error=no-prompts")
+                return
+            }
+            var vectors: [Int64: [Float]] = [:]
+            let photos = snapshot.photos
+            for start in stride(from: 0, to: photos.count, by: 4) {
+                let chunk = photos[start ..< min(start + 4, photos.count)]
+                for (id, vector) in try await SuggestionRunner.embeddings(
+                    for: chunk, service: service, store: store, thumbnails: thumbnails
+                ) {
+                    vectors[id] = vector
+                }
+            }
+            print("BVAISCORES photos=\(vectors.count) keywords=\(specs.count) threshold=\(threshold)")
+
+            func percentile(_ sorted: [Float], _ q: Double) -> String {
+                guard !sorted.isEmpty else { return "-" }
+                let index = Int((Double(sorted.count - 1) * q).rounded())
+                return String(format: "%.3f", sorted[index])
+            }
+            func line(_ label: String, _ values: [Float]) -> String {
+                let sorted = values.sorted()
+                let over = sorted.filter { $0 >= threshold }.count
+                return "\(label) p10=\(percentile(sorted, 0.1)) p50=\(percentile(sorted, 0.5))"
+                    + " p90=\(percentile(sorted, 0.9)) p99=\(percentile(sorted, 0.99))"
+                    + " max=\(percentile(sorted, 1)) over=\(over)"
+            }
+
+            for (path, spec) in specs {
+                var carrierText: [Float] = [], carrierProto: [Float] = [], carrierBlend: [Float] = []
+                var otherText: [Float] = [], otherProto: [Float] = [], otherBlend: [Float] = []
+                for (photoId, vector) in vectors {
+                    let text = spec.textEmbeddings.map { EmbeddingMath.cosine(vector, $0) }.max() ?? 0
+                    let proto = spec.prototypeEmbedding.map { EmbeddingMath.cosine(vector, $0) } ?? 0
+                    let blend = SuggestionEngine.score(photo: vector, spec: spec)
+                    let isCarrier = snapshot.keywordIdsByPhoto[photoId]?.contains(spec.keywordId) == true
+                    if isCarrier {
+                        carrierText.append(text); carrierProto.append(proto); carrierBlend.append(blend)
+                    } else {
+                        otherText.append(text); otherProto.append(proto); otherBlend.append(blend)
+                    }
+                }
+                let alpha = spec.exampleCount == 0 ? 1 : 8 / (8 + Float(spec.exampleCount))
+                print("BVAISCORES [\(path)] examples=\(spec.exampleCount) alpha=\(String(format: "%.2f", alpha))"
+                    + " variants=\(spec.textEmbeddings.count) carriers=\(carrierText.count) others=\(otherText.count)")
+                print("BVAISCORES [\(path)] carriers " + line("text ", carrierText))
+                print("BVAISCORES [\(path)] carriers " + line("proto", carrierProto))
+                print("BVAISCORES [\(path)] carriers " + line("blend", carrierBlend))
+                print("BVAISCORES [\(path)] others   " + line("text ", otherText))
+                print("BVAISCORES [\(path)] others   " + line("proto", otherProto))
+                print("BVAISCORES [\(path)] others   " + line("blend", otherBlend))
+            }
+        } catch {
+            print("BVAISCORES error=\(error.localizedDescription)")
+        }
     }
 
     /// U41 acceptance, headless: a child collection ANDs the parent's rules

@@ -10,10 +10,13 @@ import SwiftUI
 /// model download.
 struct AISettingsView: View {
     static let defaultThreshold = 0.25
+    /// UserDefaults key of the match threshold — shared with the sidebar
+    /// (run start) and the score diagnostic hook.
+    static let thresholdKey = "aiSuggestionThreshold"
 
     @Environment(LibraryController.self) private var controller
     @Environment(EmbeddingModelStore.self) private var models
-    @AppStorage("aiSuggestionThreshold") private var threshold = AISettingsView.defaultThreshold
+    @AppStorage(AISettingsView.thresholdKey) private var threshold = AISettingsView.defaultThreshold
     @State private var newKeywordId: Int64?
     @State private var newPrompt = ""
 

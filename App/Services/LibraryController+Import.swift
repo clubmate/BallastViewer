@@ -364,7 +364,8 @@ extension LibraryController {
         defer { isBulkUpdating = wasBulkUpdating }
         struct Removal: Sendable {
             var photos: [PhotoRecord]
-            var pairs: [(photoId: Int64, keywordId: Int64)]
+            var pairs: [PhotoKeywordRecord]
+            var rejected: [RejectedSuggestionRecord]
             var removed: Int
         }
         do {
@@ -378,16 +379,27 @@ extension LibraryController {
             let result = try await pipeline.submitAndWait { db -> Removal in
                 let photos = try PhotoRecord.filter(Column("folderId") == folderId).fetchAll(db)
                 // Restricted in SQL: the full join table can hold
-                // hundreds of thousands of pairs for other folders.
-                let sql = "SELECT photoId, keywordId FROM photoKeyword"
-                    + " WHERE photoId IN (SELECT id FROM photo WHERE folderId = ?)"
-                let pairs = try Row.fetchAll(db, sql: sql, arguments: [folderId])
-                    .map { (photoId: $0["photoId"] as Int64, keywordId: $0["keywordId"] as Int64) }
+                // hundreds of thousands of pairs for other folders. The rows
+                // are captured WITH their U48 status — an undo must bring a
+                // pending suggestion back as pending, never as a confirmed
+                // (file-facing) keyword — and with the rejection memory the
+                // FK cascade would otherwise forget.
+                let inFolder = " WHERE photoId IN (SELECT id FROM photo WHERE folderId = ?)"
+                let pairs = try PhotoKeywordRecord.fetchAll(
+                    db, sql: "SELECT photoId, keywordId, status FROM photoKeyword" + inFolder,
+                    arguments: [folderId]
+                )
+                let rejected = try RejectedSuggestionRecord.fetchAll(
+                    db, sql: "SELECT photoId, keywordId FROM rejectedSuggestion" + inFolder,
+                    arguments: [folderId]
+                )
                 let removed = try ImportDAO.removeFolder(folderId, in: db)
-                return Removal(photos: photos, pairs: pairs, removed: removed)
+                return Removal(photos: photos, pairs: pairs, rejected: rejected, removed: removed)
             }
             if registerInverse {
-                registerRemoveFolderUndo(folder, photos: result.photos, pairs: result.pairs)
+                registerRemoveFolderUndo(
+                    folder, photos: result.photos, pairs: result.pairs, rejected: result.rejected
+                )
             }
             await refreshSnapshot()
             let removed = result.removed
@@ -403,19 +415,21 @@ extension LibraryController {
     /// to the redo stack. Registering from the async applier after an `await`
     /// broke redo (the inverse landed on the undo stack instead).
     private func registerRemoveFolderUndo(
-        _ folder: FolderRecord, photos: [PhotoRecord], pairs: [(photoId: Int64, keywordId: Int64)]
+        _ folder: FolderRecord, photos: [PhotoRecord],
+        pairs: [PhotoKeywordRecord], rejected: [RejectedSuggestionRecord]
     ) {
         registerUndo("Remove Folder") { controller in
-            controller.registerReinsertFolderUndo(folder, photos: photos, pairs: pairs)
-            Task { await controller.reinsertFolder(folder, photos: photos, pairs: pairs) }
+            controller.registerReinsertFolderUndo(folder, photos: photos, pairs: pairs, rejected: rejected)
+            Task { await controller.reinsertFolder(folder, photos: photos, pairs: pairs, rejected: rejected) }
         }
     }
 
     private func registerReinsertFolderUndo(
-        _ folder: FolderRecord, photos: [PhotoRecord], pairs: [(photoId: Int64, keywordId: Int64)]
+        _ folder: FolderRecord, photos: [PhotoRecord],
+        pairs: [PhotoKeywordRecord], rejected: [RejectedSuggestionRecord]
     ) {
         registerUndo("Remove Folder") { controller in
-            controller.registerRemoveFolderUndo(folder, photos: photos, pairs: pairs)
+            controller.registerRemoveFolderUndo(folder, photos: photos, pairs: pairs, rejected: rejected)
             Task { await controller.removeFolder(folder, registerInverse: false) }
         }
     }
@@ -427,7 +441,8 @@ extension LibraryController {
     private func reinsertFolder(
         _ folder: FolderRecord,
         photos: [PhotoRecord],
-        pairs: [(photoId: Int64, keywordId: Int64)]
+        pairs: [PhotoKeywordRecord],
+        rejected: [RejectedSuggestionRecord]
     ) async {
         guard let pipeline = writePipeline else { return }
         // The bulk transaction sits in the write lane: raise the modal shield
@@ -444,9 +459,12 @@ extension LibraryController {
                     var record = photo
                     try record.insert(db)
                 }
+                // Status travels with the row (U48): pending comes back pending.
                 for pair in pairs {
-                    try PhotoKeywordRecord(photoId: pair.photoId, keywordId: pair.keywordId)
-                        .insert(db, onConflict: .ignore)
+                    try pair.insert(db, onConflict: .ignore)
+                }
+                for tombstone in rejected {
+                    try tombstone.insert(db, onConflict: .ignore)
                 }
             }
         } catch {

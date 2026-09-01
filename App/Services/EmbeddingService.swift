@@ -15,24 +15,26 @@ actor EmbeddingService {
     private let textModelURL: URL
     private var imageModel: MLModel?
     private var textModel: MLModel?
-    private let tokenizer: CLIPTokenizer
+    /// Lazy like the models: parsing the 262k-line merges table takes a
+    /// noticeable moment and must not happen on the MainActor when the
+    /// service is first handed out.
+    private var tokenizer: CLIPTokenizer?
 
     struct EncodingError: LocalizedError {
         let errorDescription: String?
         init(_ message: String) { errorDescription = message }
     }
 
-    init(imageModelURL: URL, textModelURL: URL) throws {
+    init(imageModelURL: URL, textModelURL: URL) {
         self.imageModelURL = imageModelURL
         self.textModelURL = textModelURL
-        self.tokenizer = try CLIPTokenizer()
     }
 
     // MARK: Text
 
     func textEmbedding(_ text: String) throws -> [Float] {
         let model = try loadedTextModel()
-        let tokens = tokenizer.encodeFull(text: text)
+        let tokens = try loadedTokenizer().encodeFull(text: text)
         let array = try MLMultiArray(shape: [1, NSNumber(value: tokens.count)], dataType: .int32)
         array.withUnsafeMutableBufferPointer(ofType: Int32.self) { buffer, _ in
             for (index, token) in tokens.enumerated() { buffer[index] = token }
@@ -80,6 +82,13 @@ actor EmbeddingService {
         return model
     }
 
+    private func loadedTokenizer() throws -> CLIPTokenizer {
+        if let tokenizer { return tokenizer }
+        let fresh = try CLIPTokenizer()
+        tokenizer = fresh
+        return fresh
+    }
+
     private func loadedTextModel() throws -> MLModel {
         if let textModel { return textModel }
         let model = try MLModel(contentsOf: textModelURL)
@@ -117,12 +126,9 @@ actor EmbeddingService {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return image }
         context.translateBy(x: CGFloat(outWidth) / 2, y: CGFloat(outHeight) / 2)
-        // "Rotate clockwise, then mirror" (OrientationTransform convention);
-        // in CG coordinates a visual clockwise rotation is a negative angle.
-        if transform.mirroredHorizontally {
-            context.scaleBy(x: -1, y: 1)
-        }
-        context.rotate(by: -CGFloat(transform.rotationDegrees) * .pi / 180)
+        // The SAME transform the grid cells and the single view apply to the
+        // unrotated bitmap — one convention, one place (OrientationTransform).
+        context.concatenate(transform.affineTransform)
         context.draw(
             image,
             in: CGRect(

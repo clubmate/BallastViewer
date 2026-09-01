@@ -9,7 +9,7 @@ struct SidebarView: View {
     @Environment(LibraryController.self) private var controller
     @Environment(EmbeddingModelStore.self) private var models
     @Environment(SuggestionRunner.self) private var runner
-    @AppStorage("aiSuggestionThreshold") private var aiThreshold = AISettingsView.defaultThreshold
+    @AppStorage(AISettingsView.thresholdKey) private var aiThreshold = AISettingsView.defaultThreshold
     let sidebar: SidebarViewModel
     let center: CenterViewModel
 

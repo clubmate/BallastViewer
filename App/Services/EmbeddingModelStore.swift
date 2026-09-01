@@ -1,5 +1,6 @@
 import AppKit
 import CoreML
+import CryptoKit
 import Observation
 
 /// U48: owns the MobileCLIP-S2 CoreML models on disk. The ~200 MB of weights
@@ -52,14 +53,9 @@ final class EmbeddingModelStore {
     func service() -> EmbeddingService? {
         guard state == .ready else { return nil }
         if let cachedService { return cachedService }
-        do {
-            let service = try EmbeddingService(imageModelURL: imageModelURL, textModelURL: textModelURL)
-            cachedService = service
-            return service
-        } catch {
-            state = .failed(error.localizedDescription)
-            return nil
-        }
+        let service = EmbeddingService(imageModelURL: imageModelURL, textModelURL: textModelURL)
+        cachedService = service
+        return service
     }
 
     // MARK: Download
@@ -128,11 +124,11 @@ final class EmbeddingModelStore {
             }
         }
 
-        var sizes: [Int64] = []
+        var infos: [RemoteFile] = []
         for file in files {
-            sizes.append(try await Self.remoteSize(of: file.remote))
+            infos.append(try await Self.remoteInfo(of: file.remote))
         }
-        let totalBytes = max(1, sizes.reduce(0, +))
+        let totalBytes = max(1, infos.reduce(0) { $0 + $1.size })
         var doneBytes: Int64 = 0
 
         for (index, file) in files.enumerated() {
@@ -140,10 +136,12 @@ final class EmbeddingModelStore {
                 at: file.local.deletingLastPathComponent(), withIntermediateDirectories: true
             )
             let base = doneBytes
-            try await Self.download(from: file.remote, to: file.local) { [weak self] written in
+            try await Self.download(
+                from: file.remote, to: file.local, expectedSHA256: infos[index].sha256
+            ) { [weak self] written in
                 self?.state = .downloading(Double(base + written) / Double(totalBytes))
             }
-            doneBytes += sizes[index]
+            doneBytes += infos[index].size
         }
 
         try await compileAndInstall(
@@ -193,20 +191,32 @@ final class EmbeddingModelStore {
 
     // MARK: Transfer
 
-    nonisolated private static func remoteSize(of url: URL) async throws -> Int64 {
+    private struct RemoteFile: Sendable {
+        var size: Int64
+        /// Hugging Face announces the SHA-256 of LFS-stored files (the
+        /// weights) as `X-Linked-Etag`; small git-tracked files carry a
+        /// blob sha1 instead, which is not verifiable here → nil.
+        var sha256: String?
+    }
+
+    nonisolated private static func remoteInfo(of url: URL) async throws -> RemoteFile {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw ModelError("A model file was not reachable: \(url.lastPathComponent)")
         }
-        return max(0, http.expectedContentLength)
+        let etag = (http.value(forHTTPHeaderField: "X-Linked-Etag") ?? http.value(forHTTPHeaderField: "ETag") ?? "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"W/ "))
+            .lowercased()
+        let isSHA256 = etag.count == 64 && etag.allSatisfy(\.isHexDigit)
+        return RemoteFile(size: max(0, http.expectedContentLength), sha256: isSHA256 ? etag : nil)
     }
 
     /// Streams one file to disk, reporting cumulative bytes on the MainActor
     /// (same shape as `AppUpdater.download`).
     nonisolated private static func download(
-        from url: URL, to destination: URL,
+        from url: URL, to destination: URL, expectedSHA256: String?,
         progress: @escaping @MainActor (Int64) -> Void
     ) async throws {
         let (bytes, response) = try await URLSession.shared.bytes(from: url)
@@ -220,10 +230,12 @@ final class EmbeddingModelStore {
         buffer.reserveCapacity(1 << 16)
         var written: Int64 = 0
         var lastReported: Int64 = 0
+        var hasher = SHA256()
         for try await byte in bytes {
             buffer.append(byte)
             if buffer.count >= 1 << 16 {
                 try handle.write(contentsOf: buffer)
+                hasher.update(data: buffer)
                 written += Int64(buffer.count)
                 buffer.removeAll(keepingCapacity: true)
                 if written - lastReported >= 1 << 20 {
@@ -234,5 +246,14 @@ final class EmbeddingModelStore {
             }
         }
         try handle.write(contentsOf: buffer)
+        hasher.update(data: buffer)
+        // A corrupted or tampered download must never reach the compiler:
+        // the digest is checked against what the repository announced.
+        if let expectedSHA256 {
+            let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            guard digest == expectedSHA256 else {
+                throw ModelError("The download of \(url.lastPathComponent) is corrupted (checksum mismatch).")
+            }
+        }
     }
 }

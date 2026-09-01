@@ -9,7 +9,14 @@ import GRDB
 actor EmbeddingStore {
     private let dbQueue: DatabaseQueue
 
-    init(libraryUUID: String) throws {
+    /// Opens (creating on first use) the library's sidecar. Nonisolated async
+    /// on purpose: the directory creation and the CREATE TABLE are disk I/O
+    /// that must not run on the MainActor task that starts a run.
+    nonisolated static func open(libraryUUID: String) async throws -> EmbeddingStore {
+        try EmbeddingStore(libraryUUID: libraryUUID)
+    }
+
+    private init(libraryUUID: String) throws {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let directory = caches.appendingPathComponent("Embeddings", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -36,7 +43,13 @@ actor EmbeddingStore {
                 sql: "SELECT vector FROM imageEmbedding WHERE path = ? AND mtime = ? AND modelVersion = ?",
                 arguments: [path, mtime, modelVersion]
             ) else { return nil }
-            return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+            // Byte copy, not a typed rebind: a Data buffer carries no
+            // 4-byte alignment guarantee for Float.
+            let count = data.count / MemoryLayout<Float>.stride
+            return [Float](unsafeUninitializedCapacity: count) { buffer, initialized in
+                data.copyBytes(to: buffer)
+                initialized = count
+            }
         }
     }
 

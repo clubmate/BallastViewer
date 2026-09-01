@@ -85,6 +85,7 @@ public enum PhotoDAO {
             sql: """
                 INSERT INTO photoKeyword (photoId, keywordId, status) VALUES (?, ?, 'confirmed')
                 ON CONFLICT(photoId, keywordId) DO UPDATE SET status = 'confirmed'
+                    WHERE status = 'pending'
                 """
         )
         for photoId in ids {
@@ -114,6 +115,7 @@ public enum PhotoDAO {
             sql: """
                 INSERT INTO photoKeyword (photoId, keywordId, status) VALUES (?, ?, 'confirmed')
                 ON CONFLICT(photoId, keywordId) DO UPDATE SET status = 'confirmed'
+                    WHERE status = 'pending'
                 """
         )
         for keywordId in keywordIds {

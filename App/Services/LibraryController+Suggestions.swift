@@ -11,8 +11,11 @@ import GRDB
 extension LibraryController {
     /// The suggestion run delivers its matches here, in batches. No undo (a
     /// run is re-runnable, like a Lightroom merge), no facts, no file write.
-    func applySuggestions(_ pairs: [PhotoKeywordPair]) {
-        guard snapshot != nil else { return }
+    /// `libraryUUID` is the library the run was started on: photo and keyword
+    /// ids are per-library autoincrements, so a batch arriving after a library
+    /// switch would land on unrelated rows — it is dropped instead.
+    func applySuggestions(_ pairs: [PhotoKeywordPair], libraryUUID: String) {
+        guard let snapshot, snapshot.meta.libraryUUID == libraryUUID else { return }
         var fresh: [PhotoKeywordPair] = []
         var changed = Set<Int64>()
         mutateSnapshot { snapshot in

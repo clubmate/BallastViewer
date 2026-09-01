@@ -188,7 +188,7 @@ final class SidebarViewModel {
 
     private func refreshPendingReviewCount() {
         let fresh = controller.snapshot?.pendingKeywordIdsByPhoto
-            .filter { !$0.value.isEmpty }.count ?? 0
+            .reduce(0) { $1.value.isEmpty ? $0 : $0 + 1 } ?? 0
         if fresh != pendingReviewCount { pendingReviewCount = fresh }
     }
 

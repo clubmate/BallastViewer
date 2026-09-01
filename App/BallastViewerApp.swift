@@ -73,7 +73,8 @@ struct BallastViewerApp: App {
                 .task {
                     await TestHooks.runIfRequested(
                         controller, center: center, sidebar: sidebar,
-                        dispatcher: dispatcher, keyMap: keyMap, midiMap: midiMap
+                        dispatcher: dispatcher, keyMap: keyMap, midiMap: midiMap,
+                        models: embeddingModels
                     )
                 }
         }

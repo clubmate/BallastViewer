@@ -31,6 +31,12 @@ final class SuggestionRunner {
     }
 
     private static let batchSize = 200
+    /// Photos embedded concurrently: thumbnail decodes overlap the (actor-
+    /// serialized) CoreML inference instead of strictly alternating with it.
+    private static let prefetchWindow = 4
+    /// Progress is observable state — one update per photo would re-render
+    /// the sidebar thousands of times per second on cache hits.
+    private static let progressInterval: Duration = .milliseconds(100)
 
     func cancel() {
         task?.cancel()
@@ -73,6 +79,29 @@ final class SuggestionRunner {
             modelVersion: EmbeddingModelStore.modelVersion
         )
         return fresh
+    }
+
+    /// A prefetch window's worth of `embedding(for:)` calls in flight at once.
+    /// Order is irrelevant — the scorer batches by id.
+    nonisolated static func embeddings(
+        for photos: ArraySlice<PhotoRecord>,
+        service: EmbeddingService,
+        store: EmbeddingStore,
+        thumbnails: ThumbnailPipeline
+    ) async throws -> [(id: Int64, vector: [Float])] {
+        try await withThrowingTaskGroup(of: (Int64, [Float]?).self) { group in
+            for photo in photos {
+                guard let id = photo.id else { continue }
+                group.addTask {
+                    (id, try await embedding(for: photo, service: service, store: store, thumbnails: thumbnails))
+                }
+            }
+            var result: [(id: Int64, vector: [Float])] = []
+            for try await (id, vector) in group {
+                if let vector { result.append((id: id, vector: vector)) }
+            }
+            return result
+        }
     }
 
     /// Stage 4: one scoring spec per described keyword — text embedding PLUS
@@ -186,7 +215,7 @@ final class SuggestionRunner {
 
         task = Task { [weak self, weak controller] in
             do {
-                let store = try EmbeddingStore(libraryUUID: libraryUUID)
+                let store = try await EmbeddingStore.open(libraryUUID: libraryUUID)
                 // Stage 4: specs carry the prototype learned from each
                 // keyword's confirmed carriers; their embeddings land in the
                 // store, so the scan below hits the cache for them.
@@ -205,6 +234,9 @@ final class SuggestionRunner {
                 var done = 0
                 var batch: [Int64: [Float]] = [:]
                 var batchSkip = Set<PhotoKeywordPair>()
+                var libraryChanged = false
+                var lastProgress = ContinuousClock.now
+                self?.phase = .scanning(done: 0, total: photos.count, found: 0)
 
                 @MainActor func flush() {
                     guard !batch.isEmpty else { return }
@@ -215,32 +247,47 @@ final class SuggestionRunner {
                         skip: batchSkip.union(rejected)
                     )
                     if !suggestions.isEmpty {
-                        controller?.applySuggestions(suggestions.map(\.pair))
+                        controller?.applySuggestions(suggestions.map(\.pair), libraryUUID: libraryUUID)
                         found += suggestions.count
                     }
                     batch.removeAll(keepingCapacity: true)
                     batchSkip.removeAll(keepingCapacity: true)
                 }
 
-                for photo in photos {
+                for start in stride(from: 0, to: photos.count, by: Self.prefetchWindow) {
                     guard !Task.isCancelled else { break }
-                    guard let id = photo.id else { continue }
-                    self?.phase = .scanning(done: done, total: photos.count, found: found)
-                    done += 1
-                    guard let vector = try await Self.embedding(
-                        for: photo, service: service, store: store, thumbnails: thumbnails
-                    ) else { continue }
-                    batch[id] = vector
-                    for keywordId in (confirmedByPhoto[id] ?? []).union(pendingByPhoto[id] ?? []) {
-                        batchSkip.insert(PhotoKeywordPair(photoId: id, keywordId: keywordId))
+                    // The run belongs to ONE library: ids are per-library, so
+                    // a switch mid-run ends the scan (applySuggestions drops
+                    // stragglers on its own, this just stops the work).
+                    guard controller?.snapshot?.meta.libraryUUID == libraryUUID else {
+                        libraryChanged = true
+                        break
+                    }
+                    let chunk = photos[start ..< min(start + Self.prefetchWindow, photos.count)]
+                    let vectors = try await Self.embeddings(
+                        for: chunk, service: service, store: store, thumbnails: thumbnails
+                    )
+                    done += chunk.count
+                    for (id, vector) in vectors {
+                        batch[id] = vector
+                        for keywordId in (confirmedByPhoto[id] ?? []).union(pendingByPhoto[id] ?? []) {
+                            batchSkip.insert(PhotoKeywordPair(photoId: id, keywordId: keywordId))
+                        }
                     }
                     if batch.count >= Self.batchSize {
                         flush()
                     }
+                    let now = ContinuousClock.now
+                    if now - lastProgress >= Self.progressInterval {
+                        lastProgress = now
+                        self?.phase = .scanning(done: done, total: photos.count, found: found)
+                    }
                 }
-                flush()
+                if !libraryChanged { flush() }
                 let cancelled = Task.isCancelled
-                self?.summary = cancelled
+                self?.summary = libraryChanged
+                    ? "Stopped — the library changed mid-run."
+                    : cancelled
                     ? "Cancelled after \(done) of \(photos.count) photos in “\(scopeName)” — \(found) suggestion\(found == 1 ? "" : "s") so far."
                     : "\(found) suggestion\(found == 1 ? "" : "s") across \(photos.count) photos in “\(scopeName)”"
                         + (examples > 0 ? ", learned from \(examples) confirmed example\(examples == 1 ? "" : "s")" : "")

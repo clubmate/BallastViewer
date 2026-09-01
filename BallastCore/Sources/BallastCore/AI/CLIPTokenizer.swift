@@ -53,6 +53,7 @@ public final class CLIPTokenizer: Sendable {
         let lines = mergesText.split(separator: "\n").map { String($0) }
         var bpeRanks: [BytePair: Int] = [:]
         // First line is the "#version:" header.
+        guard lines.count > 1 else { throw TokenizerError.malformedVocabulary }
         for i in 1 ..< lines.count {
             let tuple = lines[i].split(separator: " ").map { String($0) }
             guard tuple.count == 2 else { continue }
@@ -67,10 +68,14 @@ public final class CLIPTokenizer: Sendable {
         self.endToken = end
     }
 
-    private func byteEncode(text: String) -> [String] {
+    private static let tokenPattern: NSRegularExpression = {
         let pattern =
             "<\\|startoftext\\|>|<\\|endoftext\\|>|'s|'t|'re|'ve|'m|'ll|'d|[\\p{L}]+|[\\p{N}]|[^\\s\\p{L}\\p{N}]+"
-        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        return try! NSRegularExpression(pattern: pattern, options: [])
+    }()
+
+    private func byteEncode(text: String) -> [String] {
+        let regex = Self.tokenPattern
         let matches = regex.matches(
             in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
         let tokens = matches.map { match -> String in
