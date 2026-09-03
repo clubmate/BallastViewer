@@ -27,10 +27,14 @@ final class VLMModelStore {
         case failed(String)
     }
 
-    /// Curated starting points (user decision 2026-09-03: the largest and the
-    /// smallest Qwen3.5 that fit a Mac with 24 GB — anything else by id).
-    /// Sizes are the 4-bit MLX weights on disk.
+    /// Curated starting points (user decision 2026-09-04: the Qwen3.5 sizes
+    /// from 27B down to 2B — anything else by id). Sizes are the 4-bit MLX
+    /// weights on disk.
     nonisolated static let presets: [ModelInfo] = [
+        ModelInfo(
+            id: "mlx-community/Qwen3.5-27B-4bit", title: "Qwen3.5 27B", sizeGB: 16.1,
+            note: "The largest that fits 24 GB — leaves little room for anything else while it runs.", builtIn: true
+        ),
         ModelInfo(
             id: "mlx-community/Qwen3.5-9B-4bit", title: "Qwen3.5 9B", sizeGB: 6.0,
             note: "Best answers — needs 16 GB of memory or more.", builtIn: true
