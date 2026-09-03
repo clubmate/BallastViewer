@@ -15,7 +15,9 @@ final class AutoTagRunner {
         case idle
         /// Weights coming off disk (or off the network on first use).
         case loadingModel(Double)
-        case scanning(done: Int, total: Int, found: Int)
+        /// `remaining` is the time-left estimate in seconds (nil until a
+        /// few photos have been timed).
+        case scanning(done: Int, total: Int, found: Int, remaining: TimeInterval?)
         case failed(String)
     }
 
@@ -111,9 +113,16 @@ final class AutoTagRunner {
                 var unanswered = 0
                 var libraryChanged = false
                 var lastProgress = ContinuousClock.now
-                self?.phase = .scanning(done: 0, total: photos.count, found: 0)
+                // Time-left estimate: an exponential moving average of the
+                // per-photo duration (cache hits count as ~0, so a re-run
+                // over reviewed photos shrinks the estimate fast).
+                var averageSeconds: Double = 0
+                var timed = 0
+                var remaining: TimeInterval?
+                self?.phase = .scanning(done: 0, total: photos.count, found: 0, remaining: nil)
 
                 for photo in photos {
+                    let photoStart = ContinuousClock.now
                     guard !Task.isCancelled, let photoId = photo.id else { break }
                     // The run belongs to ONE library: ids are per-library, so
                     // a switch mid-run ends the scan.
@@ -153,6 +162,11 @@ final class AutoTagRunner {
                         keywordIds.formUnion(VLMAnswerParser.keywordIds(in: parsed))
                     }
                     done += 1
+                    let seconds = Double((ContinuousClock.now - photoStart).components.attoseconds) / 1e18
+                        + Double((ContinuousClock.now - photoStart).components.seconds)
+                    timed += 1
+                    averageSeconds = timed == 1 ? seconds : averageSeconds * 0.85 + seconds * 0.15
+                    remaining = timed >= 3 ? averageSeconds * Double(photos.count - done) : nil
                     let skip = (confirmedByPhoto[photoId] ?? []).union(pendingByPhoto[photoId] ?? [])
                     let pairs = keywordIds.subtracting(skip)
                         .map { PhotoKeywordPair(photoId: photoId, keywordId: $0) }
@@ -164,7 +178,7 @@ final class AutoTagRunner {
                     let now = ContinuousClock.now
                     if now - lastProgress >= Self.progressInterval {
                         lastProgress = now
-                        self?.phase = .scanning(done: done, total: photos.count, found: found)
+                        self?.phase = .scanning(done: done, total: photos.count, found: found, remaining: remaining)
                     }
                 }
                 let cancelled = Task.isCancelled

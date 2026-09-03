@@ -52,6 +52,17 @@ struct AutoTagStatusSection: View {
         .padding(.vertical, 6)
     }
 
+    /// "about 12 min left" — coarse on purpose: per-photo times vary with
+    /// cache hits and thinking, a seconds-precise figure would only twitch.
+    static func timeLeft(_ seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded(.up))
+        if seconds < 45 { return "less than a minute left" }
+        if minutes < 60 { return "about \(minutes) min left" }
+        let hours = minutes / 60
+        let rest = minutes % 60
+        return rest == 0 ? "about \(hours) h left" : "about \(hours) h \(rest) min left"
+    }
+
     @ViewBuilder
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -62,12 +73,17 @@ struct AutoTagStatusSection: View {
                 Text("Loading the model…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            case .scanning(let done, let total, let found):
+            case .scanning(let done, let total, let found, let remaining):
                 ProgressView(value: Double(done), total: Double(max(1, total)))
                     .progressViewStyle(.linear)
                 Text("\(done) of \(total) photos — \(found) suggestion\(found == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let remaining {
+                    Text(Self.timeLeft(remaining))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             case .failed(let message):
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
