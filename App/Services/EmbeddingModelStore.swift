@@ -199,18 +199,36 @@ final class EmbeddingModelStore {
         var sha256: String?
     }
 
+    /// Refuses HTTP redirects so a HEAD returns the repository's own 302/307
+    /// instead of the CDN's final answer. Only that first hop carries
+    /// `X-Linked-Etag` (the file's SHA-256) and `X-Linked-Size`; the Xet CDN
+    /// Hugging Face redirects to answers with its OWN content hash as `ETag`
+    /// — also 64 hex digits, but not a SHA-256 of the bytes, so trusting it
+    /// rejected every intact download as "corrupted".
+    private final class StopAtRedirect: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(
+            _ session: URLSession, task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+            completionHandler: @escaping @Sendable (URLRequest?) -> Void
+        ) {
+            completionHandler(nil)
+        }
+    }
+
     nonisolated private static func remoteInfo(of url: URL) async throws -> RemoteFile {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+        let (_, response) = try await URLSession.shared.data(for: request, delegate: StopAtRedirect())
+        guard let http = response as? HTTPURLResponse, (200...399).contains(http.statusCode) else {
             throw ModelError("A model file was not reachable: \(url.lastPathComponent)")
         }
         let etag = (http.value(forHTTPHeaderField: "X-Linked-Etag") ?? http.value(forHTTPHeaderField: "ETag") ?? "")
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"W/ "))
             .lowercased()
         let isSHA256 = etag.count == 64 && etag.allSatisfy(\.isHexDigit)
-        return RemoteFile(size: max(0, http.expectedContentLength), sha256: isSHA256 ? etag : nil)
+        let linkedSize = http.value(forHTTPHeaderField: "X-Linked-Size").flatMap { Int64($0) }
+        let size = linkedSize ?? (http.statusCode == 200 ? http.expectedContentLength : 0)
+        return RemoteFile(size: max(0, size), sha256: isSHA256 ? etag : nil)
     }
 
     /// Streams one file to disk, reporting cumulative bytes on the MainActor
