@@ -20,6 +20,20 @@ public struct KeywordScoringSpec: Sendable {
     /// each as its own variant — the text score is the BEST variant, because
     /// one embedding of an "or" sentence is a washed-out average of both.
     public var textEmbeddings: [[Float]]
+    /// Embedding of the neutral caption "a photo" — the per-photo floor the
+    /// text score is measured FROM. A raw CLIP cosine says how well a caption
+    /// describes the whole picture, and that floor differs per photo and per
+    /// prompt: a generic prompt like "a photo of a man" reaches only ≈ 0.15
+    /// on a clean portrait and ≈ 0.05 on a team photo of eleven men, while
+    /// "a photo of text" sits at ≈ 0.11 on photos WITHOUT any text. No single
+    /// absolute threshold separates matches from non-matches across prompts
+    /// (measured 2026-09-03 on 33 real photos). Subtracting the same photo's
+    /// cosine to "a photo" removes the per-photo part: 0 means "fits no
+    /// better than a plain photo", and one threshold near 0.02 then holds for
+    /// generic and specific prompts alike (portraits of women ≥ +0.023 with
+    /// "a woman", dogs/beaches ≤ +0.011 on the same set, an airplane +0.13).
+    /// Nil keeps the raw cosine (pinned by tests; the app always sets it).
+    public var neutralEmbedding: [Float]?
     /// Mean embedding of confirmed example photos, L2-normalized (Stage 4).
     public var prototypeEmbedding: [Float]?
     public var exampleCount: Int
@@ -47,6 +61,7 @@ public struct KeywordScoringSpec: Sendable {
     public init(
         keywordId: Int64,
         textEmbeddings: [[Float]],
+        neutralEmbedding: [Float]? = nil,
         prototypeEmbedding: [Float]? = nil,
         exampleCount: Int = 0,
         prototypeBaseline: Float = 0,
@@ -55,6 +70,7 @@ public struct KeywordScoringSpec: Sendable {
     ) {
         self.keywordId = keywordId
         self.textEmbeddings = textEmbeddings
+        self.neutralEmbedding = neutralEmbedding
         self.prototypeEmbedding = prototypeEmbedding
         self.exampleCount = exampleCount
         self.prototypeBaseline = prototypeBaseline
@@ -121,17 +137,40 @@ public enum SuggestionEngine {
         return EmbeddingMath.cosine(photo, prototype) - spec.prototypeBaseline
     }
 
-    /// Score of one photo against one keyword spec: best prompt variant,
-    /// blended with the library-relative prototype excess when examples exist.
-    public static func score(photo: [Float], spec: KeywordScoringSpec) -> Float {
-        let textScore = spec.textEmbeddings
+    /// The neutral caption every text score is measured against — see
+    /// `KeywordScoringSpec.neutralEmbedding`. The app embeds it once per run.
+    public static let neutralPrompt = "a photo"
+
+    /// The text side of the score: the best prompt variant's cosine, minus
+    /// the photo's cosine to the neutral caption when the spec carries it
+    /// (raw otherwise). 0 = "no better than a plain photo".
+    public static func textScore(photo: [Float], spec: KeywordScoringSpec) -> Float {
+        let best = spec.textEmbeddings
             .map { EmbeddingMath.cosine(photo, $0) }
             .max() ?? 0
+        guard let neutral = spec.neutralEmbedding, !spec.textEmbeddings.isEmpty else { return best }
+        return best - EmbeddingMath.cosine(photo, neutral)
+    }
+
+    /// Brings the prototype excess onto the text-contrast scale before the
+    /// blend. Image-image similarity spreads ≈ 10× wider than text-image
+    /// contrast: measured 2026-09-03 on 33 real photos, held-out portraits
+    /// scored excess +0.41…+0.56 against a prototype of 2–4 sister portraits
+    /// where their text contrast was +0.02…+0.05, and non-matches ≤ +0.02
+    /// versus ≤ +0.01. Without the factor the prototype term alone would
+    /// carry any look-alike far past a threshold of 0.02.
+    public static let prototypeExcessScale: Float = 0.1
+
+    /// Score of one photo against one keyword spec: the text score, blended
+    /// with the (rescaled) library-relative prototype excess when examples
+    /// exist.
+    public static func score(photo: [Float], spec: KeywordScoringSpec) -> Float {
+        let textScore = textScore(photo: photo, spec: spec)
         guard let excess = prototypeExcess(photo: photo, spec: spec) else {
             return textScore
         }
         let alpha = textWeight(exampleCount: spec.exampleCount)
-        return alpha * textScore + (1 - alpha) * excess
+        return alpha * textScore + (1 - alpha) * excess * prototypeExcessScale
     }
 
     /// A rejected look-alike must be at least this similar before it can veto

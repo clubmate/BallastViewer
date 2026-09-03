@@ -663,8 +663,9 @@ enum TestHooks {
                 var otherText: [Float] = [], otherRaw: [Float] = [], otherExcess: [Float] = [], otherBlend: [Float] = []
                 var rejectedBlend: [Float] = []
                 var vetoedOverThreshold = 0
+                var hits: [(score: Float, name: String)] = []
                 for (photoId, vector) in vectors {
-                    let text = spec.textEmbeddings.map { EmbeddingMath.cosine(vector, $0) }.max() ?? 0
+                    let text = SuggestionEngine.textScore(photo: vector, spec: spec)
                     let raw = spec.prototypeEmbedding.map { EmbeddingMath.cosine(vector, $0) } ?? 0
                     let excess = SuggestionEngine.prototypeExcess(photo: vector, spec: spec) ?? 0
                     let blend = SuggestionEngine.score(photo: vector, spec: spec)
@@ -678,6 +679,9 @@ enum TestHooks {
                         otherText.append(text); otherRaw.append(raw); otherExcess.append(excess); otherBlend.append(blend)
                         if blend >= threshold, SuggestionEngine.isVetoed(photo: vector, spec: spec) {
                             vetoedOverThreshold += 1
+                        }
+                        if blend >= threshold, let photo = snapshot.photos.first(where: { $0.id == photoId }) {
+                            hits.append((blend, (photo.path as NSString).lastPathComponent))
                         }
                     }
                 }
@@ -695,6 +699,12 @@ enum TestHooks {
                 print("BVAISCORES [\(path)] others   " + line("blend ", otherBlend) + " vetoed=\(vetoedOverThreshold)")
                 if !rejectedBlend.isEmpty {
                     print("BVAISCORES [\(path)] rejected " + line("blend ", rejectedBlend) + " (\(rejectedBlend.count) tombstones, never re-suggested)")
+                }
+                // What a run would suggest, strongest first (capped — the
+                // distribution lines above are the measure, this is the
+                // eyeball check on a small library).
+                for hit in hits.sorted { $0.score > $1.score }.prefix(25) {
+                    print("BVAISCORES [\(path)] hit \(String(format: "%.3f", hit.score)) \(hit.name)")
                 }
             }
         } catch {

@@ -141,6 +141,9 @@ final class SuggestionRunner {
         let described = snapshot.keywordTree.allRecords
             .filter { $0.aiDescription != nil && $0.id != nil }
         guard !described.isEmpty else { return [] }
+        // Every text score is measured from the same neutral caption (see
+        // `KeywordScoringSpec.neutralEmbedding`) — embedded once per run.
+        let neutral = try await service.textEmbedding(SuggestionEngine.neutralPrompt)
         // Learning off (Settings ▸ AI, the default): pure text scoring — no
         // carriers, no prototypes, no library sample. Scores then depend on
         // the prompt alone and stay identical from run to run.
@@ -154,7 +157,9 @@ final class SuggestionRunner {
                 }
                 specs.append((
                     path: snapshot.keywordTree.path(of: record.id!),
-                    spec: KeywordScoringSpec(keywordId: record.id!, textEmbeddings: textEmbeddings)
+                    spec: KeywordScoringSpec(
+                        keywordId: record.id!, textEmbeddings: textEmbeddings, neutralEmbedding: neutral
+                    )
                 ))
             }
             return specs
@@ -239,6 +244,7 @@ final class SuggestionRunner {
                 spec: KeywordScoringSpec(
                     keywordId: keywordId,
                     textEmbeddings: textEmbeddings,
+                    neutralEmbedding: neutral,
                     prototypeEmbedding: prototype,
                     exampleCount: exampleEmbeddings.count,
                     prototypeBaseline: prototype.map {

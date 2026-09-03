@@ -9,10 +9,18 @@ import SwiftUI
 /// Everything runs on-device; nothing leaves the machine except the one-time
 /// model download.
 struct AISettingsView: View {
-    static let defaultThreshold = 0.25
+    /// Threshold on the CONTRAST score (text cosine minus the photo's cosine
+    /// to "a photo", see `KeywordScoringSpec.neutralEmbedding`): 0 = fits no
+    /// better than a plain photo. Measured 2026-09-03 on real photos: women's
+    /// portraits ≥ 0.023 for "a woman", non-matches ≤ 0.011, specific prompts
+    /// 0.1–0.2 — 0.02 keeps the generic case while dogs/beaches stay out.
+    static let defaultThreshold = 0.02
+    static let thresholdRange = 0.0 ... 0.15
     /// UserDefaults key of the match threshold — shared with the sidebar
-    /// (run start) and the score diagnostic hook.
-    static let thresholdKey = "aiSuggestionThreshold"
+    /// (run start) and the score diagnostic hook. Renamed with the scale
+    /// change (the old `aiSuggestionThreshold` held raw-cosine values,
+    /// 0.15–0.40, which would find nothing on the contrast scale).
+    static let thresholdKey = "aiMatchThreshold"
     /// UserDefaults key of the prototype-learning switch. OFF by default
     /// (user decision 2026-09-02): text-only scoring is predictable — the
     /// same prompt scores the same today and in a month, and a bad match is
@@ -77,14 +85,14 @@ struct AISettingsView: View {
     private var thresholdSection: some View {
         Section("Sensitivity") {
             HStack(spacing: 12) {
-                Slider(value: $threshold, in: 0.15 ... 0.40) {
-                    Text("Match Threshold: \(threshold, format: .number.precision(.fractionLength(2)))")
+                Slider(value: $threshold, in: Self.thresholdRange, step: 0.005) {
+                    Text("Match Margin: \(threshold, format: .number.precision(.fractionLength(3)))")
                 }
                 Button("Reset") { threshold = Self.defaultThreshold }
-                    .disabled(abs(threshold - Self.defaultThreshold) < 0.001)
-                    .help("Back to the default (\(Self.defaultThreshold, format: .number.precision(.fractionLength(2))))")
+                    .disabled(abs(threshold - Self.defaultThreshold) < 0.0005)
+                    .help("Back to the default (\(Self.defaultThreshold, format: .number.precision(.fractionLength(3))))")
             }
-            Text("Lower finds more photos (more mistakes), higher finds fewer (more precise).")
+            Text("A photo matches when your description fits it at least this much better than the plain caption “a photo”. 0 suggests everything that fits even slightly better; lower finds more photos (more mistakes), higher finds fewer (more precise).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -144,7 +152,7 @@ struct AISettingsView: View {
         } header: {
             Text("Auto-Tagging Keywords (\(describedRows.count))")
         } footer: {
-            Text("Describe in ENGLISH what a matching photo shows, caption-style: “a person using a phone”. Separate independent looks of the SAME keyword with | — “a person using a phone | a red car” matches either. Then right-click a smart collection (or ALL PHOTOS) in the sidebar and choose Auto-Tag Photos.")
+            Text("Describe in ENGLISH what a matching photo shows as a whole, caption-style: “a person using a phone”. The AI reads a prompt as a caption for the entire picture, so “a man” fits a portrait but not a team photo — add the other looks with |: “a man | a group of men” matches either. Then right-click a smart collection (or ALL PHOTOS) in the sidebar and choose Auto-Tag Photos.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

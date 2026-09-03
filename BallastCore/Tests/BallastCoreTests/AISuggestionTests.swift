@@ -112,6 +112,26 @@ import Testing
         #expect(SuggestionEngine.score(photo: [1, 0], spec: empty) == 0)
     }
 
+    @Test func textScoreIsMeasuredFromTheNeutralCaption() {
+        // Photo halfway between the prompt and the neutral caption: the raw
+        // cosine to the prompt is 0.7071, but it fits "a photo" just as well,
+        // so the contrast score is 0 — "no better than a plain photo".
+        let photo = EmbeddingMath.l2Normalized([1, 1])
+        let spec = KeywordScoringSpec(keywordId: 10, textEmbeddings: [[1, 0]], neutralEmbedding: [0, 1])
+        #expect(abs(SuggestionEngine.textScore(photo: photo, spec: spec)) < 1e-6)
+        #expect(abs(SuggestionEngine.score(photo: photo, spec: spec)) < 1e-6)
+        // A photo ON the prompt: 1 − 0.
+        #expect(abs(SuggestionEngine.score(photo: [1, 0], spec: spec) - 1) < 1e-6)
+        // A photo that fits the neutral caption better goes negative.
+        #expect(SuggestionEngine.score(photo: [0, 1], spec: spec) < 0)
+        // Without a neutral embedding the raw cosine stands.
+        let raw = KeywordScoringSpec(keywordId: 10, textEmbeddings: [[1, 0]])
+        #expect(abs(SuggestionEngine.score(photo: photo, spec: raw) - 0.7071) < 1e-3)
+        // Variants: the best variant is contrasted, not each one.
+        let two = KeywordScoringSpec(keywordId: 10, textEmbeddings: [[0, -1], [1, 0]], neutralEmbedding: [0, 1])
+        #expect(abs(SuggestionEngine.score(photo: photo, spec: two)) < 1e-6)
+    }
+
     @Test func promptVariantsSplitOnPipe() {
         #expect(SuggestionEngine.promptVariants("a person using a phone | a red car")
             == ["a person using a phone", "a red car"])
@@ -133,7 +153,7 @@ import Testing
 
     @Test func prototypeBlendsInWithExampleCount() {
         // Stage 4 contract, pinned now: α = k/(k+n) with k = 8. Eight examples
-        // → 50/50 blend of description and prototype similarity.
+        // → 50/50 blend of description and (rescaled) prototype similarity.
         let spec = KeywordScoringSpec(
             keywordId: 10,
             textEmbeddings: [[1, 0]],
@@ -142,6 +162,9 @@ import Testing
         )
         let score = SuggestionEngine.score(photo: [1, 0], spec: spec)
         #expect(abs(score - 0.5) < 1e-6)
+        // A photo ON the prototype: text 0, excess 1 → 0.5 × 1 × 0.1.
+        let onPrototype = SuggestionEngine.score(photo: [0, 1], spec: spec)
+        #expect(abs(onPrototype - 0.5 * SuggestionEngine.prototypeExcessScale) < 1e-6)
         // Without examples the prototype is ignored even if present.
         var textOnly = spec
         textOnly.exampleCount = 0
@@ -171,10 +194,12 @@ import Testing
         let average: [Float] = [0.7071, 0.7071]
         #expect(abs(SuggestionEngine.prototypeExcess(photo: average, spec: spec)!) < 1e-3)
         #expect(abs(SuggestionEngine.score(photo: average, spec: spec) - 0.5 * 0.7071) < 1e-3)
-        // A photo like the examples: excess 1 − 0.707 ≈ 0.293.
+        // A photo like the examples: excess 1 − 0.707 ≈ 0.293, entering the
+        // blend rescaled to the text-contrast scale.
         let example: [Float] = [0, 1]
         #expect(abs(SuggestionEngine.prototypeExcess(photo: example, spec: spec)! - 0.2929) < 1e-3)
-        #expect(abs(SuggestionEngine.score(photo: example, spec: spec) - 0.5 * 0.2929) < 1e-3)
+        let scale = SuggestionEngine.prototypeExcessScale
+        #expect(abs(SuggestionEngine.score(photo: example, spec: spec) - 0.5 * 0.2929 * scale) < 1e-3)
         // No sample → baseline 0 → the raw cosine (old behaviour).
         #expect(SuggestionEngine.prototypeBaseline(prototype: prototype, sample: []) == 0)
         // No examples → no excess at all.
