@@ -24,6 +24,7 @@ struct AIProfileEditor: View {
             let id = UUID()
             var value: String
             var keywordId: Int64?
+            var stopsProfile: Bool
         }
     }
 
@@ -33,16 +34,11 @@ struct AIProfileEditor: View {
         _questions = State(initialValue: profile.questions.map { question in
             Draft.Question(
                 text: question.text,
-                answers: question.answers.map { Draft.Answer(value: $0.value, keywordId: $0.keywordId) }
+                answers: question.answers.map {
+                    Draft.Answer(value: $0.value, keywordId: $0.keywordId, stopsProfile: $0.stopsProfile)
+                }
             )
         })
-    }
-
-    /// Every keyword of the library, tree order, full paths — the mapping
-    /// target of an answer.
-    private var keywords: [(id: Int64, path: String)] {
-        guard let tree = controller.snapshot?.keywordTree else { return [] }
-        return tree.allIdsDepthFirst().map { ($0, tree.path(of: $0)) }
     }
 
     var body: some View {
@@ -64,14 +60,14 @@ struct AIProfileEditor: View {
                         questionEditor($question)
                     }
                     Button {
-                        questions.append(Draft.Question(text: "", answers: [Draft.Answer(value: "", keywordId: nil)]))
+                        questions.append(Draft.Question(text: "", answers: [Draft.Answer(value: "", keywordId: nil, stopsProfile: false)]))
                     } label: {
                         Label("Add Question", systemImage: "plus")
                     }
                 } header: {
                     Text("Questions")
                 } footer: {
-                    Text("Ask in ENGLISH. The model must pick exactly one answer per question, so give every question an answer that assigns nothing (“none”, “unsure”) for photos the question does not apply to. Answers are short lowercase words.")
+                    Text("Ask in ENGLISH. The model must pick exactly one answer per question, so give every question an answer that assigns nothing (“none”, “unsure”) for photos the question does not apply to. Answers are short lowercase words. “Ends” on an answer stops the questionnaire for that photo — “no person” makes gender or age moot.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -117,14 +113,12 @@ struct AIProfileEditor: View {
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 170)
-                    Picker("", selection: $answer.keywordId) {
-                        Text("No keyword").tag(Int64?.none)
-                        ForEach(keywords, id: \.id) { keyword in
-                            Text(keyword.path).tag(Int64?.some(keyword.id))
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    KeywordPathField(keywordId: $answer.keywordId)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Toggle("Ends", isOn: $answer.stopsProfile)
+                        .toggleStyle(.checkbox)
+                        .controlSize(.small)
+                        .help("When chosen, the remaining questions of this profile assign nothing for the photo (e.g. “no person”)")
                     Button {
                         question.wrappedValue.answers.removeAll { $0.id == answer.id }
                     } label: {
@@ -135,7 +129,7 @@ struct AIProfileEditor: View {
                 }
             }
             Button {
-                question.wrappedValue.answers.append(Draft.Answer(value: "", keywordId: nil))
+                question.wrappedValue.answers.append(Draft.Answer(value: "", keywordId: nil, stopsProfile: false))
             } label: {
                 Label("Add Answer", systemImage: "plus")
             }
@@ -152,9 +146,13 @@ struct AIProfileEditor: View {
         if questions.isEmpty { return "Add at least one question." }
         for question in questions {
             if question.text.trimmingCharacters(in: .whitespaces).isEmpty { return "Every question needs text." }
+            if question.text.contains("\"") { return "Questions cannot contain double quotes." }
             let values = question.answers.map { $0.value.trimmingCharacters(in: .whitespaces).lowercased() }
             if values.count < 2 { return "Every question needs at least two answers." }
             if values.contains("") { return "Every answer needs a value." }
+            if values.contains(where: { $0.contains("\"") || $0.contains("|") }) {
+                return "Answers cannot contain double quotes or |."
+            }
             if Set(values).count != values.count { return "Answers of one question must differ." }
         }
         return nil
@@ -173,7 +171,8 @@ struct AIProfileEditor: View {
                         AIAnswerRecord(
                             questionId: 0,
                             value: $0.value.trimmingCharacters(in: .whitespaces).lowercased(),
-                            keywordId: $0.keywordId
+                            keywordId: $0.keywordId,
+                            stopsProfile: $0.stopsProfile
                         )
                     }
                 )

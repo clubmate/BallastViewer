@@ -590,6 +590,14 @@ enum TestHooks {
     private static func runVLMChecks(
         _ controller: LibraryController, models: VLMModelStore, runner: AutoTagRunner, count: Int
     ) async {
+        // Never on the last-opened library: this hook creates keywords and
+        // pending suggestions, so it insists on an explicit test library.
+        guard ProcessInfo.processInfo.environment["BV_TEST_OPEN"] != nil
+            || ProcessInfo.processInfo.environment["BV_TEST_CREATE"] != nil
+        else {
+            print("BVVLM error=needs-BV_TEST_OPEN (refusing to run on the last-opened library)")
+            return
+        }
         var waited = 0
         while controller.snapshot == nil, waited < 600 {
             try? await Task.sleep(for: .milliseconds(50))
@@ -598,6 +606,13 @@ enum TestHooks {
         guard let snapshot = controller.snapshot else {
             print("BVVLM error=no-library")
             return
+        }
+        // The run reads the real defaults; put them back afterwards.
+        let savedThinking = UserDefaults.standard.object(forKey: AISettingsView.thinkingKey)
+        let savedFullRes = UserDefaults.standard.object(forKey: AISettingsView.fullResolutionKey)
+        defer {
+            UserDefaults.standard.set(savedThinking, forKey: AISettingsView.thinkingKey)
+            UserDefaults.standard.set(savedFullRes, forKey: AISettingsView.fullResolutionKey)
         }
         if let override = ProcessInfo.processInfo.environment["BV_TEST_VLM_MODEL"] {
             models.selectedId = override

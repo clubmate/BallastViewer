@@ -10,7 +10,25 @@ actor AIAnswerStore {
     private let dbQueue: DatabaseQueue
 
     nonisolated static func open(libraryUUID: String) async throws -> AIAnswerStore {
-        try AIAnswerStore(libraryUUID: libraryUUID)
+        // Directory creation + CREATE TABLE are disk I/O — off the caller's
+        // executor (the run starts on the MainActor).
+        try await Task.detached(priority: .utility) { try AIAnswerStore(libraryUUID: libraryUUID) }.value
+    }
+
+    /// The metadata write-through rewrites the image file (metadata only,
+    /// pixels untouched) and thereby bumps its mtime — the cached replies
+    /// are still valid, so their key follows the file instead of expiring.
+    nonisolated static func fileRewritten(paths: [String], libraryUUID: String) async {
+        guard let store = try? await open(libraryUUID: libraryUUID) else { return }
+        for path in paths {
+            try? await store.rekey(path: path, mtime: mtime(of: path))
+        }
+    }
+
+    func rekey(path: String, mtime: Int) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE reply SET mtime = ? WHERE path = ?", arguments: [mtime, path])
+        }
     }
 
     private init(libraryUUID: String) throws {

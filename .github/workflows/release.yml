@@ -29,8 +29,9 @@ jobs:
 
       - name: Metal toolchain
         # U49: MLX compiles Metal shaders at build time; Xcode 26 ships the
-        # Metal compiler as a separate component. No-op when present.
-        run: xcodebuild -downloadComponent MetalToolchain || true
+        # Metal compiler as a separate component. No-op when present; a
+        # failure here must fail the build visibly, not later and cryptically.
+        run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Version from commit count
         id: version

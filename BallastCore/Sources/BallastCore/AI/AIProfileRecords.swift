@@ -66,13 +66,21 @@ public struct AIAnswerRecord: Codable, Hashable, Sendable, FetchableRecord, Muta
     /// The literal the model answers with — short, lowercase English.
     public var value: String
     public var keywordId: Int64?
+    /// Chosen → the profile's LATER questions assign nothing for this photo.
+    /// "How many people? none" makes gender/age/angle moot; without the gate
+    /// a small model happily answers "female" for an empty beach.
+    public var stopsProfile: Bool
 
-    public init(id: Int64? = nil, questionId: Int64, position: Int = 0, value: String, keywordId: Int64? = nil) {
+    public init(
+        id: Int64? = nil, questionId: Int64, position: Int = 0, value: String,
+        keywordId: Int64? = nil, stopsProfile: Bool = false
+    ) {
         self.id = id
         self.questionId = questionId
         self.position = position
         self.value = value
         self.keywordId = keywordId
+        self.stopsProfile = stopsProfile
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
@@ -134,19 +142,22 @@ public struct AIProfile: Hashable, Sendable {
     /// The starter questionnaire offered on an empty AI tab (keywords left
     /// unmapped — the user connects answers to their own keyword tree).
     public static func starter() -> AIProfile {
-        func question(_ text: String, _ values: [String]) -> AIQuestion {
+        func question(_ text: String, _ values: [String], stop: String? = nil) -> AIQuestion {
             AIQuestion(
                 record: AIQuestionRecord(profileId: 0, text: text),
-                answers: values.map { AIAnswerRecord(questionId: 0, value: $0) }
+                answers: values.map { AIAnswerRecord(questionId: 0, value: $0, stopsProfile: $0 == stop) }
             )
         }
+        // One axis per question ("face cut off" is a framing fact, not an
+        // angle); "none" on the headcount ends the questionnaire.
         return AIProfile(
             record: AIProfileRecord(name: "People", instructions: defaultInstructions),
             questions: [
-                question("How many people are the subject of the photo?", ["none", "one", "two", "three", "group"]),
-                question("What is the gender of the main person or people?", ["female", "male", "mixed", "none"]),
-                question("How old are the main person or people?", ["child", "young", "adult", "senior", "mixed", "none"]),
-                question("From which side is the main person photographed?", ["front", "side", "back", "face cut off", "none"]),
+                question("How many people are the subject of the photo?", ["none", "one", "two", "three", "group"], stop: "none"),
+                question("What is the gender of the main person or people?", ["female", "male", "mixed"]),
+                question("How old are the main person or people?", ["child", "young", "adult", "senior", "mixed"]),
+                question("From which side is the main person photographed?", ["front", "side", "back"]),
+                question("Is the face of the main person cut off by the edge of the frame?", ["no", "yes"]),
                 question("What is the lighting or weather of the scene?", ["sunny", "cloudy", "shade", "indoor", "night"]),
             ]
         )

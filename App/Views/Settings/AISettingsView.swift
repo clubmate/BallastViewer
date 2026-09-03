@@ -31,6 +31,8 @@ struct AISettingsView: View {
     @State private var customRepo = ""
     @State private var editing: AIProfile?
     @State private var pendingDeletion: AIProfile?
+    @State private var pendingModelRemoval: VLMModelStore.ModelInfo?
+    @State private var importNote: String?
 
     var body: some View {
         Form {
@@ -55,6 +57,16 @@ struct AISettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { profile in
             Text("“\(profile.name)” and its questions are removed. Suggestions already made stay.")
+        }
+        .alert(
+            "Remove Model Files",
+            isPresented: Binding(get: { pendingModelRemoval != nil }, set: { if !$0 { pendingModelRemoval = nil } }),
+            presenting: pendingModelRemoval
+        ) { model in
+            Button("Remove", role: .destructive) { models.remove(model.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { model in
+            Text("Deletes “\(model.title)” (\(model.sizeGB.map { "\($0) GB" } ?? "the weights")) from the shared Hugging Face cache. Other tools using that cache lose it too; it can be downloaded again any time.")
         }
         .onAppear { models.refreshStates() }
     }
@@ -109,6 +121,10 @@ struct AISettingsView: View {
                     }
                 }
                 Text(model.note).font(.caption).foregroundStyle(.secondary)
+                if let warning = VLMModelStore.memoryNote(for: model) {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 Text(model.id).font(.caption2).foregroundStyle(.tertiary).textSelection(.enabled)
             }
             Spacer(minLength: 8)
@@ -129,15 +145,19 @@ struct AISettingsView: View {
                 }
             }
         case .downloading(let fraction):
-            VStack(alignment: .trailing, spacing: 2) {
-                ProgressView(value: fraction, total: 1).frame(width: 120)
-                Text("\(Int(fraction * 100)) %").font(.caption2).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                VStack(alignment: .trailing, spacing: 2) {
+                    ProgressView(value: fraction, total: 1).frame(width: 120)
+                    Text("\(Int(fraction * 100)) %").font(.caption2).foregroundStyle(.secondary)
+                }
+                Button("Cancel") { models.cancelDownload(model.id) }
+                    .controlSize(.small)
             }
         case .ready:
             HStack(spacing: 6) {
                 Label("Downloaded", systemImage: "checkmark.circle.fill")
                     .font(.caption).foregroundStyle(.green)
-                Button("Remove") { models.remove(model.id) }
+                Button("Remove") { pendingModelRemoval = model }
                     .disabled(runner.isRunning)
                     .help("Delete the model files from disk")
             }
@@ -176,7 +196,7 @@ struct AISettingsView: View {
             Text("Off: the model answers directly (a few seconds per photo). On: it first writes a reasoning trace, then answers — several times slower, sometimes more careful on counting and ambiguous scenes.")
                 .font(.caption).foregroundStyle(.secondary)
             Toggle("Send photos at full resolution", isOn: $fullResolution)
-            Text("Off: photos are sent at 768 px on the long edge — enough for faces, headcounts and scenes. On: the decoded original goes in (up to 16 MP); slower and more memory, helps only with small details.")
+            Text("Off: photos are sent at 768 px on the long edge — enough for faces, headcounts and scenes. On: the decoded original goes in (the library holds previews up to about 2K); slower and more memory, helps only with small details.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: {
             Text("Prompt & Run")
@@ -212,9 +232,14 @@ struct AISettingsView: View {
                 Button("Add Example Profile (People)") {
                     editing = AIProfile.starter()
                 }
-                .help("Five questions — people count, gender, age, angle, weather — with the keywords still to be mapped")
+                .help("Six questions — people count, gender, age, angle, face cut off, lighting — with the keywords still to be mapped")
+                Button("Import…") { importProfile() }
+                    .help("Load a profile exported from another library; keyword paths that do not exist here stay unmapped")
             }
             .disabled(controller.snapshot == nil)
+            if let importNote {
+                Text(importNote).font(.caption).foregroundStyle(.secondary)
+            }
         } header: {
             Text("Auto-Tagging Profiles (\(profiles.count))")
         } footer: {
@@ -239,6 +264,8 @@ struct AISettingsView: View {
                 Text(profileSummary(profile)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
+            Button("Export…") { exportProfile(profile) }
+                .help("Save the questionnaire as JSON (keywords by path) to reuse in another library")
             Button("Edit…") { editing = profile }
                 .disabled(runner.isRunning)
             Button {
@@ -253,6 +280,37 @@ struct AISettingsView: View {
         .padding(.vertical, 2)
     }
 
+    private func exportProfile(_ profile: AIProfile) {
+        guard let tree = controller.snapshot?.keywordTree else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "\(profile.name).ballastprofile.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try AIProfileExport(profile: profile, tree: tree).encoded().write(to: url, options: .atomic)
+        } catch {
+            controller.errorMessage = "Could not export the profile: \(error.localizedDescription)"
+        }
+    }
+
+    private func importProfile() {
+        guard let tree = controller.snapshot?.keywordTree else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let document = try AIProfileExport.decode(try Data(contentsOf: url))
+            let resolved = document.resolved(in: tree)
+            editing = resolved.profile
+            importNote = resolved.unresolvedPaths.isEmpty
+                ? nil
+                : "Not in this library, left unmapped: \(resolved.unresolvedPaths.joined(separator: ", "))"
+        } catch {
+            controller.errorMessage = "Could not read the profile: \(error.localizedDescription)"
+        }
+    }
+
     private func profileSummary(_ profile: AIProfile) -> String {
         let questions = profile.questions.count
         let mapped = profile.questions.flatMap(\.answers).filter { $0.keywordId != nil }.count
@@ -262,7 +320,6 @@ struct AISettingsView: View {
     }
 }
 
-extension AIProfile: Identifiable {
-    /// Unsaved drafts (id nil) still need an identity for the sheet.
-    public var identity: String { id.map(String.init) ?? "draft-\(name)" }
-}
+/// `id: Int64?` serves as the identity; unsaved drafts share nil, which is
+/// fine for one sheet at a time.
+extension AIProfile: Identifiable {}

@@ -11,11 +11,19 @@ public enum VLMPrompt {
     public static let systemPrompt =
         "You are a photo cataloguing assistant. Look at the photo and answer every question by choosing exactly one of the allowed answers. Answer with a single JSON object and nothing else."
 
+    /// Bumped whenever the rendered prompt TEMPLATE changes (wording around
+    /// the questions, the return shape) so cached replies from the old
+    /// template are not mistaken for answers to the new one.
+    public static let promptVersion = 2
+
     /// Fingerprint of the run settings that change a reply without touching
-    /// the profile — system prompt, thinking, image resolution. Combined
-    /// with `questionnaireHash` for the reply-cache key.
+    /// the profile — system prompt, thinking, image resolution, template
+    /// version. Combined with `questionnaireHash` for the reply-cache key.
     public static func settingsHash(systemPrompt: String, thinking: Bool, fullResolution: Bool) -> String {
-        FNV1a.hex([systemPrompt, thinking ? "think" : "direct", fullResolution ? "full" : "768"].joined(separator: "\u{1E}"))
+        FNV1a.hex(
+            [systemPrompt, thinking ? "think" : "direct", fullResolution ? "full" : "768", "v\(promptVersion)"]
+                .joined(separator: "\u{1E}")
+        )
     }
 
     /// JSON key of the question at `index` (0-based) — "q1", "q2", ….
@@ -34,10 +42,14 @@ public enum VLMPrompt {
             let values = question.answers.map { "\"\($0.value)\"" }.joined(separator: ", ")
             lines.append("\(index + 1). \"\(key(forQuestionAt: index))\": \(question.text) One of: \(values)")
         }
-        let shape = profile.questions.indices
-            .map { "\"\(key(forQuestionAt: $0))\": ..." }
+        // The allowed values repeat INSIDE the return shape: small models
+        // copy the shape literally, which keeps answers on the list.
+        let shape = profile.questions.enumerated()
+            .map { index, question in
+                "\"\(key(forQuestionAt: index))\": \"\(question.answers.map(\.value).joined(separator: "|"))\""
+            }
             .joined(separator: ", ")
-        lines.append("Return: {\(shape)}")
+        lines.append("Return exactly this shape, one value per key: {\(shape)}")
         return lines.joined(separator: "\n")
     }
 
@@ -61,9 +73,12 @@ public enum VLMPrompt {
 /// "no answer" for that question, never as a guess.
 public enum VLMAnswerParser {
     /// Chosen answer per question id (questions the model skipped or answered
-    /// off-list are absent).
+    /// off-list are absent). A chosen answer with `stopsProfile` ends the
+    /// questionnaire: later questions are dropped even if answered.
     public static func parse(_ reply: String, profile: AIProfile) -> [Int64: AIAnswerRecord] {
-        guard let object = extractObject(from: reply) else { return [:] }
+        guard let object = extractObject(from: reply, keys: profile.questions.indices.map(VLMPrompt.key)) else {
+            return [:]
+        }
         var result: [Int64: AIAnswerRecord] = [:]
         for (index, question) in profile.questions.enumerated() {
             guard let questionId = question.id else { continue }
@@ -77,6 +92,7 @@ public enum VLMAnswerParser {
             }
             if let answer = match(text, in: question.answers) {
                 result[questionId] = answer
+                if answer.stopsProfile { break }
             }
         }
         return result
@@ -88,9 +104,18 @@ public enum VLMAnswerParser {
         Set(parsed.values.compactMap(\.keywordId))
     }
 
+    /// Digits answered for number words ("1" for "one") — small models do.
+    static let numberWords: [String: String] = [
+        "0": "none", "1": "one", "2": "two", "3": "three", "4": "four", "5": "five",
+        "6": "six", "7": "seven", "8": "eight", "9": "nine", "10": "ten",
+    ]
+
     static func match(_ text: String, in answers: [AIAnswerRecord]) -> AIAnswerRecord? {
-        let needle = normalize(text)
+        var needle = normalize(text)
         guard !needle.isEmpty else { return nil }
+        if let word = numberWords[needle], answers.contains(where: { normalize($0.value) == word }) {
+            needle = word
+        }
         if let exact = answers.first(where: { normalize($0.value) == needle }) { return exact }
         // "face cut off" answered as "face_cut_off" or "Face cut-off".
         let squeezed = needle.filter(\.isLetter)
@@ -105,9 +130,11 @@ public enum VLMAnswerParser {
 
     /// The answer object in the reply. A thinking model first writes a
     /// `<think>…</think>` trace (which may itself contain braces), so the
-    /// trace is dropped and the LAST {…} is preferred; a reply whose
-    /// thinking never closed (token budget exhausted) has no answer.
-    static func extractObject(from reply: String) -> [String: Any]? {
+    /// trace is dropped and the LAST {…} carrying one of the expected keys
+    /// is preferred (a nested or unrelated trailing object falls through to
+    /// the outermost span); a reply whose thinking never closed (token
+    /// budget exhausted) has no answer.
+    static func extractObject(from reply: String, keys: [String] = []) -> [String: Any]? {
         var text = reply
         // Qwen's chat template opens the trace in the prompt, so a reply may
         // start mid-thought and carry only the closing tag: everything up to
@@ -119,11 +146,16 @@ public enum VLMAnswerParser {
             return nil
         }
         guard let close = text.lastIndex(of: "}") else { return nil }
-        if let open = text[...close].lastIndex(of: "{"), let object = decode(text[open ... close]) {
+        func carriesAKey(_ object: [String: Any]) -> Bool {
+            keys.isEmpty || keys.contains { object[$0] != nil }
+        }
+        if let open = text[...close].lastIndex(of: "{"), let object = decode(text[open ... close]), carriesAKey(object) {
             return object
         }
-        guard let open = text.firstIndex(of: "{"), open < close else { return nil }
-        return decode(text[open ... close])
+        guard let open = text.firstIndex(of: "{"), open < close, let object = decode(text[open ... close]) else {
+            return nil
+        }
+        return carriesAKey(object) ? object : nil
     }
 
     private static func decode(_ slice: Substring) -> [String: Any]? {

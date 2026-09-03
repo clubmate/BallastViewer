@@ -209,7 +209,9 @@ import Testing
             draft.questions[1].answers[0].keywordId = frau
             let saved = try AIProfileDAO.save(draft, in: db)
             #expect(saved.id != nil)
-            #expect(saved.questions.count == 5)
+            #expect(saved.questions.count == 6)
+            #expect(saved.questions[0].answers[0].stopsProfile == true)
+            #expect(saved.questions[1].answers[0].stopsProfile == false)
             #expect(saved.questions.allSatisfy { $0.id != nil && $0.answers.allSatisfy { $0.id != nil } })
             #expect(saved.questions[1].answers[0].keywordId == frau)
             #expect(saved.keywordIds == [frau])
@@ -217,7 +219,7 @@ import Testing
             let loaded = try AIProfileDAO.fetchAll(db)
             #expect(loaded == [saved])
             // Positions follow array order.
-            #expect(loaded[0].questions.map(\.record.position) == [0, 1, 2, 3, 4])
+            #expect(loaded[0].questions.map(\.record.position) == [0, 1, 2, 3, 4, 5])
             #expect(loaded[0].questions[0].answers.map(\.value) == ["none", "one", "two", "three", "group"])
         }
     }
@@ -228,7 +230,7 @@ import Testing
             let first = try AIProfileDAO.save(profile(named: "A"), in: db)
             var second = try AIProfileDAO.save(profile(named: "B"), in: db)
             let droppedQuestionId = second.questions[4].id!
-            second.questions.removeLast(3)
+            second.questions.removeLast(4)
             second.questions[0].text = "Count the people."
             second.enabled = false
             let resaved = try AIProfileDAO.save(second, in: db)
@@ -284,6 +286,8 @@ import Testing
         try LibrarySchema.migrator.migrate(dbQueue, upTo: "v8-ai-suggestions")
         try dbQueue.write { db in
             try db.execute(sql: "INSERT INTO keyword (name, aiDescription) VALUES ('HANDY', 'a phone')")
+            try db.execute(sql: "INSERT INTO keyword (name, aiDescription) VALUES ('FRAU', 'a woman')")
+            try db.execute(sql: "INSERT INTO keyword (name) VALUES ('OHNE')")
         }
         try LibrarySchema.migrator.migrate(dbQueue)
         try dbQueue.read { db in
@@ -292,8 +296,45 @@ import Testing
             let profiles = try AIProfileDAO.fetchAll(db)
             #expect(keyword?.name == "HANDY")
             #expect(!columns.contains("aiDescription"))
-            #expect(profiles.isEmpty)
+            // The old prompts survive as a disabled reference profile.
+            #expect(profiles.count == 1)
+            #expect(profiles[0].enabled == false)
+            #expect(profiles[0].questions.isEmpty)
+            #expect(profiles[0].instructions.contains("FRAU: a woman"))
+            #expect(profiles[0].instructions.contains("HANDY: a phone"))
+            #expect(!profiles[0].instructions.contains("OHNE"))
         }
+        // A library without any prompt gets no such profile.
+        let empty = try DatabaseQueue()
+        try LibrarySchema.migrator.migrate(empty, upTo: "v8-ai-suggestions")
+        try LibrarySchema.migrator.migrate(empty)
+        #expect(try empty.read { try AIProfileDAO.fetchAll($0).isEmpty })
+    }
+
+    @Test func exportCarriesPathsAndImportResolvesOrLeavesUnmapped() throws {
+        let dbQueue = try makeTestDatabase()
+        let (document, tree) = try dbQueue.write { db -> (AIProfileExport, KeywordTree) in
+            let frau = try KeywordDAO.ensurePath(["PEOPLE", "FRAU"], groupId: nil, in: db)
+            var draft = profile()
+            draft.questions[1].answers[0].keywordId = frau
+            let saved = try AIProfileDAO.save(draft, in: db)
+            let tree = KeywordTree(records: try KeywordDAO.fetchAll(db))
+            return (AIProfileExport(profile: saved, tree: tree), tree)
+        }
+        #expect(document.questions[1].answers[0].keywordPath == "PEOPLE > FRAU")
+        #expect(document.questions[0].answers[0].stopsProfile == true)
+        let roundTrip = try AIProfileExport.decode(try document.encoded())
+        #expect(roundTrip == document)
+
+        // Same library: the path resolves. A foreign path stays unmapped and is reported.
+        var foreign = roundTrip
+        foreign.questions[1].answers[1].keywordPath = "PEOPLE > MANN"
+        let resolved = foreign.resolved(in: tree)
+        #expect(resolved.profile.questions[1].answers[0].keywordId == tree.find(pathComponents: ["PEOPLE", "FRAU"]))
+        #expect(resolved.profile.questions[1].answers[1].keywordId == nil)
+        #expect(resolved.unresolvedPaths == ["PEOPLE > MANN"])
+        #expect(resolved.profile.id == nil)
+        #expect(resolved.profile.questions[0].answers[0].stopsProfile == true)
     }
 
     @Test func promptListsQuestionsWithKeysAndValues() {
@@ -303,8 +344,8 @@ import Testing
         let prompt = VLMPrompt.userPrompt(for: draft)
         #expect(prompt.hasPrefix("Judge by the main subject.\n\n"))
         #expect(prompt.contains("1. \"q1\": How many people are the subject of the photo? One of: \"none\", \"one\", \"two\", \"three\", \"group\""))
-        #expect(prompt.contains("2. \"q2\": What is the gender of the main person or people? One of: \"female\", \"male\", \"mixed\", \"none\""))
-        #expect(prompt.hasSuffix("Return: {\"q1\": ..., \"q2\": ...}"))
+        #expect(prompt.contains("2. \"q2\": What is the gender of the main person or people? One of: \"female\", \"male\", \"mixed\""))
+        #expect(prompt.hasSuffix("Return exactly this shape, one value per key: {\"q1\": \"none|one|two|three|group\", \"q2\": \"female|male|mixed\"}"))
         // Blank instructions leave no leading blank lines.
         draft.instructions = "  "
         #expect(VLMPrompt.userPrompt(for: draft).hasPrefix("Questions"))
@@ -341,18 +382,35 @@ import Testing
         }
     }
 
+    @Test func stopAnswerEndsTheQuestionnaireAndDigitsMatchNumberWords() throws {
+        let (saved, frau, einzel) = try savedProfile()
+        // "none" on the headcount stops the profile: the "female" that a small
+        // model still emits assigns nothing.
+        let stopped = VLMAnswerParser.parse(#"{"q1": "none", "q2": "female", "q3": "adult"}"#, profile: saved)
+        #expect(stopped.count == 1)
+        #expect(stopped[saved.questions[0].id!]?.value == "none")
+        #expect(VLMAnswerParser.keywordIds(in: stopped).isEmpty)
+        // A digit for a number word.
+        let digit = VLMAnswerParser.parse(#"{"q1": 1, "q2": "female"}"#, profile: saved)
+        #expect(digit[saved.questions[0].id!]?.value == "one")
+        #expect(VLMAnswerParser.keywordIds(in: digit) == [frau, einzel])
+        // A nested trailing object does not hide the real answer object.
+        let nested = #"{"q1": "one", "q2": "female", "notes": {"why": "portrait"}}"#
+        #expect(VLMAnswerParser.parse(nested, profile: saved)[saved.questions[0].id!]?.value == "one")
+    }
+
     @Test func parserMapsCleanJSONToAnswersAndKeywords() throws {
         let (saved, frau, einzel) = try savedProfile()
-        let reply = #"{"q1": "one", "q2": "female", "q3": "adult", "q4": "front", "q5": "indoor"}"#
+        let reply = #"{"q1": "one", "q2": "female", "q3": "adult", "q4": "front", "q5": "no", "q6": "indoor"}"#
         let parsed = VLMAnswerParser.parse(reply, profile: saved)
-        #expect(parsed.count == 5)
+        #expect(parsed.count == 6)
         #expect(parsed[saved.questions[0].id!]?.value == "one")
         #expect(VLMAnswerParser.keywordIds(in: parsed) == [frau, einzel])
     }
 
     @Test func parserIsLenientOnWrappingButStrictOnValues() throws {
         let (saved, frau, _) = try savedProfile()
-        // Fenced, pretty-printed, odd casing, underscores, trailing period, one off-list value.
+        // Fenced, pretty-printed, odd casing, stray punctuation, one off-list value.
         let reply = """
         Sure! Here is the answer:
         ```json
@@ -360,8 +418,9 @@ import Testing
           "q1": "Group.",
           "q2": "FEMALE",
           "q3": "teenager",
-          "q4": "face_cut_off",
-          "q5": 7
+          "q4": "Front-",
+          "q5": 7,
+          "q6": "In-door"
         }
         ```
         """
@@ -369,8 +428,9 @@ import Testing
         #expect(parsed[saved.questions[0].id!]?.value == "group")
         #expect(parsed[saved.questions[1].id!]?.value == "female")
         #expect(parsed[saved.questions[2].id!] == nil)   // "teenager" is not allowed
-        #expect(parsed[saved.questions[3].id!]?.value == "face cut off")
-        #expect(parsed[saved.questions[4].id!] == nil)   // a number is not an answer
+        #expect(parsed[saved.questions[3].id!]?.value == "front")
+        #expect(parsed[saved.questions[4].id!] == nil)   // 7 is neither "no" nor "yes"
+        #expect(parsed[saved.questions[5].id!]?.value == "indoor")
         #expect(VLMAnswerParser.keywordIds(in: parsed) == [frau])
         // A thinking model: the trace (with braces of its own) is skipped and
         // the answer after it is read; an unfinished trace yields nothing.

@@ -55,6 +55,8 @@ final class VLMModelStore {
 
     private static let customKey = "vlmCustomModels"
     private static let selectedKey = "vlmSelectedModel"
+    /// The sensible default on a 16–24 GB Mac.
+    nonisolated static let defaultModelId = "mlx-community/Qwen3.5-9B-4bit"
 
     private(set) var custom: [ModelInfo]
     var selectedId: String {
@@ -70,7 +72,7 @@ final class VLMModelStore {
     init() {
         let data = UserDefaults.standard.data(forKey: Self.customKey)
         custom = data.flatMap { try? JSONDecoder().decode([ModelInfo].self, from: $0) } ?? []
-        selectedId = UserDefaults.standard.string(forKey: Self.selectedKey) ?? Self.presets[0].id
+        selectedId = UserDefaults.standard.string(forKey: Self.selectedKey) ?? Self.defaultModelId
         refreshStates()
     }
 
@@ -92,25 +94,77 @@ final class VLMModelStore {
         }
     }
 
+    /// Installed = a snapshot with config.json AND every weight file the
+    /// index names (or at least one safetensors file when there is no
+    /// index). The small JSONs arrive first, so a download interrupted by a
+    /// quit would otherwise read as "Downloaded" and the next run would
+    /// silently pull gigabytes behind a "Loading the model…" bar.
     nonisolated static func isInstalled(_ id: String) -> Bool {
-        guard let repo = Repo.ID(rawValue: id) else { return false }
+        installedSnapshotDirectory(id) != nil
+    }
+
+    nonisolated static func installedSnapshotDirectory(_ id: String) -> URL? {
+        guard let repo = Repo.ID(rawValue: id) else { return nil }
         let snapshots = HubCache.default.snapshotsDirectory(repo: repo, kind: .model)
         guard let revisions = try? FileManager.default.contentsOfDirectory(atPath: snapshots.path) else {
-            return false
+            return nil
         }
-        return revisions.contains { revision in
-            FileManager.default.fileExists(
-                atPath: snapshots.appendingPathComponent(revision).appendingPathComponent("config.json").path
-            )
+        let files = FileManager.default
+        for revision in revisions {
+            let directory = snapshots.appendingPathComponent(revision)
+            guard files.fileExists(atPath: directory.appendingPathComponent("config.json").path) else { continue }
+            let index = directory.appendingPathComponent("model.safetensors.index.json")
+            if let data = try? Data(contentsOf: index),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let weightMap = json["weight_map"] as? [String: String]
+            {
+                let weights = Set(weightMap.values)
+                if weights.allSatisfy({ files.fileExists(atPath: directory.appendingPathComponent($0).path) }) {
+                    return directory
+                }
+            } else if let names = try? files.contentsOfDirectory(atPath: directory.path),
+                      names.contains(where: { $0.hasSuffix(".safetensors") })
+            {
+                return directory
+            }
         }
+        return nil
+    }
+
+    /// The Hugging Face commit the installed snapshot came from — part of the
+    /// reply-cache key, because a re-quantised `main` answers differently
+    /// under the same repository id.
+    nonisolated static func installedRevision(_ id: String) -> String? {
+        installedSnapshotDirectory(id)?.lastPathComponent
+    }
+
+    /// A note when the model will squeeze this Mac: weights plus activations
+    /// plus the app's own caches against the physical memory.
+    nonisolated static func memoryNote(for model: ModelInfo) -> String? {
+        guard let size = model.sizeGB else { return nil }
+        let physicalGB = Double(ProcessInfo.processInfo.physicalMemory) / 1e9
+        let needed = size * 1.25 + 4
+        guard needed > physicalGB else { return nil }
+        return "Tight on this Mac (\(Int(physicalGB.rounded())) GB): expect heavy swapping while it runs."
     }
 
     // MARK: Download / remove
 
+    private var downloads: [String: Task<Void, Never>] = [:]
+
     func download(_ id: String) {
         if case .downloading = state(of: id) { return }
+        if let size = models.first(where: { $0.id == id })?.sizeGB,
+           let free = Self.freeGigabytes(), free < size + 1
+        {
+            states[id] = .failed(
+                "Not enough free disk space: the model needs \(size, default: "?") GB, \(Int(free)) GB are free."
+            )
+            return
+        }
         states[id] = .downloading(0)
-        Task {
+        downloads[id] = Task {
+            defer { downloads[id] = nil }
             do {
                 _ = try await HubBridge(hub: HubClient()).download(
                     id: id, revision: "main", matching: VLMService.downloadPatterns, useLatest: false
@@ -118,11 +172,23 @@ final class VLMModelStore {
                     let fraction = progress.fractionCompleted
                     Task { @MainActor in self?.states[id] = .downloading(fraction) }
                 }
-                states[id] = Self.isInstalled(id) ? .ready : .failed("The download finished but no config.json arrived.")
+                states[id] = Self.isInstalled(id) ? .ready : .failed("The download finished but the weights are incomplete.")
+            } catch is CancellationError {
+                states[id] = Self.isInstalled(id) ? .ready : .notDownloaded
             } catch {
-                states[id] = .failed(error.localizedDescription)
+                states[id] = Self.isInstalled(id) ? .ready : .failed(error.localizedDescription)
             }
         }
+    }
+
+    func cancelDownload(_ id: String) {
+        downloads[id]?.cancel()
+    }
+
+    nonisolated static func freeGigabytes() -> Double? {
+        let values = try? HubCache.default.cacheDirectory.deletingLastPathComponent()
+            .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage.map { Double($0) / 1e9 }
     }
 
     /// Deletes the model's files from the cache (after unloading it).
@@ -175,7 +241,7 @@ final class VLMModelStore {
     func removeCustom(_ id: String) {
         custom.removeAll { $0.id == id }
         persistCustom()
-        if selectedId == id { selectedId = Self.presets[0].id }
+        if selectedId == id { selectedId = Self.defaultModelId }
     }
 
     private func persistCustom() {

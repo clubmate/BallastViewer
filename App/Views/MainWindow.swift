@@ -21,6 +21,7 @@ struct MainWindow: View {
     @Environment(SidebarViewModel.self) private var sidebar
     @Environment(AppearanceStore.self) private var appearance
     @Environment(AppUpdater.self) private var updater
+    @Environment(AutoTagRunner.self) private var autoTagRunner
     /// The window's undo manager — handed to the controller so photo mutations
     /// are undoable via the standard Edit menu (U8) while text fields keep
     /// their own undo through the responder chain.
@@ -128,6 +129,10 @@ struct MainWindow: View {
                 .padding(20)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
+        }
+        // U49: the auto-tagging preview (Photo ▸ Preview Auto-Tagging on Selection).
+        .sheet(item: Binding(get: { autoTagRunner.preview }, set: { if $0 == nil { autoTagRunner.dismissPreview() } })) { state in
+            AutoTagPreviewSheet(state: state)
         }
         .alert(
             "BallastViewer",

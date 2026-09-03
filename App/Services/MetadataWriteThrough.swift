@@ -17,8 +17,9 @@ import os
 ///    already agrees, otherwise patches the file — `MetadataWriter.write`,
 ///    pixels untouched by construction — and clears the flag on success.
 ///    A failure keeps the flag, logs, and counts; the next open retries.
-/// 4. After a rewrite the file's mtime changed, so the thumbnail cache is
-///    re-keyed (`ThumbnailPipeline.fileRewritten`) instead of re-decoded.
+/// 4. After a rewrite the file's mtime changed, so the thumbnail cache and
+///    the AI reply cache are re-keyed (`ThumbnailPipeline.fileRewritten`,
+///    `AIAnswerStore.fileRewritten`) instead of re-decoded / re-asked.
 ///
 /// A generation counter per photo keeps a write that raced a newer mutation
 /// from clearing the flag: the flag is cleared only if nothing changed since
@@ -216,6 +217,10 @@ final class MetadataWriteThrough {
                 }
                 if case .written = outcome {
                     await controller.thumbnails?.fileRewritten(paths: [job.path])
+                    // U49: the AI reply cache is mtime-keyed too.
+                    if let libraryUUID = controller.snapshot?.meta.libraryUUID {
+                        await AIAnswerStore.fileRewritten(paths: [job.path], libraryUUID: libraryUUID)
+                    }
                 }
             case .failed(let reason):
                 failedPaths.insert(job.path)

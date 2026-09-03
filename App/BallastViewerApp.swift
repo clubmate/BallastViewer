@@ -24,6 +24,7 @@ struct BallastViewerApp: App {
         // U42: BEFORE anything reads UserDefaults — the sandboxed builds kept
         // all state in the container, the unsandboxed app reads ~/Library.
         SandboxMigration.runIfNeeded()
+        LegacyAICleanup.runIfNeeded()
         let controller = LibraryController()
         let center = CenterViewModel(controller: controller)
         let sidebar = SidebarViewModel(controller: controller)
@@ -87,7 +88,10 @@ struct BallastViewerApp: App {
                     .keyboardShortcut("w")
             }
             LibraryCommands(controller: controller, settingsRouter: settingsRouter)
-            PhotoCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
+            PhotoCommands(
+                center: center, dispatcher: dispatcher, keyMap: keyMap,
+                controller: controller, models: vlmModels, runner: autoTagRunner
+            )
             ViewCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
         }
 

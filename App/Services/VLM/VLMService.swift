@@ -83,9 +83,14 @@ actor VLMService {
             parameters: GenerateParameters(maxTokens: thinking ? Self.thinkingMaxTokens : 256, temperature: 0)
         )
         var reply = ""
+        var stopReason: GenerateStopReason?
         for await generation in stream {
             if let chunk = generation.chunk { reply += chunk }
+            if let info = generation.info { stopReason = info.stopReason }
         }
+        // A cancelled stream ends quietly with whatever was produced — that
+        // must never be mistaken for an answer (and never be cached).
+        if Task.isCancelled || stopReason == .cancelled { throw CancellationError() }
         return reply
     }
 }

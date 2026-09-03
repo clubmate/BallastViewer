@@ -202,13 +202,18 @@ extension LibraryController {
             var records: [KeywordRecord]
             var keywordIdsByPhoto: [Int64: Set<Int64>]
             var pendingKeywordIdsByPhoto: [Int64: Set<Int64>]
+            var aiProfiles: [AIProfile]
         }
         let result: MergeResult? = writeSync { db in
             try KeywordDAO.merge(id, into: targetId, in: db)
             return MergeResult(
                 records: try KeywordDAO.fetchAll(db),
                 keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db),
-                pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db)
+                pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db),
+                // U49: answer mappings moved to the survivor in the DB — the
+                // in-memory profiles must follow, or the run keeps aiming at
+                // the dead id and drops every suggestion for it.
+                aiProfiles: try AIProfileDAO.fetchAll(db)
             )
         }
         guard let result else { return }
@@ -216,6 +221,7 @@ extension LibraryController {
             $0.keywordTree = KeywordTree(records: result.records)
             $0.keywordIdsByPhoto = result.keywordIdsByPhoto
             $0.pendingKeywordIdsByPhoto = result.pendingKeywordIdsByPhoto
+            $0.aiProfiles = result.aiProfiles
         }
         refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)
@@ -239,9 +245,13 @@ extension LibraryController {
         guard snapshot != nil else { return }
         let removedIds = subtreeIds(of: id)
         let carriers = photoIdsCarrying(keywordIds: removedIds)
-        guard writeSync({ db in try KeywordDAO.deleteSubtree(id, in: db) }) != nil
-        else { return }
+        guard let profiles: [AIProfile] = writeSync({ db in
+            try KeywordDAO.deleteSubtree(id, in: db)
+            // U49: FK SET NULL unmapped the answers in the DB; mirror it.
+            return try AIProfileDAO.fetchAll(db)
+        }) else { return }
         mutateSnapshot { snapshot in
+            snapshot.aiProfiles = profiles
             snapshot.keywordTree = snapshot.keywordTree.deletingSubtree(id)
             for photoId in carriers {
                 snapshot.keywordIdsByPhoto[photoId]?.subtract(removedIds)
@@ -289,13 +299,15 @@ extension LibraryController {
             var records: [KeywordRecord]
             var keywordIdsByPhoto: [Int64: Set<Int64>]
             var pendingKeywordIdsByPhoto: [Int64: Set<Int64>]
+            var aiProfiles: [AIProfile]
         }
         let result: MoveResult? = writeSync { db in
             try KeywordDAO.moveToTopLevel(id, groupId: groupId, in: db)
             return MoveResult(
                 records: try KeywordDAO.fetchAll(db),
                 keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db),
-                pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db)
+                pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db),
+                aiProfiles: try AIProfileDAO.fetchAll(db)  // a same-named absorb is a merge
             )
         }
         guard let result else { return }
@@ -303,6 +315,7 @@ extension LibraryController {
             $0.keywordTree = KeywordTree(records: result.records)
             $0.keywordIdsByPhoto = result.keywordIdsByPhoto
             $0.pendingKeywordIdsByPhoto = result.pendingKeywordIdsByPhoto
+            $0.aiProfiles = result.aiProfiles
         }
         refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)

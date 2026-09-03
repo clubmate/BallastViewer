@@ -44,7 +44,8 @@ public enum AIProfileDAO {
             var answers: [AIAnswerRecord] = []
             for (aIndex, answer) in question.answers.enumerated() {
                 var aRecord = AIAnswerRecord(
-                    questionId: qRecord.id!, position: aIndex, value: answer.value, keywordId: answer.keywordId
+                    questionId: qRecord.id!, position: aIndex, value: answer.value,
+                    keywordId: answer.keywordId, stopsProfile: answer.stopsProfile
                 )
                 try aRecord.insert(db)
                 answers.append(aRecord)

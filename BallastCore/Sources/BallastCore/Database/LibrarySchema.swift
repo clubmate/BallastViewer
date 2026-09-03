@@ -194,6 +194,12 @@ public enum LibrarySchema {
             // U49: the vision-language model replaced CLIP. Keywords no longer
             // carry a prompt — auto-tagging is driven by PROFILES (a
             // questionnaire per photo genre) whose answers map to keywords.
+            // The old per-keyword prompts are not thrown away: they land,
+            // read-only, in the instructions of a DISABLED profile so the
+            // user can lift the wording into real questions.
+            let descriptions = try Row.fetchAll(
+                db, sql: "SELECT name, aiDescription FROM keyword WHERE aiDescription IS NOT NULL ORDER BY name"
+            )
             try db.alter(table: "keyword") { t in
                 t.drop(column: "aiDescription")
             }
@@ -220,10 +226,26 @@ public enum LibrarySchema {
                 // A deleted keyword leaves the answer in place, unmapped.
                 t.column("keywordId", .integer)
                     .references("keyword", onDelete: .setNull)
+                // Chosen → the remaining questions of the profile assign
+                // nothing for this photo ("no person" ends the questionnaire).
+                t.column("stopsProfile", .boolean).notNull().defaults(to: false)
             }
             try db.create(index: "aiQuestion_profileId", on: "aiQuestion", columns: ["profileId"])
             try db.create(index: "aiAnswer_questionId", on: "aiAnswer", columns: ["questionId"])
             try db.create(index: "aiAnswer_keywordId", on: "aiAnswer", columns: ["keywordId"])
+            if !descriptions.isEmpty {
+                let lines = descriptions.map { row -> String in
+                    "\(row["name"] as String): \(row["aiDescription"] as String)"
+                }
+                try db.execute(
+                    sql: "INSERT INTO aiProfile (name, enabled, position, instructions) VALUES (?, 0, 0, ?)",
+                    arguments: [
+                        "Imported prompts (old CLIP setup)",
+                        "These were the keyword descriptions of the previous CLIP-based auto-tagging, kept for reference. Turn them into questions with fixed answers, or delete this profile.\n\n"
+                            + lines.joined(separator: "\n"),
+                    ]
+                )
+            }
         }
 
         return migrator
