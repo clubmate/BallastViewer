@@ -21,6 +21,8 @@ xcodebuild -project BallastViewer.xcodeproj \
   -derivedDataPath build \
   MARKETING_VERSION="0.1.$BUILD_NUMBER" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  -skipPackagePluginValidation \
+  -skipMacroValidation \
   -quiet build
 
 echo "Built: build/Build/Products/Debug/BallastViewer.app"

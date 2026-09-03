@@ -57,6 +57,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build
+        # U49: mlx-swift ships a build-tool plugin ("CudaBuild") and the
+        # dependency graph a macro package; a fresh Xcode refuses both until
+        # trusted, which no one can click through on a runner.
         run: |
           xcodegen generate
           xcodebuild -project BallastViewer.xcodeproj \
@@ -67,6 +70,8 @@ jobs:
             CURRENT_PROJECT_VERSION="${{ steps.version.outputs.number }}" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_ALLOWED=YES \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             -quiet build
 
       - name: Zip app
