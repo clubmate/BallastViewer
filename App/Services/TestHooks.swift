@@ -603,6 +603,9 @@ enum TestHooks {
             models.selectedId = override
             models.refreshStates()
         }
+        let env = ProcessInfo.processInfo.environment
+        UserDefaults.standard.set(env["BV_TEST_VLM_THINK"] != nil, forKey: AISettingsView.thinkingKey)
+        UserDefaults.standard.set(env["BV_TEST_VLM_FULLRES"] != nil, forKey: AISettingsView.fullResolutionKey)
         print("BVVLM model=\(models.selectedId) state=\(models.state(of: models.selectedId))")
         // Test keywords: VLM TEST > <question>/<answer> for the first three
         // questions (people, gender, age); the rest stay unmapped.

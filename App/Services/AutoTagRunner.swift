@@ -86,7 +86,17 @@ final class AutoTagRunner {
         let pendingByPhoto = snapshot.pendingKeywordIdsByPhoto
         let service = models.service
         let modelId = model.id
-        let questionnaires = profiles.map { ($0, VLMPrompt.questionnaireHash(for: $0), VLMPrompt.userPrompt(for: $0)) }
+        // Run settings (Settings ▸ AI): system prompt, thinking, resolution —
+        // part of the reply-cache key, so flipping one re-asks the model.
+        let systemPrompt = AISettingsView.currentSystemPrompt
+        let thinking = UserDefaults.standard.bool(forKey: AISettingsView.thinkingKey)
+        let fullResolution = UserDefaults.standard.bool(forKey: AISettingsView.fullResolutionKey)
+        let settingsHash = VLMPrompt.settingsHash(
+            systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution
+        )
+        let questionnaires = profiles.map {
+            ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash, VLMPrompt.userPrompt(for: $0))
+        }
 
         task = Task { [weak self, weak controller] in
             do {
@@ -120,13 +130,18 @@ final class AutoTagRunner {
                         )
                         if reply == nil {
                             if upright == nil {
-                                guard let box = await thumbnails.thumbnail(
-                                    forPath: photo.path, longEdge: VLMService.imageLongEdge
-                                ) else { break }
+                                // Full resolution = the decoded original (the
+                                // single view's cache, ≤ 2K previews by the
+                                // image profile); otherwise the 768 bucket.
+                                let box = fullResolution
+                                    ? await thumbnails.originalImage(forPath: photo.path)
+                                    : await thumbnails.thumbnail(forPath: photo.path, longEdge: VLMService.imageLongEdge)
+                                guard let box else { break }
                                 upright = CGImageBox(image: UprightImage.make(box.image, orientation: photo.orientation))
                             }
                             let fresh = try await service.answer(
-                                image: upright!.image, systemPrompt: VLMPrompt.systemPrompt, userPrompt: userPrompt
+                                image: upright!.image, systemPrompt: systemPrompt, userPrompt: userPrompt,
+                                thinking: thinking, fullResolution: fullResolution
                             )
                             try await store.store(
                                 fresh, forPath: photo.path, mtime: mtime, modelId: modelId, questionnaire: questionnaire

@@ -310,6 +310,14 @@ import Testing
         #expect(VLMPrompt.userPrompt(for: draft).hasPrefix("Questions"))
     }
 
+    @Test func settingsHashCoversPromptThinkingAndResolution() {
+        let base = VLMPrompt.settingsHash(systemPrompt: "a", thinking: false, fullResolution: false)
+        #expect(base == VLMPrompt.settingsHash(systemPrompt: "a", thinking: false, fullResolution: false))
+        #expect(base != VLMPrompt.settingsHash(systemPrompt: "b", thinking: false, fullResolution: false))
+        #expect(base != VLMPrompt.settingsHash(systemPrompt: "a", thinking: true, fullResolution: false))
+        #expect(base != VLMPrompt.settingsHash(systemPrompt: "a", thinking: false, fullResolution: true))
+    }
+
     @Test func questionnaireHashIgnoresKeywordMappings() {
         var a = profile()
         var b = profile()
@@ -364,6 +372,25 @@ import Testing
         #expect(parsed[saved.questions[3].id!]?.value == "face cut off")
         #expect(parsed[saved.questions[4].id!] == nil)   // a number is not an answer
         #expect(VLMAnswerParser.keywordIds(in: parsed) == [frau])
+        // A thinking model: the trace (with braces of its own) is skipped and
+        // the answer after it is read; an unfinished trace yields nothing.
+        let thought = """
+        <think>Let me look. The photo shows {a group}... I'd say "q1": "group"? No — one person.</think>
+        {"q1": "one", "q2": "female"}
+        """
+        let afterThinking = VLMAnswerParser.parse(thought, profile: saved)
+        #expect(afterThinking[saved.questions[0].id!]?.value == "one")
+        #expect(afterThinking[saved.questions[1].id!]?.value == "female")
+        #expect(VLMAnswerParser.parse("<think>still thinking {\"q1\": \"one\"}", profile: saved).isEmpty)
+        // Qwen3.5 opens <think> inside the prompt: the reply starts mid-trace
+        // and only closes it. Braces in the trace must not fool the parser.
+        let headless = "The user wants {\"q1\": \"group\"}... no, one person.</think>\n{\"q1\": \"one\", \"q2\": \"male\"}"
+        #expect(VLMAnswerParser.parse(headless, profile: saved)[saved.questions[0].id!]?.value == "one")
+        #expect(VLMAnswerParser.parse(headless, profile: saved)[saved.questions[1].id!]?.value == "male")
+        // The shape Qwen3.5-2B actually produced with thinking on (2026-09-03):
+        // a drafted JSON inside the trace, then the fenced answer.
+        let fenced = "Drafting: ```json {\"q1\": \"two\"} ``` </think>  ```json\n{\"q1\": \"group\", \"q2\": \"male\"}\n```"
+        #expect(VLMAnswerParser.parse(fenced, profile: saved)[saved.questions[0].id!]?.value == "group")
         // Garbage → nothing, never a crash.
         #expect(VLMAnswerParser.parse("no json here", profile: saved).isEmpty)
         #expect(VLMAnswerParser.parse("{broken", profile: saved).isEmpty)

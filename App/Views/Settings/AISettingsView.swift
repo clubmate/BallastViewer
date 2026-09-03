@@ -9,9 +9,25 @@ import SwiftUI
 /// Everything runs on-device; nothing leaves the machine except the
 /// one-time model download.
 struct AISettingsView: View {
+    /// UserDefaults keys of the run settings (read by `AutoTagRunner`).
+    static let systemPromptKey = "aiSystemPrompt"
+    static let thinkingKey = "aiThinking"
+    static let fullResolutionKey = "aiFullResolution"
+
+    /// The system prompt in force: the user's edit, or the default when the
+    /// stored one is blank.
+    @MainActor static var currentSystemPrompt: String {
+        let stored = UserDefaults.standard.string(forKey: systemPromptKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? VLMPrompt.systemPrompt : stored
+    }
+
     @Environment(LibraryController.self) private var controller
     @Environment(VLMModelStore.self) private var models
     @Environment(AutoTagRunner.self) private var runner
+    @AppStorage(AISettingsView.systemPromptKey) private var systemPrompt = VLMPrompt.systemPrompt
+    @AppStorage(AISettingsView.thinkingKey) private var thinking = false
+    @AppStorage(AISettingsView.fullResolutionKey) private var fullResolution = false
     @State private var customRepo = ""
     @State private var editing: AIProfile?
     @State private var pendingDeletion: AIProfile?
@@ -19,6 +35,7 @@ struct AISettingsView: View {
     var body: some View {
         Form {
             modelSection
+            promptSection
             profilesSection
         }
         .formStyle(.grouped)
@@ -136,6 +153,38 @@ struct AISettingsView: View {
     private func addCustom() {
         models.addCustom(repositoryId: customRepo)
         customRepo = ""
+    }
+
+    // MARK: Prompt & run settings
+
+    private var promptSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("System prompt").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Reset") { systemPrompt = VLMPrompt.systemPrompt }
+                        .controlSize(.small)
+                        .disabled(systemPrompt == VLMPrompt.systemPrompt)
+                }
+                TextEditor(text: $systemPrompt)
+                    .font(.body)
+                    .frame(minHeight: 60, maxHeight: 120)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
+            }
+            Toggle("Let the model think before answering", isOn: $thinking)
+            Text("Off: the model answers directly (a few seconds per photo). On: it first writes a reasoning trace, then answers — several times slower, sometimes more careful on counting and ambiguous scenes.")
+                .font(.caption).foregroundStyle(.secondary)
+            Toggle("Send photos at full resolution", isOn: $fullResolution)
+            Text("Off: photos are sent at 768 px on the long edge — enough for faces, headcounts and scenes. On: the decoded original goes in (up to 16 MP); slower and more memory, helps only with small details.")
+                .font(.caption).foregroundStyle(.secondary)
+        } header: {
+            Text("Prompt & Run")
+        } footer: {
+            Text("The system prompt is sent before every profile's instructions and questions. Changing any of these settings re-asks the model on the next run (earlier answers stay cached under the old settings).")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .disabled(runner.isRunning)
     }
 
     // MARK: Profiles

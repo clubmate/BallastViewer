@@ -52,22 +52,35 @@ actor VLMService {
         MLX.GPU.clearCache()
     }
 
+    /// Token budget with thinking on: the trace comes before the answer and
+    /// runs a few hundred to a couple of thousand tokens on a hard photo.
+    static let thinkingMaxTokens = 4096
+
     /// One questionnaire, one photo → the model's raw reply (JSON, parsed by
-    /// `VLMAnswerParser`). Greedy decoding, thinking off: the same photo and
-    /// prompt give the same reply every run.
-    func answer(image: CGImage, systemPrompt: String, userPrompt: String) async throws -> String {
+    /// `VLMAnswerParser`). Greedy decoding: the same photo, prompt and
+    /// settings give the same reply every run. `thinking` lets the model
+    /// reason in a `<think>` block first (slower, sometimes more careful);
+    /// `fullResolution` sends the image as decoded instead of capped at
+    /// `imageLongEdge` (the processor itself allows up to 16 MP).
+    func answer(
+        image: CGImage, systemPrompt: String, userPrompt: String,
+        thinking: Bool = false, fullResolution: Bool = false
+    ) async throws -> String {
         guard let container else { throw GenerationError("No model is loaded.") }
         let input = UserInput(
             chat: [
                 .system(systemPrompt),
                 .user(userPrompt, images: [.ciImage(CIImage(cgImage: image))]),
             ],
-            processing: .init(resize: CGSize(width: Self.imageLongEdge, height: Self.imageLongEdge)),
-            additionalContext: ["enable_thinking": false]
+            processing: .init(
+                resize: fullResolution ? nil : CGSize(width: Self.imageLongEdge, height: Self.imageLongEdge)
+            ),
+            additionalContext: ["enable_thinking": thinking]
         )
         let prepared = try await container.prepare(input: input)
         let stream = try await container.generate(
-            input: prepared, parameters: GenerateParameters(maxTokens: 256, temperature: 0)
+            input: prepared,
+            parameters: GenerateParameters(maxTokens: thinking ? Self.thinkingMaxTokens : 256, temperature: 0)
         )
         var reply = ""
         for await generation in stream {

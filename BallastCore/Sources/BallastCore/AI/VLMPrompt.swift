@@ -6,8 +6,17 @@ import Foundation
 /// exact JSON shape to return. Answers come back keyed "q1", "q2", … in
 /// question order; the parser maps them back to answer records.
 public enum VLMPrompt {
+    /// The default system prompt — editable in Settings ▸ AI (the app stores
+    /// the user's version; this is what Reset restores).
     public static let systemPrompt =
         "You are a photo cataloguing assistant. Look at the photo and answer every question by choosing exactly one of the allowed answers. Answer with a single JSON object and nothing else."
+
+    /// Fingerprint of the run settings that change a reply without touching
+    /// the profile — system prompt, thinking, image resolution. Combined
+    /// with `questionnaireHash` for the reply-cache key.
+    public static func settingsHash(systemPrompt: String, thinking: Bool, fullResolution: Bool) -> String {
+        FNV1a.hex([systemPrompt, thinking ? "think" : "direct", fullResolution ? "full" : "768"].joined(separator: "\u{1E}"))
+    }
 
     /// JSON key of the question at `index` (0-based) — "q1", "q2", ….
     public static func key(forQuestionAt index: Int) -> String { "q\(index + 1)" }
@@ -94,16 +103,32 @@ public enum VLMAnswerParser {
             .trimmingCharacters(in: CharacterSet(charactersIn: ".\"'"))
     }
 
-    /// The first {…} object in the reply, decoded as string values.
+    /// The answer object in the reply. A thinking model first writes a
+    /// `<think>…</think>` trace (which may itself contain braces), so the
+    /// trace is dropped and the LAST {…} is preferred; a reply whose
+    /// thinking never closed (token budget exhausted) has no answer.
     static func extractObject(from reply: String) -> [String: Any]? {
-        guard let open = reply.firstIndex(of: "{"), let close = reply.lastIndex(of: "}"), open < close else {
+        var text = reply
+        // Qwen's chat template opens the trace in the prompt, so a reply may
+        // start mid-thought and carry only the closing tag: everything up to
+        // the last `</think>` is trace. An opening tag without a closing one
+        // is a trace that ran out of tokens.
+        if let lastClose = text.range(of: "</think>", options: .backwards) {
+            text = String(text[lastClose.upperBound...])
+        } else if text.contains("<think>") {
             return nil
         }
-        let slice = String(reply[open ... close])
-        guard let data = slice.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return object
+        guard let close = text.lastIndex(of: "}") else { return nil }
+        if let open = text[...close].lastIndex(of: "{"), let object = decode(text[open ... close]) {
+            return object
+        }
+        guard let open = text.firstIndex(of: "{"), open < close else { return nil }
+        return decode(text[open ... close])
+    }
+
+    private static func decode(_ slice: Substring) -> [String: Any]? {
+        guard let data = String(slice).data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 }
 
