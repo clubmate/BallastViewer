@@ -190,6 +190,42 @@ public enum LibrarySchema {
             )
         }
 
+        migrator.registerMigration("v9-ai-profiles") { db in
+            // U49: the vision-language model replaced CLIP. Keywords no longer
+            // carry a prompt — auto-tagging is driven by PROFILES (a
+            // questionnaire per photo genre) whose answers map to keywords.
+            try db.alter(table: "keyword") { t in
+                t.drop(column: "aiDescription")
+            }
+            try db.create(table: "aiProfile") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull()
+                t.column("enabled", .boolean).notNull().defaults(to: true)
+                t.column("position", .integer).notNull().defaults(to: 0)
+                t.column("instructions", .text).notNull().defaults(to: "")
+            }
+            try db.create(table: "aiQuestion") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("profileId", .integer).notNull()
+                    .references("aiProfile", onDelete: .cascade)
+                t.column("position", .integer).notNull().defaults(to: 0)
+                t.column("text", .text).notNull()
+            }
+            try db.create(table: "aiAnswer") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("questionId", .integer).notNull()
+                    .references("aiQuestion", onDelete: .cascade)
+                t.column("position", .integer).notNull().defaults(to: 0)
+                t.column("value", .text).notNull()
+                // A deleted keyword leaves the answer in place, unmapped.
+                t.column("keywordId", .integer)
+                    .references("keyword", onDelete: .setNull)
+            }
+            try db.create(index: "aiQuestion_profileId", on: "aiQuestion", columns: ["profileId"])
+            try db.create(index: "aiAnswer_questionId", on: "aiAnswer", columns: ["questionId"])
+            try db.create(index: "aiAnswer_keywordId", on: "aiAnswer", columns: ["keywordId"])
+        }
+
         return migrator
     }
 

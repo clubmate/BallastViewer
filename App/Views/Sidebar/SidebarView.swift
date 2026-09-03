@@ -7,10 +7,8 @@ import UniformTypeIdentifiers
 /// footer. Selection = accent background; counts as pill badges.
 struct SidebarView: View {
     @Environment(LibraryController.self) private var controller
-    @Environment(EmbeddingModelStore.self) private var models
-    @Environment(SuggestionRunner.self) private var runner
-    @AppStorage(AISettingsView.thresholdKey) private var aiThreshold = AISettingsView.defaultThreshold
-    @AppStorage(AISettingsView.learningKey) private var aiLearning = false
+    @Environment(VLMModelStore.self) private var models
+    @Environment(AutoTagRunner.self) private var runner
     let sidebar: SidebarViewModel
     let center: CenterViewModel
     /// U48 emergency exit: "Discard All Suggestions…" awaiting confirmation.
@@ -293,8 +291,8 @@ struct SidebarView: View {
                     sidebar.pendingCollectionDeletion = collection
                 }
                 Divider()
-                // U48: auto-tagging is scoped — right-click decides WHAT gets
-                // scanned; prompts and threshold live in Settings ▸ AI.
+                // U48/U49: auto-tagging is scoped — right-click decides WHAT
+                // gets scanned; model and profiles live in Settings ▸ AI.
                 Button("Auto-Tag Photos") {
                     autoTagPhotos(matching: .collection(collectionId), scopeName: collection.name)
                 }
@@ -322,14 +320,7 @@ struct SidebarView: View {
                 lastImportBatchId: snapshot.meta.lastImportBatchId
             )
         }
-        runner.run(
-            controller: controller,
-            models: models,
-            threshold: Float(aiThreshold),
-            learning: aiLearning,
-            photos: photos,
-            scopeName: scopeName
-        )
+        runner.run(controller: controller, models: models, photos: photos, scopeName: scopeName)
     }
 }
 

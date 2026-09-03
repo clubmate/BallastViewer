@@ -1,12 +1,12 @@
 import BallastCore
 import SwiftUI
 
-/// U48: live status of an auto-tag run at the sidebar's bottom (same recipe
+/// U48/U49: live status of an auto-tag run at the sidebar's bottom (same recipe
 /// as the WRITING FILES section). Visible while a run prepares/scans, and
 /// briefly afterwards to show the result (dismissed with ✕). The runs start
 /// from the sidebar context menus; this section is their only progress UI.
 struct AutoTagStatusSection: View {
-    @Environment(SuggestionRunner.self) private var runner
+    @Environment(AutoTagRunner.self) private var runner
 
     var body: some View {
         if isVisible {
@@ -56,19 +56,12 @@ struct AutoTagStatusSection: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
             switch runner.phase {
-            case .preparing(let done, let total):
-                if total > 0 {
-                    ProgressView(value: Double(done), total: Double(max(1, total)))
-                        .progressViewStyle(.linear)
-                    Text("Learning from examples (\(done) of \(total))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ProgressView().controlSize(.small)
-                    Text("Preparing…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            case .loadingModel(let fraction):
+                ProgressView(value: fraction, total: 1)
+                    .progressViewStyle(.linear)
+                Text("Loading the model…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             case .scanning(let done, let total, let found):
                 ProgressView(value: Double(done), total: Double(max(1, total)))
                     .progressViewStyle(.linear)

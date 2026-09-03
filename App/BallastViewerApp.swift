@@ -17,8 +17,8 @@ struct BallastViewerApp: App {
     @State private var photoPicker = PhotoPickerModel()
     @State private var keywordPanel: KeywordPanelModel
     @State private var updater = AppUpdater()
-    @State private var embeddingModels = EmbeddingModelStore()
-    @State private var suggestionRunner = SuggestionRunner()
+    @State private var vlmModels = VLMModelStore()
+    @State private var autoTagRunner = AutoTagRunner()
 
     init() {
         // U42: BEFORE anything reads UserDefaults — the sandboxed builds kept
@@ -67,14 +67,14 @@ struct BallastViewerApp: App {
                 .environment(appearance)
                 .environment(keywordPanel)
                 .environment(updater)
-                .environment(embeddingModels)
-                .environment(suggestionRunner)
+                .environment(vlmModels)
+                .environment(autoTagRunner)
                 .background(PhotoPickerAutoOpen())
                 .task {
                     await TestHooks.runIfRequested(
                         controller, center: center, sidebar: sidebar,
                         dispatcher: dispatcher, keyMap: keyMap, midiMap: midiMap,
-                        models: embeddingModels
+                        models: vlmModels, runner: autoTagRunner
                     )
                 }
         }
@@ -107,8 +107,8 @@ struct BallastViewerApp: App {
                 .environment(appearance)
                 .environment(midiService)
                 .environment(settingsRouter)
-                .environment(embeddingModels)
-                .environment(suggestionRunner)
+                .environment(vlmModels)
+                .environment(autoTagRunner)
         }
     }
 }

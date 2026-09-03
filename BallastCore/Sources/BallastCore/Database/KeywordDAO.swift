@@ -174,14 +174,11 @@ public enum KeywordDAO {
                 """,
             arguments: [targetId, sourceId]
         )
-        // U48: the survivor inherits the source's AI prompt when it has none
-        // of its own — a merge must not silently drop auto-tagging setup.
+        // U49: profile answers pointing at the source follow it into the
+        // survivor — a merge must not silently unmap auto-tagging setup.
         try db.execute(
-            sql: """
-                UPDATE keyword SET aiDescription = (SELECT aiDescription FROM keyword WHERE id = ?)
-                WHERE id = ? AND aiDescription IS NULL
-                """,
-            arguments: [sourceId, targetId]
+            sql: "UPDATE aiAnswer SET keywordId = ? WHERE keywordId = ?",
+            arguments: [targetId, sourceId]
         )
         let children = try KeywordRecord.filter(Column("parentId") == sourceId).fetchAll(db)
         for child in children {
@@ -202,15 +199,6 @@ public enum KeywordDAO {
     public static func setGroup(_ groupId: Int64?, forKeywordId id: Int64, in db: Database) throws {
         try KeywordRecord.filter(key: id)
             .updateAll(db, Column("groupId").set(to: groupId))
-    }
-
-    /// U48: the keyword's AI description. Blank clears it — the keyword drops
-    /// out of the suggestion run entirely.
-    public static func setAIDescription(_ description: String?, forKeywordId id: Int64, in db: Database) throws {
-        let trimmed = description?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let value = (trimmed?.isEmpty ?? true) ? nil : trimmed
-        try KeywordRecord.filter(key: id)
-            .updateAll(db, Column("aiDescription").set(to: value))
     }
 
     public static func fetchAll(_ db: Database) throws -> [KeywordRecord] {

@@ -13,10 +13,8 @@ import BallastCore
 /// acceptance flow) · BV_TEST_MERGE=1 (U40 rename-collision merge) ·
 /// BV_TEST_BULKWRITE=1 (U46 auto bulk-run progress, needs ≥100 photos) ·
 /// BV_TEST_AIREVIEW=1 (U48 pending-suggestion review flow, model-free, needs ≥4 photos) ·
-/// BV_TEST_AISCORES=1 (U48 score-scale diagnostic: text vs prototype score
-/// distributions per described keyword — needs the model and prompts; without
-/// BV_TEST_OPEN it waits for the launch auto-reopen and runs on the LAST
-/// OPENED library, i.e. the user's real one) ·
+/// BV_TEST_VLM=<n> (U49: saves the starter profile with test keywords, runs the
+/// selected model over the first n visible photos, prints replies + counts) ·
 /// BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
 /// BV_TEST_SINGLE=1 (single view, no quit) ·
 /// BV_TEST_ROTATE=<n> (rotate anchor n times, no quit) · BV_TEST_CLOSE=1
@@ -42,7 +40,8 @@ enum TestHooks {
         dispatcher: ActionDispatcher,
         keyMap: KeyMapStore,
         midiMap: MidiMapStore,
-        models: EmbeddingModelStore
+        models: VLMModelStore,
+        runner: AutoTagRunner
     ) async {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
@@ -106,8 +105,8 @@ enum TestHooks {
         if env["BV_TEST_AIREVIEW"] != nil {
             await runAIReviewChecks(controller, center: center, sidebar: sidebar)
         }
-        if env["BV_TEST_AISCORES"] != nil {
-            await runAIScoreDiagnostic(controller, models: models)
+        if let count = env["BV_TEST_VLM"].flatMap({ Int($0) }) {
+            await runVLMChecks(controller, models: models, runner: runner, count: count)
         }
         if let path = env["BV_TEST_QTN"] {
             runQuarantineProbe(zipAt: path)
@@ -483,8 +482,6 @@ enum TestHooks {
             print("BVAIREVIEW error=setup")
             return
         }
-        controller.setKeywordAIDescription(keywordId, description: "a test description")
-        let described = controller.snapshot?.keywordTree.node(keywordId)?.aiDescription != nil
         let all = center.visiblePhotos.map(\.id)
         guard all.count >= 4 else {
             print("BVAIREVIEW error=needs-4-photos have=\(all.count)")
@@ -493,7 +490,7 @@ enum TestHooks {
         let pairs = all.prefix(3).map { PhotoKeywordPair(photoId: $0, keywordId: keywordId) }
         let libraryUUID = controller.snapshot?.meta.libraryUUID ?? ""
         controller.applySuggestions(Array(pairs), libraryUUID: libraryUUID)
-        print("BVAIREVIEW seeded described=\(described) reviewCount=\(sidebar.pendingReviewCount)")
+        print("BVAIREVIEW seeded reviewCount=\(sidebar.pendingReviewCount)")
 
         // Review fix 2026-09-02: Remove Folder + Undo must bring the pending
         // suggestions back as PENDING (never as confirmed, file-facing
@@ -585,130 +582,73 @@ enum TestHooks {
         )
     }
 
-    /// U48 score-scale diagnostic (needs the downloaded model and at least one
-    /// prompt; the open library is used as-is). For every described keyword it
-    /// prints how the TEXT score, the RAW prototype cosine, the library-
-    /// relative prototype EXCESS (raw minus baseline — what the blend uses)
-    /// and the BLEND are distributed over the library — carriers (confirmed
-    /// examples) versus everything else — plus how many non-carriers each
-    /// score puts over the threshold. `over` under blend ≫ `over` under text
-    /// means the prototype inflates scores past the text-calibrated threshold.
+    /// U49 end-to-end, headless (needs the SELECTED model downloaded): saves
+    /// the starter profile with the first three questions mapped to fresh
+    /// test keywords, runs it over the first `count` visible photos and
+    /// prints one line per photo with the keywords now pending on it.
     @MainActor
-    private static func runAIScoreDiagnostic(_ controller: LibraryController, models: EmbeddingModelStore) async {
-        // No explicit BV_TEST_OPEN: the launch auto-reopen of the last library
-        // is still in the open queue — the diagnostic is meant for the user's
-        // real library, so wait for it (a big library takes a moment).
+    private static func runVLMChecks(
+        _ controller: LibraryController, models: VLMModelStore, runner: AutoTagRunner, count: Int
+    ) async {
         var waited = 0
         while controller.snapshot == nil, waited < 600 {
             try? await Task.sleep(for: .milliseconds(50))
             waited += 1
         }
-        guard let snapshot = controller.snapshot, let thumbnails = controller.thumbnails else {
-            print("BVAISCORES error=no-library (nothing reopened within 30 s; pass BV_TEST_OPEN=<name>)")
+        guard let snapshot = controller.snapshot else {
+            print("BVVLM error=no-library")
             return
         }
-        // Always measured WITH learning — this is the tool for deciding
-        // whether to switch it on; the setting itself is reported.
-        let learningOn = UserDefaults.standard.bool(forKey: AISettingsView.learningKey)
-        print("BVAISCORES library=\(controller.libraryURL?.lastPathComponent ?? "?") photos=\(snapshot.photos.count) learningSetting=\(learningOn ? "on" : "off") (measured with learning)")
-        guard let service = models.service() else {
-            print("BVAISCORES error=model-not-ready state=\(models.state)")
+        if let override = ProcessInfo.processInfo.environment["BV_TEST_VLM_MODEL"] {
+            models.selectedId = override
+            models.refreshStates()
+        }
+        print("BVVLM model=\(models.selectedId) state=\(models.state(of: models.selectedId))")
+        // Test keywords: VLM TEST > <question>/<answer> for the first three
+        // questions (people, gender, age); the rest stay unmapped.
+        var profile = AIProfile.starter()
+        profile.name = "VLM TEST"
+        for qIndex in 0 ..< min(3, profile.questions.count) {
+            for aIndex in profile.questions[qIndex].answers.indices {
+                let value = profile.questions[qIndex].answers[aIndex].value
+                guard value != "none" else { continue }
+                let name = "\(["PEOPLE", "GENDER", "AGE"][qIndex]) \(value.uppercased())"
+                let id = controller.snapshot?.keywordTree.find(pathComponents: ["VLM TEST", name])
+                    ?? controller.createKeyword(
+                        baseName: name,
+                        parentId: controller.snapshot?.keywordTree.find(pathComponents: ["VLM TEST"])
+                            ?? controller.createKeyword(baseName: "VLM TEST", parentId: nil, groupId: nil),
+                        groupId: nil
+                    )
+                profile.questions[qIndex].answers[aIndex].keywordId = id
+            }
+        }
+        // Replace a previous test profile so reruns do not stack.
+        if let stale = controller.snapshot?.aiProfiles.first(where: { $0.name == "VLM TEST" })?.id {
+            controller.deleteAIProfile(stale)
+        }
+        guard let saved = controller.saveAIProfile(profile) else {
+            print("BVVLM error=save-profile")
             return
         }
-        let threshold = Float(
-            UserDefaults.standard.object(forKey: AISettingsView.thresholdKey) as? Double
-                ?? AISettingsView.defaultThreshold
-        )
-        do {
-            let store = try await EmbeddingStore.open(libraryUUID: snapshot.meta.libraryUUID)
-            let rejectedPairs = controller.fetchRejectedSuggestionPairs()
-            let specs = try await SuggestionRunner.buildSpecs(
-                snapshot: snapshot, service: service, store: store, thumbnails: thumbnails,
-                rejected: rejectedPairs
-            )
-            guard !specs.isEmpty else {
-                print("BVAISCORES error=no-prompts")
-                return
-            }
-            var vectors: [Int64: [Float]] = [:]
-            let photos = snapshot.photos
-            for start in stride(from: 0, to: photos.count, by: 4) {
-                let chunk = photos[start ..< min(start + 4, photos.count)]
-                for (id, vector) in try await SuggestionRunner.embeddings(
-                    for: chunk, service: service, store: store, thumbnails: thumbnails
-                ) {
-                    vectors[id] = vector
-                }
-                if start % 1000 == 0, start > 0 {
-                    print("BVAISCORES embedding \(start) of \(photos.count)")
-                }
-            }
-            print("BVAISCORES photos=\(vectors.count) keywords=\(specs.count) threshold=\(threshold)")
-
-            func percentile(_ sorted: [Float], _ q: Double) -> String {
-                guard !sorted.isEmpty else { return "-" }
-                let index = Int((Double(sorted.count - 1) * q).rounded())
-                return String(format: "%.3f", sorted[index])
-            }
-            func line(_ label: String, _ values: [Float]) -> String {
-                let sorted = values.sorted()
-                let over = sorted.filter { $0 >= threshold }.count
-                return "\(label) p10=\(percentile(sorted, 0.1)) p50=\(percentile(sorted, 0.5))"
-                    + " p90=\(percentile(sorted, 0.9)) p99=\(percentile(sorted, 0.99))"
-                    + " max=\(percentile(sorted, 1)) over=\(over)"
-            }
-
-            for (path, spec) in specs {
-                var carrierText: [Float] = [], carrierRaw: [Float] = [], carrierExcess: [Float] = [], carrierBlend: [Float] = []
-                var otherText: [Float] = [], otherRaw: [Float] = [], otherExcess: [Float] = [], otherBlend: [Float] = []
-                var rejectedBlend: [Float] = []
-                var vetoedOverThreshold = 0
-                var hits: [(score: Float, name: String)] = []
-                for (photoId, vector) in vectors {
-                    let text = SuggestionEngine.textScore(photo: vector, spec: spec)
-                    let raw = spec.prototypeEmbedding.map { EmbeddingMath.cosine(vector, $0) } ?? 0
-                    let excess = SuggestionEngine.prototypeExcess(photo: vector, spec: spec) ?? 0
-                    let blend = SuggestionEngine.score(photo: vector, spec: spec)
-                    let isCarrier = snapshot.keywordIdsByPhoto[photoId]?.contains(spec.keywordId) == true
-                    let isRejected = rejectedPairs.contains(PhotoKeywordPair(photoId: photoId, keywordId: spec.keywordId))
-                    if isCarrier {
-                        carrierText.append(text); carrierRaw.append(raw); carrierExcess.append(excess); carrierBlend.append(blend)
-                    } else if isRejected {
-                        rejectedBlend.append(blend)
-                    } else {
-                        otherText.append(text); otherRaw.append(raw); otherExcess.append(excess); otherBlend.append(blend)
-                        if blend >= threshold, SuggestionEngine.isVetoed(photo: vector, spec: spec) {
-                            vetoedOverThreshold += 1
-                        }
-                        if blend >= threshold, let photo = snapshot.photos.first(where: { $0.id == photoId }) {
-                            hits.append((blend, (photo.path as NSString).lastPathComponent))
-                        }
-                    }
-                }
-                let alpha = spec.exampleCount == 0 ? 1 : 8 / (8 + Float(spec.exampleCount))
-                print("BVAISCORES [\(path)] examples=\(spec.exampleCount) alpha=\(String(format: "%.2f", alpha))"
-                    + " baseline=\(String(format: "%.3f", spec.prototypeBaseline))"
-                    + " variants=\(spec.textEmbeddings.count) carriers=\(carrierText.count) others=\(otherText.count)")
-                print("BVAISCORES [\(path)] carriers " + line("text  ", carrierText))
-                print("BVAISCORES [\(path)] carriers " + line("raw   ", carrierRaw))
-                print("BVAISCORES [\(path)] carriers " + line("excess", carrierExcess))
-                print("BVAISCORES [\(path)] carriers " + line("blend ", carrierBlend))
-                print("BVAISCORES [\(path)] others   " + line("text  ", otherText))
-                print("BVAISCORES [\(path)] others   " + line("raw   ", otherRaw))
-                print("BVAISCORES [\(path)] others   " + line("excess", otherExcess))
-                print("BVAISCORES [\(path)] others   " + line("blend ", otherBlend) + " vetoed=\(vetoedOverThreshold)")
-                if !rejectedBlend.isEmpty {
-                    print("BVAISCORES [\(path)] rejected " + line("blend ", rejectedBlend) + " (\(rejectedBlend.count) tombstones, never re-suggested)")
-                }
-                // What a run would suggest, strongest first (capped — the
-                // distribution lines above are the measure, this is the
-                // eyeball check on a small library).
-                for hit in hits.sorted { $0.score > $1.score }.prefix(25) {
-                    print("BVAISCORES [\(path)] hit \(String(format: "%.3f", hit.score)) \(hit.name)")
-                }
-            }
-        } catch {
-            print("BVAISCORES error=\(error.localizedDescription)")
+        print("BVVLM profile=\(saved.id ?? -1) questions=\(saved.questions.count) mapped=\(saved.keywordIds.count)")
+        let photos = Array(snapshot.photos.prefix(count))
+        let started = Date()
+        runner.run(controller: controller, models: models, photos: photos, scopeName: "VLM TEST")
+        while runner.isRunning {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        if case .failed(let message) = runner.phase {
+            print("BVVLM error=run-failed message=\(message)")
+            return
+        }
+        print("BVVLM summary=\(runner.summary ?? "-") seconds=\(Int(Date().timeIntervalSince(started)))")
+        guard let tree = controller.snapshot?.keywordTree else { return }
+        for photo in photos {
+            guard let id = photo.id else { continue }
+            let pending = (controller.snapshot?.pendingKeywordIdsByPhoto[id] ?? [])
+                .map { tree.path(of: $0) }.sorted()
+            print("BVVLM photo=\((photo.path as NSString).lastPathComponent) pending=\(pending.joined(separator: " | "))")
         }
     }
 

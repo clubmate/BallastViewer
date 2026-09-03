@@ -16,6 +16,8 @@ public struct LibrarySnapshot: Sendable {
     /// Pending AI suggestions per photo id (U48). Rejections are DB-only —
     /// nothing in the hot path needs them.
     public var pendingKeywordIdsByPhoto: [Int64: Set<Int64>] = [:]
+    /// U49: the auto-tagging profiles of this library, in position order.
+    public var aiProfiles: [AIProfile] = []
     public var keywordTree: KeywordTree
     public var keywordGroups: [KeywordGroupRecord]
     public var smartGroups: [SmartGroupRecord]
@@ -68,6 +70,7 @@ public struct LibrarySnapshot: Sendable {
             photos: try PhotoRecord.fetchAll(db),
             keywordIdsByPhoto: keywordIdsByPhoto,
             pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db),
+            aiProfiles: try AIProfileDAO.fetchAll(db),
             keywordTree: KeywordTree(records: try KeywordDAO.fetchAll(db)),
             keywordGroups: try KeywordDAO.fetchGroups(db),
             smartGroups: try SmartGroupRecord.order(Column("sortOrder")).fetchAll(db),

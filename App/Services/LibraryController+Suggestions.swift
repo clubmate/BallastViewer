@@ -181,4 +181,35 @@ extension LibraryController {
     func fetchRejectedSuggestionPairs() -> Set<PhotoKeywordPair> {
         writeSync { db in try PhotoDAO.fetchRejectedPairs(db) } ?? []
     }
+
+    // MARK: Profiles (U49)
+
+    /// Saves a profile whole (insert or replace) — not undoable, not file-
+    /// facing, not a query fact: only the snapshot's profile list changes.
+    /// Returns the saved profile with ids assigned.
+    @discardableResult
+    func saveAIProfile(_ profile: AIProfile) -> AIProfile? {
+        guard snapshot != nil else { return nil }
+        guard let saved = writeSync({ db in try AIProfileDAO.save(profile, in: db) }) else { return nil }
+        mutateSnapshot { snapshot in
+            if let index = snapshot.aiProfiles.firstIndex(where: { $0.id == saved.id }) {
+                snapshot.aiProfiles[index] = saved
+            } else {
+                snapshot.aiProfiles.append(saved)
+            }
+        }
+        return saved
+    }
+
+    func deleteAIProfile(_ id: Int64) {
+        guard snapshot?.aiProfiles.contains(where: { $0.id == id }) == true else { return }
+        guard writeSync({ db in try AIProfileDAO.delete(id, in: db) }) != nil else { return }
+        mutateSnapshot { $0.aiProfiles.removeAll { $0.id == id } }
+    }
+
+    func setAIProfileEnabled(_ id: Int64, _ enabled: Bool) {
+        guard let index = snapshot?.aiProfiles.firstIndex(where: { $0.id == id }) else { return }
+        guard writeSync({ db in try AIProfileDAO.setEnabled(enabled, profileId: id, in: db) }) != nil else { return }
+        mutateSnapshot { $0.aiProfiles[index].enabled = enabled }
+    }
 }

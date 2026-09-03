@@ -15,22 +15,17 @@ public struct KeywordRecord: Codable, Hashable, Sendable, FetchableRecord, Mutab
     public var groupId: Int64?
     /// Single path component, ALWAYS UPPERCASE (invariant enforced by KeywordDAO).
     public var name: String
-    /// U48: short English description driving the AI suggestion run. NULL =
-    /// this keyword opted out of AI suggestions.
-    public var aiDescription: String?
 
     public init(
         id: Int64? = nil,
         parentId: Int64? = nil,
         groupId: Int64? = nil,
-        name: String,
-        aiDescription: String? = nil
+        name: String
     ) {
         self.id = id
         self.parentId = parentId
         self.groupId = groupId
         self.name = name
-        self.aiDescription = aiDescription
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {

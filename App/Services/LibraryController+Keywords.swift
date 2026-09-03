@@ -274,18 +274,6 @@ extension LibraryController {
         emitCatalogEvent(.photosUpdated(carriers))
     }
 
-    /// U48: sets or clears a keyword's AI description. Not file-facing and not
-    /// a query fact — no event, no facts invalidation, no needsFileWrite; the
-    /// snapshot swap alone updates the settings UI.
-    func setKeywordAIDescription(_ id: Int64, description: String?) {
-        guard let snapshot, snapshot.keywordTree.node(id) != nil else { return }
-        let trimmed = description?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let value = (trimmed?.isEmpty ?? true) ? nil : trimmed
-        guard writeSync({ db in try KeywordDAO.setAIDescription(value, forKeywordId: id, in: db) }) != nil
-        else { return }
-        mutateSnapshot { $0.keywordTree = $0.keywordTree.settingAIDescription(value, of: id) }
-    }
-
     /// U35: lifts a NESTED keyword (subtree included) to the top level of
     /// `groupId` — the sorting step after a Lightroom import. A same-named
     /// top-level keyword absorbs it (assignments union, children merge), so

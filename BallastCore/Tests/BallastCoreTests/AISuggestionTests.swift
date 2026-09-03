@@ -3,256 +3,10 @@ import GRDB
 import Testing
 @testable import BallastCore
 
-// U48: AI keyword suggestions — tokenizer, vector math, scoring engine, and
-// the v8 schema/DAO contract that keeps pending suggestions out of everything
-// confirmed-only (XMP write-through, search facts, chips, counts).
-
-@Suite struct CLIPTokenizerTests {
-    private static let tokenizer: CLIPTokenizer = { try! CLIPTokenizer() }()
-
-    @Test func encodesTheCanonicalExample() throws {
-        // Reference ids from the original CLIP BPE vocabulary.
-        let ids = Self.tokenizer.encode(text: "a photo of a cat")
-        #expect(ids == [320, 1125, 539, 320, 2368])
-    }
-
-    @Test func lowercasesInput() throws {
-        // Keywords are stored UPPERCASE; the tokenizer must fold case itself.
-        #expect(
-            Self.tokenizer.encode(text: "A PHOTO OF A CAT")
-                == Self.tokenizer.encode(text: "a photo of a cat")
-        )
-    }
-
-    @Test func encodeFullWrapsInBosEosAndPads() throws {
-        let full = Self.tokenizer.encodeFull(text: "a photo of a cat")
-        #expect(full.count == 77)
-        #expect(full[0] == 49406)
-        #expect(Array(full[1 ... 5]) == [320, 1125, 539, 320, 2368])
-        #expect(full[6] == 49407)
-        #expect(full[7...].allSatisfy { $0 == 0 })
-    }
-
-    @Test func encodeFullTruncatesOverlongText() throws {
-        // Apple's original indexed out of bounds past 75 tokens; ours truncates.
-        let text = Array(repeating: "cat", count: 200).joined(separator: " ")
-        let full = Self.tokenizer.encodeFull(text: text)
-        #expect(full.count == 77)
-        #expect(full[0] == 49406)
-        #expect(full[76] == 49407)
-        #expect(Array(full[1 ... 75]).allSatisfy { $0 == 2368 })
-    }
-}
-
-@Suite struct EmbeddingMathTests {
-    @Test func normalizeProducesUnitLengthAndIsIdempotent() {
-        let normalized = EmbeddingMath.l2Normalized([3, 4])
-        #expect(abs(normalized[0] - 0.6) < 1e-6)
-        #expect(abs(normalized[1] - 0.8) < 1e-6)
-        let again = EmbeddingMath.l2Normalized(normalized)
-        #expect(abs(again[0] - 0.6) < 1e-6)
-        #expect(abs(again[1] - 0.8) < 1e-6)
-    }
-
-    @Test func zeroVectorSurvivesNormalization() {
-        // A degenerate embedding must not become NaN downstream.
-        #expect(EmbeddingMath.l2Normalized([0, 0, 0]) == [0, 0, 0])
-    }
-
-    @Test func cosineBasics() {
-        #expect(abs(EmbeddingMath.cosine([1, 2, 3], [1, 2, 3]) - 1) < 1e-6)
-        #expect(abs(EmbeddingMath.cosine([1, 0], [0, 1])) < 1e-6)
-        #expect(abs(EmbeddingMath.cosine([1, 0], [-1, 0]) + 1) < 1e-6)
-        #expect(EmbeddingMath.cosine([1, 0], [1]) == 0)          // dimension mismatch
-        #expect(EmbeddingMath.cosine([0, 0], [1, 0]) == 0)      // zero magnitude
-    }
-}
-
-@Suite struct SuggestionEngineTests {
-    private func specs(_ pairs: [(Int64, [Float])]) -> [KeywordScoringSpec] {
-        pairs.map { KeywordScoringSpec(keywordId: $0.0, textEmbeddings: [$0.1]) }
-    }
-
-    @Test func thresholdCutsAndSortsDescending() {
-        let result = SuggestionEngine.suggestions(
-            photoEmbeddings: [1: [1, 0], 2: [0.8, 0.6], 3: [0, 1]],
-            specs: specs([(10, [1, 0])]),
-            threshold: 0.5
-        )
-        // photo 1 scores 1.0, photo 2 scores 0.8, photo 3 scores 0.0.
-        #expect(result.map(\.pair.photoId) == [1, 2])
-        #expect(result[0].score > result[1].score)
-    }
-
-    @Test func skipSetSuppressesKnownPairs() {
-        let result = SuggestionEngine.suggestions(
-            photoEmbeddings: [1: [1, 0], 2: [1, 0]],
-            specs: specs([(10, [1, 0])]),
-            threshold: 0.5,
-            skip: [PhotoKeywordPair(photoId: 1, keywordId: 10)]
-        )
-        #expect(result.map(\.pair) == [PhotoKeywordPair(photoId: 2, keywordId: 10)])
-    }
-
-    @Test func emptyInputsProduceNothing() {
-        #expect(SuggestionEngine.suggestions(photoEmbeddings: [:], specs: [], threshold: 0).isEmpty)
-        #expect(
-            SuggestionEngine.suggestions(
-                photoEmbeddings: [1: [1, 0]], specs: [], threshold: 0
-            ).isEmpty)
-    }
-
-    @Test func multiPromptScoresTheBestVariant() {
-        // "phone user OR red car": two variants, the photo matches variant 2.
-        let spec = KeywordScoringSpec(keywordId: 10, textEmbeddings: [[1, 0], [0, 1]])
-        #expect(abs(SuggestionEngine.score(photo: [0, 1], spec: spec) - 1) < 1e-6)
-        #expect(abs(SuggestionEngine.score(photo: [1, 0], spec: spec) - 1) < 1e-6)
-        // No variants at all → score 0, never a crash.
-        let empty = KeywordScoringSpec(keywordId: 10, textEmbeddings: [])
-        #expect(SuggestionEngine.score(photo: [1, 0], spec: empty) == 0)
-    }
-
-    @Test func textScoreIsMeasuredFromTheNeutralCaption() {
-        // Photo halfway between the prompt and the neutral caption: the raw
-        // cosine to the prompt is 0.7071, but it fits "a photo" just as well,
-        // so the contrast score is 0 — "no better than a plain photo".
-        let photo = EmbeddingMath.l2Normalized([1, 1])
-        let spec = KeywordScoringSpec(keywordId: 10, textEmbeddings: [[1, 0]], neutralEmbedding: [0, 1])
-        #expect(abs(SuggestionEngine.textScore(photo: photo, spec: spec)) < 1e-6)
-        #expect(abs(SuggestionEngine.score(photo: photo, spec: spec)) < 1e-6)
-        // A photo ON the prompt: 1 − 0.
-        #expect(abs(SuggestionEngine.score(photo: [1, 0], spec: spec) - 1) < 1e-6)
-        // A photo that fits the neutral caption better goes negative.
-        #expect(SuggestionEngine.score(photo: [0, 1], spec: spec) < 0)
-        // Without a neutral embedding the raw cosine stands.
-        let raw = KeywordScoringSpec(keywordId: 10, textEmbeddings: [[1, 0]])
-        #expect(abs(SuggestionEngine.score(photo: photo, spec: raw) - 0.7071) < 1e-3)
-        // Variants: the best variant is contrasted, not each one.
-        let two = KeywordScoringSpec(keywordId: 10, textEmbeddings: [[0, -1], [1, 0]], neutralEmbedding: [0, 1])
-        #expect(abs(SuggestionEngine.score(photo: photo, spec: two)) < 1e-6)
-    }
-
-    @Test func promptVariantsSplitOnPipe() {
-        #expect(SuggestionEngine.promptVariants("a person using a phone | a red car")
-            == ["a person using a phone", "a red car"])
-        #expect(SuggestionEngine.promptVariants("a toilet") == ["a toilet"])
-        #expect(SuggestionEngine.promptVariants(" | | ").isEmpty)
-    }
-
-    @Test func prototypeIsTheNormalizedMean() {
-        // Stage 4: mean of [1,0] and [0,1] → normalized [0.707, 0.707].
-        let prototype = SuggestionEngine.prototype(of: [[1, 0], [0, 1]])
-        #expect(prototype != nil)
-        #expect(abs(prototype![0] - 0.7071) < 1e-3)
-        #expect(abs(prototype![1] - 0.7071) < 1e-3)
-        // No examples → no prototype; opposing examples cancel to zero → nil,
-        // never NaN.
-        #expect(SuggestionEngine.prototype(of: []) == nil)
-        #expect(SuggestionEngine.prototype(of: [[1, 0], [-1, 0]]) == nil)
-    }
-
-    @Test func prototypeBlendsInWithExampleCount() {
-        // Stage 4 contract, pinned now: α = k/(k+n) with k = 8. Eight examples
-        // → 50/50 blend of description and (rescaled) prototype similarity.
-        let spec = KeywordScoringSpec(
-            keywordId: 10,
-            textEmbeddings: [[1, 0]],
-            prototypeEmbedding: [0, 1],
-            exampleCount: 8
-        )
-        let score = SuggestionEngine.score(photo: [1, 0], spec: spec)
-        #expect(abs(score - 0.5) < 1e-6)
-        // A photo ON the prototype: text 0, excess 1 → 0.5 × 1 × 0.1.
-        let onPrototype = SuggestionEngine.score(photo: [0, 1], spec: spec)
-        #expect(abs(onPrototype - 0.5 * SuggestionEngine.prototypeExcessScale) < 1e-6)
-        // Without examples the prototype is ignored even if present.
-        var textOnly = spec
-        textOnly.exampleCount = 0
-        #expect(abs(SuggestionEngine.score(photo: [1, 0], spec: textOnly) - 1) < 1e-6)
-    }
-
-    @Test func prototypeScoresRelativeToTheLibraryBaseline() {
-        // CLIP image embeddings share a common direction: an unrelated photo
-        // already scores ≈ 0.4 against any prototype. The baseline (prototype
-        // vs. library mean) is subtracted so the blend sees only the EXCESS.
-        let prototype: [Float] = [0, 1]
-        // Sample: one photo at 45° (cos 0.707), one orthogonal (cos 0) → mean
-        // cosine is what an ordinary photo scores, NOT the cosine against a
-        // normalized mean vector (which would be 0.383 here).
-        let sample: [[Float]] = [[0.7071, 0.7071], [1, 0], [0.7071, 0.7071], [1, 0]]
-        let baseline = SuggestionEngine.prototypeBaseline(prototype: prototype, sample: sample)
-        #expect(abs(baseline - 0.35355) < 1e-3)
-        let uniform = SuggestionEngine.prototypeBaseline(prototype: prototype, sample: [[0.7071, 0.7071]])
-        #expect(abs(uniform - 0.7071) < 1e-3)
-        let baselineForBlend = uniform
-        let spec = KeywordScoringSpec(
-            keywordId: 10, textEmbeddings: [[1, 0]],
-            prototypeEmbedding: prototype, exampleCount: 8, prototypeBaseline: baselineForBlend
-        )
-        // An "average" photo: raw prototype cosine 0.707 → excess 0, so the
-        // 50/50 blend is half the text score alone.
-        let average: [Float] = [0.7071, 0.7071]
-        #expect(abs(SuggestionEngine.prototypeExcess(photo: average, spec: spec)!) < 1e-3)
-        #expect(abs(SuggestionEngine.score(photo: average, spec: spec) - 0.5 * 0.7071) < 1e-3)
-        // A photo like the examples: excess 1 − 0.707 ≈ 0.293, entering the
-        // blend rescaled to the text-contrast scale.
-        let example: [Float] = [0, 1]
-        #expect(abs(SuggestionEngine.prototypeExcess(photo: example, spec: spec)! - 0.2929) < 1e-3)
-        let scale = SuggestionEngine.prototypeExcessScale
-        #expect(abs(SuggestionEngine.score(photo: example, spec: spec) - 0.5 * 0.2929 * scale) < 1e-3)
-        // No sample → baseline 0 → the raw cosine (old behaviour).
-        #expect(SuggestionEngine.prototypeBaseline(prototype: prototype, sample: []) == 0)
-        // No examples → no excess at all.
-        var textOnly = spec
-        textOnly.exampleCount = 0
-        #expect(SuggestionEngine.prototypeExcess(photo: example, spec: textOnly) == nil)
-    }
-}
-
-@Suite struct RejectionVetoTests {
-    // 2-D stand-ins: [1,0] is the keyword's look, [0,1] something unrelated.
-    private let text: [Float] = [1, 0]
-
-    @Test func lookAlikeOfARejectedPhotoIsHeldBack() {
-        // One accepted example at [1,0], one rejected near-miss at ~[0.8,0.6].
-        let rejected: [Float] = EmbeddingMath.l2Normalized([0.8, 0.6])
-        let spec = KeywordScoringSpec(
-            keywordId: 10, textEmbeddings: [text],
-            exampleEmbeddings: [[1, 0]], rejectedEmbeddings: [rejected]
-        )
-        // A photo almost identical to the rejected one: closer to it than to
-        // the example, well over the floor → vetoed.
-        let sibling: [Float] = EmbeddingMath.l2Normalized([0.78, 0.62])
-        #expect(SuggestionEngine.isVetoed(photo: sibling, spec: spec))
-        // A photo right at the example: closer to the example → kept.
-        #expect(!SuggestionEngine.isVetoed(photo: [0.99, 0.14], spec: spec))
-        // The scored pass counts the veto instead of suggesting the pair.
-        let result = SuggestionEngine.scored(
-            photoEmbeddings: [1: sibling, 2: [0.99, 0.14]], specs: [spec], threshold: 0.5
-        )
-        #expect(result.kept.map(\.pair.photoId) == [2])
-        #expect(result.vetoed == 1)
-    }
-
-    @Test func vetoNeedsRealResemblanceAndAnyRejection() {
-        // A rejection far away (cosine below the 0.6 floor) says nothing,
-        // even when there are no examples to be closer to.
-        let spec = KeywordScoringSpec(
-            keywordId: 10, textEmbeddings: [text], rejectedEmbeddings: [[0, 1]]
-        )
-        #expect(!SuggestionEngine.isVetoed(photo: [1, 0], spec: spec))
-        // The same photo very close to a rejection with no examples → vetoed
-        // on the floor alone.
-        let close = KeywordScoringSpec(
-            keywordId: 10, textEmbeddings: [text], rejectedEmbeddings: [[1, 0]]
-        )
-        #expect(SuggestionEngine.isVetoed(photo: [0.98, 0.2], spec: close))
-        // No rejections → never vetoed.
-        let none = KeywordScoringSpec(keywordId: 10, textEmbeddings: [text], exampleEmbeddings: [[0, 1]])
-        #expect(!SuggestionEngine.isVetoed(photo: [1, 0], spec: none))
-        #expect(SuggestionEngine.rejectionVetoFloor == 0.6)
-    }
-}
+// U48/U49: AI keyword suggestions — the schema/DAO contract that keeps
+// pending suggestions out of everything confirmed-only (XMP write-through,
+// search facts, chips, counts), plus the U49 profile questionnaire: records,
+// prompt building and reply parsing.
 
 @Suite struct PendingReviewSidebarTests {
     @Test func encodedRoundTripAndDisplayName() {
@@ -296,8 +50,6 @@ import Testing
             #expect(record?.status == .confirmed)
             let map = try PhotoDAO.fetchKeywordIdsByPhoto(db)
             #expect(map == [1: [1]])
-            let keyword = try KeywordRecord.fetchOne(db)
-            #expect(keyword?.aiDescription == nil)
         }
     }
 
@@ -440,44 +192,181 @@ import Testing
                 == [PhotoKeywordPair(photoId: photoId, keywordId: rejected)])
         }
     }
+}
 
-    @Test func mergeKeepsTheSurvivorsPromptOrInheritsTheSources() throws {
+@Suite struct AIProfileTests {
+    private func profile(named name: String = "People") -> AIProfile {
+        var starter = AIProfile.starter()
+        starter.name = name
+        return starter
+    }
+
+    @Test func saveAssignsIdsAndRoundTrips() throws {
         let dbQueue = try makeTestDatabase()
         try dbQueue.write { db in
-            // Target has no prompt → inherits the source's.
-            let a = try KeywordDAO.ensurePath(["ALT"], groupId: nil, in: db)
-            let b = try KeywordDAO.ensurePath(["NEU"], groupId: nil, in: db)
-            try KeywordDAO.setAIDescription("a toilet", forKeywordId: a, in: db)
-            try KeywordDAO.merge(a, into: b, in: db)
-            #expect(try KeywordRecord.fetchOne(db, key: b)?.aiDescription == "a toilet")
-            // Target has its own prompt → keeps it.
-            let c = try KeywordDAO.ensurePath(["DRITTES"], groupId: nil, in: db)
-            try KeywordDAO.setAIDescription("a red car", forKeywordId: c, in: db)
-            try KeywordDAO.merge(b, into: c, in: db)
-            #expect(try KeywordRecord.fetchOne(db, key: c)?.aiDescription == "a red car")
+            let frau = try KeywordDAO.ensurePath(["FRAU"], groupId: nil, in: db)
+            var draft = profile()
+            draft.questions[1].answers[0].keywordId = frau
+            let saved = try AIProfileDAO.save(draft, in: db)
+            #expect(saved.id != nil)
+            #expect(saved.questions.count == 5)
+            #expect(saved.questions.allSatisfy { $0.id != nil && $0.answers.allSatisfy { $0.id != nil } })
+            #expect(saved.questions[1].answers[0].keywordId == frau)
+            #expect(saved.keywordIds == [frau])
+
+            let loaded = try AIProfileDAO.fetchAll(db)
+            #expect(loaded == [saved])
+            // Positions follow array order.
+            #expect(loaded[0].questions.map(\.record.position) == [0, 1, 2, 3, 4])
+            #expect(loaded[0].questions[0].answers.map(\.value) == ["none", "one", "two", "three", "group"])
         }
     }
 
-    @Test func aiDescriptionRoundTripsAndBlankClears() throws {
+    @Test func resaveReplacesQuestionsAndKeepsProfileOrder() throws {
         let dbQueue = try makeTestDatabase()
         try dbQueue.write { db in
-            let id = try KeywordDAO.ensurePath(["HANDY"], groupId: nil, in: db)
-            try KeywordDAO.setAIDescription("someone talking on a phone", forKeywordId: id, in: db)
-            #expect(try KeywordRecord.fetchOne(db, key: id)?.aiDescription == "someone talking on a phone")
-            try KeywordDAO.setAIDescription("   ", forKeywordId: id, in: db)
-            #expect(try KeywordRecord.fetchOne(db, key: id)?.aiDescription == nil)
+            let first = try AIProfileDAO.save(profile(named: "A"), in: db)
+            var second = try AIProfileDAO.save(profile(named: "B"), in: db)
+            let droppedQuestionId = second.questions[4].id!
+            second.questions.removeLast(3)
+            second.questions[0].text = "Count the people."
+            second.enabled = false
+            let resaved = try AIProfileDAO.save(second, in: db)
+            #expect(resaved.id == second.id)
+            let loaded = try AIProfileDAO.fetchAll(db)
+            #expect(loaded.map(\.name) == ["A", "B"])
+            #expect(loaded[1].questions.count == 2)
+            #expect(loaded[1].questions[0].text == "Count the people.")
+            #expect(loaded[1].enabled == false)
+            // Orphans of the replaced questionnaire are gone.
+            #expect(try AIQuestionRecord.fetchCount(db) == first.questions.count + 2)
+            #expect(try AIAnswerRecord.filter(Column("questionId") == droppedQuestionId).fetchCount(db) == 0)
         }
     }
 
-    @Test func treeMirrorsDescriptionChanges() throws {
+    @Test func deletingProfileCascadesAndDeletingKeywordUnmaps() throws {
         let dbQueue = try makeTestDatabase()
-        let tree = try dbQueue.write { db in
-            try KeywordDAO.ensurePath(["HANDY"], groupId: nil, in: db)
-            return KeywordTree(records: try KeywordDAO.fetchAll(db))
+        try dbQueue.write { db in
+            let frau = try KeywordDAO.ensurePath(["FRAU"], groupId: nil, in: db)
+            var draft = profile()
+            draft.questions[1].answers[0].keywordId = frau
+            let saved = try AIProfileDAO.save(draft, in: db)
+            try KeywordDAO.deleteSubtree(frau, in: db)
+            let unmapped = try AIProfileDAO.fetchAll(db)[0]
+            #expect(unmapped.questions[1].answers[0].keywordId == nil)
+            #expect(unmapped.questions[1].answers[0].value == "female")
+
+            try AIProfileDAO.setEnabled(false, profileId: saved.id!, in: db)
+            #expect(try AIProfileDAO.fetchAll(db)[0].enabled == false)
+
+            try AIProfileDAO.delete(saved.id!, in: db)
+            #expect(try AIProfileDAO.fetchAll(db).isEmpty)
+            #expect(try AIQuestionRecord.fetchCount(db) == 0)
+            #expect(try AIAnswerRecord.fetchCount(db) == 0)
         }
-        let id = tree.find(pathComponents: ["HANDY"])!
-        let updated = tree.settingAIDescription("someone talking on a phone", of: id)
-        #expect(updated.node(id)?.aiDescription == "someone talking on a phone")
-        #expect(updated.settingAIDescription(nil, of: id).node(id)?.aiDescription == nil)
+    }
+
+    @Test func mergeMovesAnswerMappingsToTheSurvivor() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let alt = try KeywordDAO.ensurePath(["ALT"], groupId: nil, in: db)
+            let neu = try KeywordDAO.ensurePath(["NEU"], groupId: nil, in: db)
+            var draft = profile()
+            draft.questions[0].answers[1].keywordId = alt
+            try AIProfileDAO.save(draft, in: db)
+            try KeywordDAO.merge(alt, into: neu, in: db)
+            #expect(try AIProfileDAO.fetchAll(db)[0].questions[0].answers[1].keywordId == neu)
+        }
+    }
+
+    @Test func v8LibraryMigratesToProfiles() throws {
+        let dbQueue = try DatabaseQueue()
+        try LibrarySchema.migrator.migrate(dbQueue, upTo: "v8-ai-suggestions")
+        try dbQueue.write { db in
+            try db.execute(sql: "INSERT INTO keyword (name, aiDescription) VALUES ('HANDY', 'a phone')")
+        }
+        try LibrarySchema.migrator.migrate(dbQueue)
+        try dbQueue.read { db in
+            let keyword = try KeywordRecord.fetchOne(db)
+            let columns = try db.columns(in: "keyword").map(\.name)
+            let profiles = try AIProfileDAO.fetchAll(db)
+            #expect(keyword?.name == "HANDY")
+            #expect(!columns.contains("aiDescription"))
+            #expect(profiles.isEmpty)
+        }
+    }
+
+    @Test func promptListsQuestionsWithKeysAndValues() {
+        var draft = profile()
+        draft.instructions = "Judge by the main subject."
+        draft.questions = Array(draft.questions.prefix(2))
+        let prompt = VLMPrompt.userPrompt(for: draft)
+        #expect(prompt.hasPrefix("Judge by the main subject.\n\n"))
+        #expect(prompt.contains("1. \"q1\": How many people are the subject of the photo? One of: \"none\", \"one\", \"two\", \"three\", \"group\""))
+        #expect(prompt.contains("2. \"q2\": What is the gender of the main person or people? One of: \"female\", \"male\", \"mixed\", \"none\""))
+        #expect(prompt.hasSuffix("Return: {\"q1\": ..., \"q2\": ...}"))
+        // Blank instructions leave no leading blank lines.
+        draft.instructions = "  "
+        #expect(VLMPrompt.userPrompt(for: draft).hasPrefix("Questions"))
+    }
+
+    @Test func questionnaireHashIgnoresKeywordMappings() {
+        var a = profile()
+        var b = profile()
+        b.questions[0].answers[0].keywordId = 42
+        #expect(VLMPrompt.questionnaireHash(for: a) == VLMPrompt.questionnaireHash(for: b))
+        a.questions[0].text += "?"
+        #expect(VLMPrompt.questionnaireHash(for: a) != VLMPrompt.questionnaireHash(for: b))
+        b.instructions = "other"
+        #expect(VLMPrompt.questionnaireHash(for: profile()) != VLMPrompt.questionnaireHash(for: b))
+    }
+
+    private func savedProfile() throws -> (AIProfile, Int64, Int64) {
+        let dbQueue = try makeTestDatabase()
+        return try dbQueue.write { db in
+            let frau = try KeywordDAO.ensurePath(["FRAU"], groupId: nil, in: db)
+            let einzel = try KeywordDAO.ensurePath(["EINZEL"], groupId: nil, in: db)
+            var draft = profile()
+            draft.questions[0].answers[1].keywordId = einzel  // "one"
+            draft.questions[1].answers[0].keywordId = frau    // "female"
+            return (try AIProfileDAO.save(draft, in: db), frau, einzel)
+        }
+    }
+
+    @Test func parserMapsCleanJSONToAnswersAndKeywords() throws {
+        let (saved, frau, einzel) = try savedProfile()
+        let reply = #"{"q1": "one", "q2": "female", "q3": "adult", "q4": "front", "q5": "indoor"}"#
+        let parsed = VLMAnswerParser.parse(reply, profile: saved)
+        #expect(parsed.count == 5)
+        #expect(parsed[saved.questions[0].id!]?.value == "one")
+        #expect(VLMAnswerParser.keywordIds(in: parsed) == [frau, einzel])
+    }
+
+    @Test func parserIsLenientOnWrappingButStrictOnValues() throws {
+        let (saved, frau, _) = try savedProfile()
+        // Fenced, pretty-printed, odd casing, underscores, trailing period, one off-list value.
+        let reply = """
+        Sure! Here is the answer:
+        ```json
+        {
+          "q1": "Group.",
+          "q2": "FEMALE",
+          "q3": "teenager",
+          "q4": "face_cut_off",
+          "q5": 7
+        }
+        ```
+        """
+        let parsed = VLMAnswerParser.parse(reply, profile: saved)
+        #expect(parsed[saved.questions[0].id!]?.value == "group")
+        #expect(parsed[saved.questions[1].id!]?.value == "female")
+        #expect(parsed[saved.questions[2].id!] == nil)   // "teenager" is not allowed
+        #expect(parsed[saved.questions[3].id!]?.value == "face cut off")
+        #expect(parsed[saved.questions[4].id!] == nil)   // a number is not an answer
+        #expect(VLMAnswerParser.keywordIds(in: parsed) == [frau])
+        // Garbage → nothing, never a crash.
+        #expect(VLMAnswerParser.parse("no json here", profile: saved).isEmpty)
+        #expect(VLMAnswerParser.parse("{broken", profile: saved).isEmpty)
+        #expect(VLMAnswerParser.parse("", profile: saved).isEmpty)
     }
 }

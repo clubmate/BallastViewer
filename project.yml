@@ -6,6 +6,16 @@ options:
 packages:
   BallastCore:
     path: BallastCore
+  # U49: on-device vision-language models (Apple Silicon only — MLX is Metal).
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    from: 3.31.0
+  swift-huggingface:
+    url: https://github.com/huggingface/swift-huggingface
+    from: 0.9.0
+  swift-transformers:
+    url: https://github.com/huggingface/swift-transformers
+    from: 1.3.0
 targets:
   BallastViewer:
     type: application
@@ -14,6 +24,12 @@ targets:
       - App
     dependencies:
       - package: BallastCore
+      - package: mlx-swift-lm
+        products: [MLXVLM, MLXLMCommon]
+      - package: swift-huggingface
+        product: HuggingFace
+      - package: swift-transformers
+        product: Tokenizers
     info:
       path: App/Resources/Info.plist
       properties:
@@ -47,6 +63,9 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
+        # U49: MLX runs on Metal — Apple Silicon only, no Intel slice.
+        ARCHS: arm64
+        EXCLUDED_ARCHS: x86_64
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_USER_SCRIPT_SANDBOXING: YES
