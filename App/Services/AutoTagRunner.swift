@@ -44,6 +44,9 @@ final class AutoTagRunner {
         var id: Int64
         var path: String
         var filename: String
+        /// Stored EXIF orientation — the preview thumbnail is shown upright,
+        /// exactly as the model saw the photo.
+        var orientation: Int
         var replies: [PreviewReply]
     }
 
@@ -373,9 +376,7 @@ final class AutoTagRunner {
                         }
                         replies.append(PreviewReply(profileName: profile.name, raw: reply ?? "", answers: answers))
                     }
-                    state.items.append(PreviewItem(
-                        id: photoId, path: photo.path,
-                        filename: (photo.path as NSString).lastPathComponent, replies: replies
+                    state.items.append(PreviewItem(id: photoId, path: photo.path, filename: (photo.path as NSString).lastPathComponent, orientation: photo.orientation, replies: replies
                     ))
                     state.done += 1
                 }
