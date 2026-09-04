@@ -105,6 +105,9 @@ enum TestHooks {
         if env["BV_TEST_AIREVIEW"] != nil {
             await runAIReviewChecks(controller, center: center, sidebar: sidebar)
         }
+        if let repo = env["BV_TEST_VLM_DOWNLOAD"] {
+            await runDownloadChecks(models: models, repo: repo, cancelAfterSeconds: env["BV_TEST_VLM_DOWNLOAD_CANCEL"].flatMap(Double.init) ?? 10)
+        }
         if let count = env["BV_TEST_VLM"].flatMap({ Int($0) }) {
             await runVLMChecks(controller, models: models, runner: runner, count: count)
         }
@@ -586,6 +589,52 @@ enum TestHooks {
     /// the starter profile with the first three questions mapped to fresh
     /// test keywords, runs it over the first `count` visible photos and
     /// prints one line per photo with the keywords now pending on it.
+    /// U49 resume check: downloads `repo`, cancels after a few seconds,
+    /// reports the bytes left in the cache, downloads again and reports the
+    /// final state — the second run must continue from the partial file
+    /// (progress starts above zero) and end Downloaded. With
+    /// BV_TEST_VLM_DOWNLOAD_WIPE=1 the repository is deleted from the shared
+    /// cache first (only on a machine where that is fine).
+    @MainActor
+    private static func runDownloadChecks(models: VLMModelStore, repo: String, cancelAfterSeconds: Double) async {
+        let env = ProcessInfo.processInfo.environment
+        if env["BV_TEST_VLM_DOWNLOAD_WIPE"] != nil {
+            models.remove(repo)
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        models.refreshStates()
+        print("BVDL start state=\(models.state(of: repo)) partial=\(VLMModelStore.partialBytes(repo))")
+        let started = Date()
+        models.download(repo)
+        while case .downloading = models.state(of: repo), Date().timeIntervalSince(started) < cancelAfterSeconds {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if case .downloading(let progress) = models.state(of: repo) {
+            print("BVDL cancel fraction=\(progress.fraction) rate=\(Int((progress.bytesPerSecond ?? 0) / 1e6))MB/s eta=\(Int(progress.secondsLeft ?? -1))s")
+            models.cancelDownload(repo)
+            while case .downloading = models.state(of: repo) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        let partial = VLMModelStore.partialBytes(repo)
+        print("BVDL after-cancel state=\(models.state(of: repo)) partial=\(partial)")
+        // Second run: must start above the partial fraction (a restart would
+        // report ~0 first). With BV_TEST_VLM_DOWNLOAD_STOP=1 it is cancelled
+        // again after the same time instead of running to the end.
+        let resumedAt = Date()
+        models.download(repo)
+        var firstFraction: Double?
+        while case .downloading(let progress) = models.state(of: repo) {
+            if firstFraction == nil, progress.bytes > 0 { firstFraction = progress.fraction }
+            if env["BV_TEST_VLM_DOWNLOAD_STOP"] != nil, Date().timeIntervalSince(resumedAt) > cancelAfterSeconds {
+                print("BVDL stop fraction=\(progress.fraction) bytes=\(progress.bytes) rate=\(Int((progress.bytesPerSecond ?? 0) / 1e3))kB/s eta=\(Int(progress.secondsLeft ?? -1))s")
+                models.cancelDownload(repo)
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        print("BVDL resumed-from=\(firstFraction ?? 0) expected>=\(Double(partial) / 1.8e9) final=\(models.state(of: repo)) installed=\(VLMModelStore.isInstalled(repo)) partial=\(VLMModelStore.partialBytes(repo)) seconds=\(Int(Date().timeIntervalSince(started)))")
+    }
+
     @MainActor
     private static func runVLMChecks(
         _ controller: LibraryController, models: VLMModelStore, runner: AutoTagRunner, count: Int

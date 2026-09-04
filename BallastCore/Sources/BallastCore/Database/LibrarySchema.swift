@@ -241,7 +241,7 @@ public enum LibrarySchema {
                     sql: "INSERT INTO aiProfile (name, enabled, position, instructions) VALUES (?, 0, 0, ?)",
                     arguments: [
                         "Imported prompts (old CLIP setup)",
-                        "These were the keyword descriptions of the previous CLIP-based auto-tagging, kept for reference. Turn them into questions with fixed answers, or delete this profile.\n\n"
+                        "These were the keyword descriptions of the previous CLIP-based auto-tagging, kept for reference. Turn them into questions with fixed answers, or delete this questionnaire.\n\n"
                             + lines.joined(separator: "\n"),
                     ]
                 )

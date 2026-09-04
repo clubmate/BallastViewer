@@ -1,10 +1,12 @@
 import BallastCore
 import SwiftUI
 
-/// U49: the sheet that edits one auto-tagging profile — name, instructions,
-/// and the questions with their allowed answers, each answer optionally
-/// mapped to a keyword. Edits a local draft with stable row identities and
-/// hands the whole profile back on Save (the DAO replaces it wholesale).
+/// U49: the sheet that edits one keyword questionnaire (`AIProfile`) — name,
+/// instructions, and the questions with their allowed answers, each answer
+/// optionally mapped to a keyword. Edits a local draft with stable row
+/// identities and hands the whole profile back on Save (the DAO replaces it
+/// wholesale). The keyword dropdowns of the answer rows are drawn by
+/// `keywordDropdownHost()` above the whole form — see `KeywordPathField`.
 struct AIProfileEditor: View {
     @Environment(LibraryController.self) private var controller
     @Environment(\.dismiss) private var dismiss
@@ -44,8 +46,8 @@ struct AIProfileEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                Section("Profile") {
-                    TextField("Name", text: $record.name, prompt: Text("Profile name"))
+                Section("Questionnaire") {
+                    TextField("Name", text: $record.name, prompt: Text("Questionnaire name"))
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Instructions (ground rules the model reads before the questions)")
                             .font(.caption).foregroundStyle(.secondary)
@@ -72,6 +74,7 @@ struct AIProfileEditor: View {
                 }
             }
             .formStyle(.grouped)
+            .keywordDropdownHost()
             Divider()
             HStack {
                 if let problem {
@@ -118,7 +121,7 @@ struct AIProfileEditor: View {
                     Toggle("Ends", isOn: $answer.stopsProfile)
                         .toggleStyle(.checkbox)
                         .controlSize(.small)
-                        .help("When chosen, the remaining questions of this profile assign nothing for the photo (e.g. “no person”)")
+                        .help("When chosen, the remaining questions of this questionnaire assign nothing for the photo (e.g. “no person”)")
                     Button {
                         question.wrappedValue.answers.removeAll { $0.id == answer.id }
                     } label: {
@@ -142,7 +145,7 @@ struct AIProfileEditor: View {
 
     /// Why Save is disabled, or nil when the draft is complete.
     private var problem: String? {
-        if record.name.trimmingCharacters(in: .whitespaces).isEmpty { return "Give the profile a name." }
+        if record.name.trimmingCharacters(in: .whitespaces).isEmpty { return "Give the questionnaire a name." }
         if questions.isEmpty { return "Add at least one question." }
         for question in questions {
             if question.text.trimmingCharacters(in: .whitespaces).isEmpty { return "Every question needs text." }

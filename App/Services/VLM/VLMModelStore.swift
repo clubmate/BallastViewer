@@ -22,9 +22,25 @@ final class VLMModelStore {
 
     enum State: Equatable {
         case notDownloaded
-        case downloading(Double)
+        /// Not installed, but an interrupted download left this many bytes
+        /// in the cache — the next Download continues from there.
+        case partial(Int64)
+        case downloading(DownloadProgress)
         case ready
         case failed(String)
+    }
+
+    struct DownloadProgress: Equatable {
+        var bytes: Int64
+        var total: Int64
+        /// Smoothed transfer rate; nil until the first second of data.
+        var bytesPerSecond: Double?
+
+        var fraction: Double { total > 0 ? min(1, Double(bytes) / Double(total)) : 0 }
+        var secondsLeft: TimeInterval? {
+            guard let bytesPerSecond, bytesPerSecond > 0, total > bytes else { return nil }
+            return Double(total - bytes) / bytesPerSecond
+        }
     }
 
     /// Curated starting points (user decision 2026-09-04: the Qwen3.5 sizes
@@ -90,7 +106,26 @@ final class VLMModelStore {
     func refreshStates() {
         for model in models {
             if case .downloading = states[model.id] { continue }
-            states[model.id] = Self.isInstalled(model.id) ? .ready : .notDownloaded
+            states[model.id] = Self.restingState(model.id)
+        }
+    }
+
+    /// The state of a model nobody is downloading right now.
+    nonisolated static func restingState(_ id: String) -> State {
+        if isInstalled(id) { return .ready }
+        let partial = partialBytes(id)
+        return partial > 0 ? .partial(partial) : .notDownloaded
+    }
+
+    /// Bytes of interrupted downloads waiting in the cache
+    /// (`blobs/<etag>.incomplete`, the file huggingface_hub uses too).
+    nonisolated static func partialBytes(_ id: String) -> Int64 {
+        guard let repo = Repo.ID(rawValue: id) else { return 0 }
+        let blobs = HubCache.default.blobsDirectory(repo: repo, kind: .model)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: blobs.path) else { return 0 }
+        return names.filter { $0.hasSuffix(".incomplete") }.reduce(0) { sum, name in
+            let size = (try? FileManager.default.attributesOfItem(atPath: blobs.appendingPathComponent(name).path)[.size] as? NSNumber)?.int64Value ?? 0
+            return sum + size
         }
     }
 
@@ -152,32 +187,75 @@ final class VLMModelStore {
 
     private var downloads: [String: Task<Void, Never>] = [:]
 
+    /// Starts (or continues) the download. Files stream into the Hugging
+    /// Face cache's own partial-file slot, so Cancel, a lost connection or
+    /// a quit lose nothing — the next Download picks up where it stopped.
     func download(_ id: String) {
         if case .downloading = state(of: id) { return }
-        if let size = models.first(where: { $0.id == id })?.sizeGB,
-           let free = Self.freeGigabytes(), free < size + 1
-        {
-            states[id] = .failed(
-                "Not enough free disk space: the model needs \(size, default: "?") GB, \(Int(free)) GB are free."
-            )
+        guard let repo = Repo.ID(rawValue: id) else {
+            states[id] = .failed("“\(id)” is not a valid Hugging Face repository id (expected owner/name).")
             return
         }
-        states[id] = .downloading(0)
+        if let size = models.first(where: { $0.id == id })?.sizeGB,
+           let free = Self.freeGigabytes()
+        {
+            let stillNeeded = max(0, size - Double(Self.partialBytes(id)) / 1e9)
+            if free < stillNeeded + 1 {
+                states[id] = .failed(
+                    "Not enough free disk space: the model needs \(stillNeeded.formatted(.number.precision(.fractionLength(1)))) GB more, \(Int(free)) GB are free."
+                )
+                return
+            }
+        }
+        let size = models.first { $0.id == id }?.sizeGB ?? 0
+        states[id] = .downloading(DownloadProgress(bytes: Self.partialBytes(id), total: Int64(size * 1e9)))
+        let meter = RateMeter()
         downloads[id] = Task {
             defer { downloads[id] = nil }
             do {
-                _ = try await HubBridge(hub: HubClient()).download(
-                    id: id, revision: "main", matching: VLMService.downloadPatterns, useLatest: false
-                ) { [weak self] progress in
-                    let fraction = progress.fractionCompleted
-                    Task { @MainActor in self?.states[id] = .downloading(fraction) }
+                let downloader = ResumableSnapshotDownloader(
+                    repo: repo, revision: "main", patterns: VLMService.downloadPatterns
+                )
+                try await downloader.run { [weak self] bytes, total in
+                    let rate = meter.record(bytes: bytes)
+                    Task { @MainActor in
+                        guard case .downloading = self?.states[id] else { return }
+                        self?.states[id] = .downloading(DownloadProgress(bytes: bytes, total: total, bytesPerSecond: rate))
+                    }
                 }
                 states[id] = Self.isInstalled(id) ? .ready : .failed("The download finished but the weights are incomplete.")
             } catch is CancellationError {
-                states[id] = Self.isInstalled(id) ? .ready : .notDownloaded
+                states[id] = Self.restingState(id)
             } catch {
                 states[id] = Self.isInstalled(id) ? .ready : .failed(error.localizedDescription)
             }
+        }
+    }
+
+    /// Transfer rate from the byte counter: an exponential moving average
+    /// over one-second windows, so the number settles instead of flickering
+    /// with every packet, yet follows a slowdown within a few seconds.
+    private final class RateMeter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var windowStart: Date?
+        private var windowBytes: Int64 = 0
+        private var rate: Double?
+
+        func record(bytes: Int64) -> Double? {
+            lock.lock(); defer { lock.unlock() }
+            let now = Date()
+            guard let start = windowStart else {
+                windowStart = now
+                windowBytes = bytes
+                return nil
+            }
+            let elapsed = now.timeIntervalSince(start)
+            guard elapsed >= 1 else { return rate }
+            let sample = Double(bytes - windowBytes) / elapsed
+            rate = rate.map { $0 * 0.7 + sample * 0.3 } ?? sample
+            windowStart = now
+            windowBytes = bytes
+            return rate
         }
     }
 

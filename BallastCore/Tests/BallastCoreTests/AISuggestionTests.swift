@@ -311,32 +311,6 @@ import Testing
         #expect(try empty.read { try AIProfileDAO.fetchAll($0).isEmpty })
     }
 
-    @Test func exportCarriesPathsAndImportResolvesOrLeavesUnmapped() throws {
-        let dbQueue = try makeTestDatabase()
-        let (document, tree) = try dbQueue.write { db -> (AIProfileExport, KeywordTree) in
-            let frau = try KeywordDAO.ensurePath(["PEOPLE", "FRAU"], groupId: nil, in: db)
-            var draft = profile()
-            draft.questions[1].answers[0].keywordId = frau
-            let saved = try AIProfileDAO.save(draft, in: db)
-            let tree = KeywordTree(records: try KeywordDAO.fetchAll(db))
-            return (AIProfileExport(profile: saved, tree: tree), tree)
-        }
-        #expect(document.questions[1].answers[0].keywordPath == "PEOPLE > FRAU")
-        #expect(document.questions[0].answers[0].stopsProfile == true)
-        let roundTrip = try AIProfileExport.decode(try document.encoded())
-        #expect(roundTrip == document)
-
-        // Same library: the path resolves. A foreign path stays unmapped and is reported.
-        var foreign = roundTrip
-        foreign.questions[1].answers[1].keywordPath = "PEOPLE > MANN"
-        let resolved = foreign.resolved(in: tree)
-        #expect(resolved.profile.questions[1].answers[0].keywordId == tree.find(pathComponents: ["PEOPLE", "FRAU"]))
-        #expect(resolved.profile.questions[1].answers[1].keywordId == nil)
-        #expect(resolved.unresolvedPaths == ["PEOPLE > MANN"])
-        #expect(resolved.profile.id == nil)
-        #expect(resolved.profile.questions[0].answers[0].stopsProfile == true)
-    }
-
     @Test func promptListsQuestionsWithKeysAndValues() {
         var draft = profile()
         draft.instructions = "Judge by the main subject."

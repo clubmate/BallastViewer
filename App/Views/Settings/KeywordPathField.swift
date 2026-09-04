@@ -1,10 +1,17 @@
 import BallastCore
 import SwiftUI
 
-/// U49: the keyword picker of a profile answer — a search field over the
-/// library's keyword paths instead of a menu with every path in it (a
+/// U49: the keyword picker of a questionnaire answer — a search field over
+/// the library's keyword paths instead of a menu with every path in it (a
 /// Lightroom-sized tree has thousands). Type to filter, click to pick, ✕ to
-/// unmap. Uses the same dropdown as the inspector's Add Keyword field.
+/// unmap.
+///
+/// The dropdown is NOT drawn here: an overlay inside a form row lies
+/// underneath the rows that follow, and their text fields swallow the
+/// clicks (user report 2026-09-04: "you click through the list onto the
+/// field below"). Instead the field publishes its bounds and suggestions
+/// as a preference, and the enclosing view draws the list above everything
+/// with `keywordDropdownHost()`.
 struct KeywordPathField: View {
     @Environment(LibraryController.self) private var controller
     @Binding var keywordId: Int64?
@@ -39,6 +46,11 @@ struct KeywordPathField: View {
             .onSubmit {
                 if let first = suggestions.first { pick(first) }
             }
+            .anchorPreference(key: KeywordDropdownKey.self, value: .bounds) { anchor in
+                let suggestions = suggestions
+                guard focused, !suggestions.isEmpty else { return nil }
+                return KeywordDropdownRequest(anchor: anchor, suggestions: suggestions, pick: pick)
+            }
             if keywordId != nil {
                 Button {
                     keywordId = nil
@@ -48,17 +60,6 @@ struct KeywordPathField: View {
                 }
                 .buttonStyle(.plain)
                 .help("Assign no keyword for this answer")
-            }
-        }
-        .overlay(alignment: .topLeading) {
-            if focused, !suggestions.isEmpty {
-                SuggestionDropdown(suggestions: suggestions) { pick($0) }
-                    .frame(width: 320, height: SuggestionDropdown.height(forCount: suggestions.count))
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .shadow(radius: 4)
-                    .offset(y: 26)
-                    .zIndex(10)
             }
         }
         .onChange(of: focused) { _, isFocused in
@@ -72,5 +73,44 @@ struct KeywordPathField: View {
         keywordId = tree.find(pathComponents: components)
         query = ""
         focused = false
+    }
+}
+
+/// What the focused `KeywordPathField` asks its host to draw.
+struct KeywordDropdownRequest: @unchecked Sendable {
+    let anchor: Anchor<CGRect>
+    let suggestions: [String]
+    let pick: (String) -> Void
+}
+
+struct KeywordDropdownKey: PreferenceKey {
+    static let defaultValue: KeywordDropdownRequest? = nil
+    static func reduce(value: inout KeywordDropdownRequest?, nextValue: () -> KeywordDropdownRequest?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+extension View {
+    /// Draws the dropdown of whichever `KeywordPathField` below is focused,
+    /// on top of the whole view — so it is never hidden behind, or beaten
+    /// to the click by, later rows. Opens downwards, or upwards when there
+    /// is no room below.
+    func keywordDropdownHost() -> some View {
+        overlayPreferenceValue(KeywordDropdownKey.self) { request in
+            GeometryReader { geometry in
+                if let request {
+                    let field = geometry[request.anchor]
+                    let height = SuggestionDropdown.height(forCount: request.suggestions.count)
+                    let width = min(max(field.width, 320), max(200, geometry.size.width - field.minX - 8))
+                    let fitsBelow = field.maxY + 2 + height <= geometry.size.height
+                    SuggestionDropdown(suggestions: request.suggestions, onPick: request.pick)
+                        .frame(width: width, height: height)
+                        .position(
+                            x: field.minX + width / 2,
+                            y: fitsBelow ? field.maxY + 2 + height / 2 : field.minY - 2 - height / 2
+                        )
+                }
+            }
+        }
     }
 }

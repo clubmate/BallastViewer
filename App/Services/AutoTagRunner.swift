@@ -107,11 +107,11 @@ final class AutoTagRunner {
         }
         let profiles = snapshot.aiProfiles.filter { $0.enabled && !$0.questions.isEmpty }
         guard !profiles.isEmpty else {
-            phase = .failed("No profile is switched on — set one up in Settings ▸ AI.")
+            phase = .failed("No questionnaire is switched on — set one up in Settings ▸ AI.")
             return
         }
         guard profiles.contains(where: { !$0.keywordIds.isEmpty }) else {
-            phase = .failed("No answer of the enabled profiles is mapped to a keyword yet — see Settings ▸ AI.")
+            phase = .failed("No answer of the enabled questionnaires is mapped to a keyword yet — see Settings ▸ AI.")
             return
         }
         guard let model = models.selected, models.isSelectedReady else {
@@ -293,7 +293,7 @@ final class AutoTagRunner {
         let state = PreviewState(total: photos.count)
         preview = state
         guard !profiles.isEmpty else {
-            state.error = "No profile is switched on — set one up in Settings ▸ AI."
+            state.error = "No questionnaire is switched on — set one up in Settings ▸ AI."
             state.isRunning = false
             return
         }

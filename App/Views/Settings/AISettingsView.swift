@@ -2,8 +2,9 @@ import BallastCore
 import SwiftUI
 
 /// Settings ▸ AI (U49): the vision-language model (which one, downloaded or
-/// not, add your own by Hugging Face id) and the auto-tagging PROFILES — a
-/// questionnaire per photo genre whose answers map to keywords. Runs start
+/// not, add your own by Hugging Face id) and the keyword QUESTIONNAIRES
+/// (`AIProfile` in code) — a list of questions per photo genre whose answers
+/// map to keywords, stored in the library. Runs start
 /// from the sidebar (right-click a smart collection or ALL PHOTOS ▸ Auto-Tag
 /// Photos); progress shows in the sidebar's AUTO-TAGGING section.
 /// Everything runs on-device; nothing leaves the machine except the
@@ -32,7 +33,6 @@ struct AISettingsView: View {
     @State private var editing: AIProfile?
     @State private var pendingDeletion: AIProfile?
     @State private var pendingModelRemoval: VLMModelStore.ModelInfo?
-    @State private var importNote: String?
 
     var body: some View {
         Form {
@@ -47,7 +47,7 @@ struct AISettingsView: View {
             }
         }
         .alert(
-            "Delete Profile",
+            "Delete Questionnaire",
             isPresented: Binding(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }),
             presenting: pendingDeletion
         ) { profile in
@@ -56,17 +56,19 @@ struct AISettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { profile in
-            Text("“\(profile.name)” and its questions are removed. Suggestions already made stay.")
+            Text("“\(profile.name)” and its questions are removed from this library. Suggestions already made stay.")
         }
         .alert(
-            "Remove Model Files",
+            models.state(of: pendingModelRemoval?.id ?? "") == .ready ? "Remove Model Files" : "Discard Partial Download",
             isPresented: Binding(get: { pendingModelRemoval != nil }, set: { if !$0 { pendingModelRemoval = nil } }),
             presenting: pendingModelRemoval
         ) { model in
             Button("Remove", role: .destructive) { models.remove(model.id) }
             Button("Cancel", role: .cancel) {}
         } message: { model in
-            Text("Deletes “\(model.title)” (\(model.sizeGB.map { "\($0) GB" } ?? "the weights")) from the shared Hugging Face cache. Other tools using that cache lose it too; it can be downloaded again any time.")
+            Text(models.state(of: model.id) == .ready
+                ? "Deletes “\(model.title)” (\(model.sizeGB.map { "\($0) GB" } ?? "the weights")) from the shared Hugging Face cache. Other tools using that cache lose it too; it can be downloaded again any time."
+                : "Deletes the partial download of “\(model.title)” from the shared Hugging Face cache.")
         }
         .onAppear { models.refreshStates() }
     }
@@ -95,7 +97,7 @@ struct AISettingsView: View {
         } header: {
             Text("Model")
         } footer: {
-            Text("Models are stored in the shared Hugging Face cache (~/.cache/huggingface/hub) and reused by other tools. Any MLX-converted vision model with a supported architecture can be added by its repository id. Runs entirely on this Mac — photos never leave the machine.")
+            Text("Models are stored in the shared Hugging Face cache (~/.cache/huggingface/hub) and reused by other tools. An interrupted download continues where it stopped. Any MLX-converted vision model with a supported architecture can be added by its repository id. Runs entirely on this Mac — photos never leave the machine.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -144,14 +146,26 @@ struct AISettingsView: View {
                         .help("Remove from this list (nothing is on disk)")
                 }
             }
-        case .downloading(let fraction):
+        case .partial(let bytes):
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(spacing: 6) {
+                    Button("Continue Download") { models.download(model.id) }
+                    Button("Discard") { pendingModelRemoval = model }
+                        .help("Delete the partial download")
+                }
+                Text("\(Double(bytes) / 1e9, format: .number.precision(.fractionLength(1))) GB already on disk")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        case .downloading(let progress):
             HStack(spacing: 6) {
                 VStack(alignment: .trailing, spacing: 2) {
-                    ProgressView(value: fraction, total: 1).frame(width: 120)
-                    Text("\(Int(fraction * 100)) %").font(.caption2).foregroundStyle(.secondary)
+                    ProgressView(value: progress.fraction, total: 1).frame(width: 160)
+                    Text(downloadCaption(progress)).font(.caption2).foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
                 Button("Cancel") { models.cancelDownload(model.id) }
                     .controlSize(.small)
+                    .help("Stops the download; the bytes so far stay and Continue picks up there")
             }
         case .ready:
             HStack(spacing: 6) {
@@ -164,10 +178,27 @@ struct AISettingsView: View {
         case .failed(let message):
             VStack(alignment: .trailing, spacing: 2) {
                 Button("Retry") { models.download(model.id) }
+                    .help("Continues where the download stopped")
                 Text(message).font(.caption2).foregroundStyle(.red)
                     .lineLimit(2).frame(maxWidth: 220, alignment: .trailing)
             }
         }
+    }
+
+    /// "1.2 of 6.0 GB · 38 MB/s · about 2 min left" — the rate appears after
+    /// the first second, the estimate follows the smoothed rate.
+    private func downloadCaption(_ progress: VLMModelStore.DownloadProgress) -> String {
+        let gb = { (bytes: Int64) in
+            (Double(bytes) / 1e9).formatted(.number.precision(.fractionLength(1)))
+        }
+        var parts = [progress.total > 0 ? "\(gb(progress.bytes)) of \(gb(progress.total)) GB" : "\(gb(progress.bytes)) GB"]
+        if let rate = progress.bytesPerSecond {
+            parts.append("\((rate / 1e6).formatted(.number.precision(.fractionLength(rate < 10e6 ? 1 : 0)))) MB/s")
+        }
+        if let seconds = progress.secondsLeft {
+            parts.append(AutoTagStatusSection.timeLeft(seconds))
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func addCustom() {
@@ -201,13 +232,13 @@ struct AISettingsView: View {
         } header: {
             Text("Prompt & Run")
         } footer: {
-            Text("The system prompt is sent before every profile's instructions and questions. Changing any of these settings re-asks the model on the next run (earlier answers stay cached under the old settings).")
+            Text("The system prompt is sent before every questionnaire's instructions and questions. Changing any of these settings re-asks the model on the next run (earlier answers stay cached under the old settings).")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .disabled(runner.isRunning)
     }
 
-    // MARK: Profiles
+    // MARK: Questionnaires
 
     private var profiles: [AIProfile] { controller.snapshot?.aiProfiles ?? [] }
 
@@ -216,34 +247,29 @@ struct AISettingsView: View {
             if controller.snapshot == nil {
                 Text("Open a library first.").foregroundStyle(.secondary)
             } else if profiles.isEmpty {
-                Text("No profile yet. A profile is a list of questions the model answers about every photo — each answer can assign a keyword.")
+                Text("No questionnaire yet. A questionnaire is a list of questions the model answers about every photo — each answer can assign a keyword. Questionnaires are saved in the library.")
                     .foregroundStyle(.secondary)
             }
             ForEach(profiles, id: \.id) { profile in
                 profileRow(profile)
             }
             HStack(spacing: 8) {
-                Button("New Profile") {
+                Button("New Questionnaire") {
                     editing = AIProfile(
-                        record: AIProfileRecord(name: "New Profile", instructions: AIProfile.defaultInstructions),
+                        record: AIProfileRecord(name: "New Questionnaire", instructions: AIProfile.defaultInstructions),
                         questions: [AIQuestion(record: AIQuestionRecord(profileId: 0, text: ""), answers: [])]
                     )
                 }
-                Button("Add Example Profile (People)") {
+                Button("Add Example Questionnaire (People)") {
                     editing = AIProfile.starter()
                 }
                 .help("Six questions — people count, gender, age, angle, face cut off, lighting — with the keywords still to be mapped")
-                Button("Import…") { importProfile() }
-                    .help("Load a profile exported from another library; keyword paths that do not exist here stay unmapped")
             }
             .disabled(controller.snapshot == nil)
-            if let importNote {
-                Text(importNote).font(.caption).foregroundStyle(.secondary)
-            }
         } header: {
-            Text("Auto-Tagging Profiles (\(profiles.count))")
+            Text("Keyword Questionnaires (\(profiles.count))")
         } footer: {
-            Text("Every enabled profile is asked once per photo. Then right-click a smart collection (or ALL PHOTOS) in the sidebar and choose Auto-Tag Photos; the answers arrive as pending suggestions to review photo by photo.")
+            Text("Every enabled questionnaire is asked once per photo. Then right-click a smart collection (or ALL PHOTOS) in the sidebar and choose Auto-Tag Photos; the answers arrive as pending suggestions to review photo by photo.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -264,8 +290,6 @@ struct AISettingsView: View {
                 Text(profileSummary(profile)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Button("Export…") { exportProfile(profile) }
-                .help("Save the questionnaire as JSON (keywords by path) to reuse in another library")
             Button("Edit…") { editing = profile }
                 .disabled(runner.isRunning)
             Button {
@@ -275,40 +299,9 @@ struct AISettingsView: View {
             }
             .buttonStyle(.borderless)
             .disabled(runner.isRunning)
-            .help("Delete profile")
+            .help("Delete questionnaire")
         }
         .padding(.vertical, 2)
-    }
-
-    private func exportProfile(_ profile: AIProfile) {
-        guard let tree = controller.snapshot?.keywordTree else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "\(profile.name).ballastprofile.json"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try AIProfileExport(profile: profile, tree: tree).encoded().write(to: url, options: .atomic)
-        } catch {
-            controller.errorMessage = "Could not export the profile: \(error.localizedDescription)"
-        }
-    }
-
-    private func importProfile() {
-        guard let tree = controller.snapshot?.keywordTree else { return }
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let document = try AIProfileExport.decode(try Data(contentsOf: url))
-            let resolved = document.resolved(in: tree)
-            editing = resolved.profile
-            importNote = resolved.unresolvedPaths.isEmpty
-                ? nil
-                : "Not in this library, left unmapped: \(resolved.unresolvedPaths.joined(separator: ", "))"
-        } catch {
-            controller.errorMessage = "Could not read the profile: \(error.localizedDescription)"
-        }
     }
 
     private func profileSummary(_ profile: AIProfile) -> String {
