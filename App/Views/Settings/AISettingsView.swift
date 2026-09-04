@@ -260,10 +260,6 @@ struct AISettingsView: View {
                         questions: [AIQuestion(record: AIQuestionRecord(profileId: 0, text: ""), answers: [])]
                     )
                 }
-                Button("Add Example Questionnaire (People)") {
-                    editing = AIProfile.starter()
-                }
-                .help("Six questions — people count, gender, age, angle, face cut off, lighting — with the keywords still to be mapped")
             }
             .disabled(controller.snapshot == nil)
         } header: {
