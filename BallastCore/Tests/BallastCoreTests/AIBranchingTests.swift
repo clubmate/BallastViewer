@@ -232,4 +232,22 @@ import Testing
             #expect(try PhotoDAO.fetchRejectedAIAnswerPaths(db) == [b.id!: ["RED"]])
         }
     }
+
+    @Test func splitThinkingSeparatesTraceFromAnswer() {
+        let plain = VLMPrompt.splitThinking("Two people shaking hands.\n")
+        #expect(plain.thinking == nil)
+        #expect(plain.answer == "Two people shaking hands.")
+        // Qwen opens the trace in the prompt, so the reply may carry only the closing tag.
+        let closedOnly = VLMPrompt.splitThinking("They stand close, arms extended…</think>\nYes — a handshake.")
+        #expect(closedOnly.thinking == "They stand close, arms extended…")
+        #expect(closedOnly.answer == "Yes — a handshake.")
+        let full = VLMPrompt.splitThinking("<think>hmm</think>No.")
+        #expect(full.thinking == "hmm")
+        #expect(full.answer == "No.")
+        // Budget ran out mid-trace: nothing after the tag, answer empty.
+        let unfinished = VLMPrompt.splitThinking("<think>The photo shows")
+        #expect(unfinished.thinking == "The photo shows")
+        #expect(unfinished.answer == "")
+        #expect(VLMPrompt.splitThinking("<think></think>ok").thinking == nil)
+    }
 }

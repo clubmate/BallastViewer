@@ -5,7 +5,7 @@ import SwiftUI
 /// auto-tagging" is on. Everything auto-tagging in one place: the window
 /// with the questionnaires and system prompt, the run on the selection (the
 /// sidebar's right-click keeps the per-collection scope), the calibration
-/// preview, and the review commands. Accept/Reject-All and "current view"
+/// preview, a free question to the model (U54), and the review commands. Accept/Reject-All and "current view"
 /// were removed on user request (2026-09-05): review is photo-by-photo.
 ///
 /// Menu enablement reads only `center.hasAnchor` and the runner's phase —
@@ -31,13 +31,19 @@ struct AICommands: Commands {
                 Button("Auto-Tag Selection") {
                     runner.run(controller: controller, models: models, photos: selectedPhotos, scopeName: "the selection")
                 }
-                .disabled(!hasAnchor || runner.isRunning)
+                .disabled(!hasAnchor || runner.isRunning || runner.ask != nil)
                 // U49: the calibration view — answers for the selection, nothing
                 // applied. Capped at `AutoTagRunner.previewLimit` photos.
                 Button("Preview Auto-Tagging on Selection…") {
                     runner.preview(controller: controller, models: models, photos: selectedPhotos)
                 }
-                .disabled(!hasAnchor || runner.isRunning)
+                .disabled(!hasAnchor || runner.isRunning || runner.ask != nil)
+                // U54: a free question about the selection, answered in
+                // prose — what does the model actually see?
+                Button("Ask Model on Selection…") {
+                    runner.startAsk(controller: controller, models: models, photos: selectedPhotos)
+                }
+                .disabled(!hasAnchor || runner.isRunning || runner.ask != nil)
                 Button("Cancel Auto-Tagging") { runner.cancel() }
                     .disabled(!runner.isRunning)
                 Divider()

@@ -61,10 +61,12 @@ actor VLMService {
     /// settings give the same reply every run. `thinking` lets the model
     /// reason in a `<think>` block first (slower, sometimes more careful);
     /// `fullResolution` sends the image as decoded instead of capped at
-    /// `imageLongEdge` (the processor itself allows up to 16 MP).
+    /// `imageLongEdge` (the processor itself allows up to 16 MP). `maxTokens`
+    /// raises the 256-token answer budget (free questions answer in prose);
+    /// with thinking on the thinking budget applies regardless.
     func answer(
         image: CGImage, systemPrompt: String, userPrompt: String,
-        thinking: Bool = false, fullResolution: Bool = false
+        thinking: Bool = false, fullResolution: Bool = false, maxTokens: Int? = nil
     ) async throws -> String {
         guard let container else { throw GenerationError("No model is loaded.") }
         let input = UserInput(
@@ -80,7 +82,7 @@ actor VLMService {
         let prepared = try await container.prepare(input: input)
         let stream = try await container.generate(
             input: prepared,
-            parameters: GenerateParameters(maxTokens: thinking ? Self.thinkingMaxTokens : 256, temperature: 0)
+            parameters: GenerateParameters(maxTokens: thinking ? Self.thinkingMaxTokens : (maxTokens ?? 256), temperature: 0)
         )
         var reply = ""
         var stopReason: GenerateStopReason?

@@ -56,7 +56,7 @@ struct AutoTagPreviewSheet: View {
 
     private func itemView(_ item: AutoTagRunner.PreviewItem) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            PreviewThumbnail(path: item.path, orientation: item.orientation)
+            UprightThumbnail(path: item.path, orientation: item.orientation)
                 .frame(width: 160, height: 120)
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.filename).font(.subheadline.weight(.medium)).lineLimit(1)
@@ -103,8 +103,9 @@ struct AutoTagPreviewSheet: View {
 }
 
 /// Upright like the image handed to the model (decodes arrive unrotated,
-/// Q5) — a portrait must not look like a landscape here.
-private struct PreviewThumbnail: View {
+/// Q5) — a portrait must not look like a landscape here. Shared with the
+/// Ask Model sheet (U54).
+struct UprightThumbnail: View {
     @Environment(LibraryController.self) private var controller
     let path: String
     let orientation: Int

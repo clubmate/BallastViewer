@@ -186,14 +186,14 @@ struct AIWindow: View {
                 Label("Preview on Selection", systemImage: "eye")
             }
             .help("Show the model's answers for the selected photos (up to \(AutoTagRunner.previewLimit)) without assigning anything")
-            .disabled(!center.hasAnchor || runner.isRunning || runner.preview != nil)
+            .disabled(!center.hasAnchor || runner.isRunning || runner.preview != nil || runner.ask != nil)
             Button {
                 runner.run(controller: controller, models: models, photos: selectedPhotos, scopeName: "the selection")
             } label: {
                 Label("Auto-Tag Selection", systemImage: "sparkles")
             }
             .help("Ask every enabled questionnaire about the selected photos")
-            .disabled(!center.hasAnchor || runner.isRunning)
+            .disabled(!center.hasAnchor || runner.isRunning || runner.ask != nil)
         }
     }
 

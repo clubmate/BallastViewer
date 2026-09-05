@@ -13,6 +13,7 @@ import BallastCore
 /// acceptance flow) · BV_TEST_MERGE=1 (U40 rename-collision merge) ·
 /// BV_TEST_BULKWRITE=1 (U46 auto bulk-run progress, needs ≥100 photos) ·
 /// BV_TEST_AIREVIEW=1 (U48 pending-suggestion review flow, model-free, needs ≥4 photos) ·
+/// BV_TEST_VLM_ASK=<question> (U54: free question over the first photos) ·
 /// BV_TEST_VLM=<n> (U49: saves the starter profile with test keywords, runs the
 /// selected model over the first n visible photos, prints replies + counts) ·
 /// BV_TEST_STEP9=1 (search + keyword-shortcut flow) ·
@@ -111,6 +112,14 @@ enum TestHooks {
         }
         if let count = env["BV_TEST_VLM"].flatMap({ Int($0) }) {
             await runVLMChecks(controller, models: models, runner: runner, count: count)
+        }
+        // U54: a free question to the model about the first N photos
+        // (BV_TEST_VLM_ASK_COUNT, default 3), answers printed.
+        if let question = env["BV_TEST_VLM_ASK"] {
+            await runAskChecks(
+                controller, models: models, runner: runner, question: question,
+                count: env["BV_TEST_VLM_ASK_COUNT"].flatMap { Int($0) } ?? 3
+            )
         }
         if let path = env["BV_TEST_QTN"] {
             runQuarantineProbe(zipAt: path)
@@ -752,6 +761,59 @@ enum TestHooks {
         }
         let coined = tree.allRecords.filter(\.aiCreated).map { tree.path(of: $0.id!) }.sorted()
         print("BVVLM coined=\(coined.joined(separator: " | "))")
+    }
+
+    /// U54, headless: the Ask Model session — model load, one question over
+    /// `count` photos, answers (and the think trace with BV_TEST_VLM_THINK=1)
+    /// printed, a second question to prove the model stayed loaded.
+    @MainActor
+    private static func runAskChecks(
+        _ controller: LibraryController, models: VLMModelStore, runner: AutoTagRunner, question: String, count: Int
+    ) async {
+        var waited = 0
+        while controller.snapshot == nil, waited < 600 {
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
+        guard let snapshot = controller.snapshot else {
+            print("BVASK error=no-library")
+            return
+        }
+        let savedThinking = UserDefaults.standard.object(forKey: AISettingsView.thinkingKey)
+        defer { UserDefaults.standard.set(savedThinking, forKey: AISettingsView.thinkingKey) }
+        let env = ProcessInfo.processInfo.environment
+        if let override = env["BV_TEST_VLM_MODEL"] {
+            models.selectedId = override
+            models.refreshStates()
+        }
+        UserDefaults.standard.set(env["BV_TEST_VLM_THINK"] != nil, forKey: AISettingsView.thinkingKey)
+        let photos = Array(snapshot.photos.prefix(count))
+        let started = Date()
+        runner.startAsk(controller: controller, models: models, photos: photos)
+        guard let state = runner.ask else {
+            print("BVASK error=no-session")
+            return
+        }
+        // The first question goes in while the model is still loading — it
+        // must wait for the load, not be dropped.
+        print("BVASK session loading=\(state.isLoadingModel) error=\(state.error ?? "-") photos=\(state.photos.count)")
+        for (index, text) in [question, "Answer with one word: is this photo in colour or black and white?"].enumerated() {
+            let asked = Date()
+            runner.ask(text, controller: controller, models: models)
+            if index == 0 {
+                while state.isLoadingModel { try? await Task.sleep(for: .milliseconds(100)) }
+                print("BVASK loaded seconds=\(Int(Date().timeIntervalSince(started))) queued=\(state.rounds.count)")
+            }
+            while state.isAnswering { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let round = state.rounds.first else { continue }
+            print("BVASK round=\(index + 1) question=\(round.question) answers=\(round.answers.count) seconds=\(Int(Date().timeIntervalSince(asked))) error=\(state.error ?? "-")")
+            for answer in round.answers {
+                let name = state.photos.first { $0.id == answer.id }?.filename ?? "?"
+                print("BVASK photo=\(name) answer=\(answer.text.replacingOccurrences(of: "\n", with: " ")) thinking=\(answer.thinking?.count ?? 0)")
+            }
+        }
+        runner.dismissAsk()
+        print("BVASK dismissed session=\(runner.ask == nil)")
     }
 
     /// U41 acceptance, headless: a child collection ANDs the parent's rules

@@ -27,6 +27,31 @@ public enum VLMPrompt {
     /// met — never an answer, never cached as one.
     public static let notApplicable = "n/a"
 
+    /// The system prompt of a free question (AI ▸ Ask Model on Selection…):
+    /// plain prose instead of JSON, and a nudge towards what is visible —
+    /// the tool for finding out what the model can see before a question is
+    /// put into a questionnaire.
+    public static let askSystemPrompt =
+        "You are a photo cataloguing assistant. Look at the photo and answer the question in plain English. Be brief and concrete, and describe only what is visible in the photo."
+
+    /// Splits a reply into its `<think>…</think>` trace and the answer after
+    /// it. A reply without a trace is all answer; a trace that never closed
+    /// (token budget exhausted) is all thinking and the answer is empty.
+    public static func splitThinking(_ reply: String) -> (thinking: String?, answer: String) {
+        if let close = reply.range(of: "</think>", options: .backwards) {
+            var trace = String(reply[..<close.lowerBound])
+            if let open = trace.range(of: "<think>") { trace = String(trace[open.upperBound...]) }
+            let answer = String(reply[close.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let thinking = trace.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (thinking.isEmpty ? nil : thinking, answer)
+        }
+        if let open = reply.range(of: "<think>") {
+            let thinking = String(reply[open.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return (thinking.isEmpty ? nil : thinking, "")
+        }
+        return (nil, reply.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     /// Placeholder for the free-text slot in the return shape.
     static let openPlaceholder = "<one or two words>"
 

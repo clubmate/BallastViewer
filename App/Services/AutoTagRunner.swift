@@ -72,6 +72,12 @@ final class AutoTagRunner {
 
     private(set) var preview: PreviewState?
 
+    /// U54: the free-question session (AI ▸ Ask Model on Selection…) —
+    /// set while its sheet is up; the model stays loaded between questions.
+    /// Types and methods live in `AutoTagRunner+Ask.swift`.
+    var ask: AskState?
+    var askTask: Task<Void, Never>?
+
     /// At most this many photos per preview — enough to judge wording.
     static let previewLimit = 24
 
@@ -137,6 +143,10 @@ final class AutoTagRunner {
         scopeName: String
     ) {
         guard !isRunning else { return }
+        guard ask == nil else {
+            phase = .failed("Close the Ask Model window first.")
+            return
+        }
         guard let snapshot = controller.snapshot, let thumbnails = controller.thumbnails else {
             phase = .failed("Open a library first.")
             return
@@ -341,7 +351,7 @@ final class AutoTagRunner {
     /// and shows the answers; nothing is applied. Uses and fills the reply
     /// cache like a run, so a following run over the same photos is free.
     func preview(controller: LibraryController, models: VLMModelStore, photos: [PhotoRecord]) {
-        guard !isRunning, preview == nil else { return }
+        guard !isRunning, preview == nil, ask == nil else { return }
         guard let snapshot = controller.snapshot, let thumbnails = controller.thumbnails else { return }
         let profiles = snapshot.aiProfiles.filter { $0.enabled && !$0.questions.isEmpty }
         let photos = Array(photos.prefix(Self.previewLimit))

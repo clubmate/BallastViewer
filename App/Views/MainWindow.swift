@@ -130,9 +130,13 @@ struct MainWindow: View {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
-        // U49: the auto-tagging preview (Photo ▸ Preview Auto-Tagging on Selection).
-        .sheet(item: Binding(get: { autoTagRunner.preview }, set: { if $0 == nil { autoTagRunner.dismissPreview() } })) { state in
+        // U49: the auto-tagging preview (AI ▸ Preview Auto-Tagging on Selection).
+        .sheet(item: previewBinding) { state in
             AutoTagPreviewSheet(state: state)
+        }
+        // U54: free questions to the model (AI ▸ Ask Model on Selection…).
+        .sheet(item: askBinding) { state in
+            AskModelSheet(state: state)
         }
         // U48 emergency exit, reachable from the REVIEW KEYWORDS row and AI menu.
         .alert(
@@ -173,6 +177,16 @@ struct MainWindow: View {
     }
 
     /// Folder drop imports into the open library, or offers to create one first (U1/U2).
+    /// Sheet bindings kept out of `body` — inline closures there push the
+    /// type-checker over its budget.
+    private var previewBinding: Binding<AutoTagRunner.PreviewState?> {
+        Binding(get: { autoTagRunner.preview }, set: { if $0 == nil { autoTagRunner.dismissPreview() } })
+    }
+
+    private var askBinding: Binding<AutoTagRunner.AskState?> {
+        Binding(get: { autoTagRunner.ask }, set: { if $0 == nil { autoTagRunner.dismissAsk() } })
+    }
+
     private func handleDrop(_ urls: [URL]) -> Bool {
         let folders = urls.filter { url in
             (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
