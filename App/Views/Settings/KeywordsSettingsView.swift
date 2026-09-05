@@ -45,6 +45,14 @@ struct KeywordsSettingsView: View {
     /// on every rating/rotation in the main window.
     private var tree: KeywordTree { controller.vocabulary.tree }
 
+    // MARK: Collapse-state persistence
+
+    /// Read only inside event closures, never in `body`: touching `snapshot`
+    /// there would register an Observation dependency on every mutation.
+    private var collapseStateKey: String? {
+        controller.snapshot.map { "keywordsSettingsCollapsed.\($0.meta.libraryUUID)" }
+    }
+
     var body: some View {
         Group {
             if controller.isLibraryOpen {
@@ -85,6 +93,14 @@ struct KeywordsSettingsView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        // Collapse state survives closing Settings and relaunching (user
+        // request 2026-09-05), per library — ids are per-library autoincrements.
+        .modifier(CollapseStatePersistence(
+            key: { collapseStateKey },
+            isLibraryOpen: controller.isLibraryOpen,
+            groups: $collapsedGroups,
+            keywords: $collapsedKeywords
+        ))
         .sheet(item: $editingGroup) { group in
             GroupEditSheet(group: group) { name, color in
                 if let id = group.id {
@@ -602,5 +618,45 @@ private struct PaletteSwatch: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Colour \(hex)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// Settings ▸ Keywords collapse state: one UserDefaults entry per library.
+/// A separate modifier because the editor's body chain is already at the
+/// type-checker's limit.
+private struct CollapseStatePersistence: ViewModifier {
+    let key: () -> String?
+    let isLibraryOpen: Bool
+    @Binding var groups: Set<Int64>
+    @Binding var keywords: Set<Int64>
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear(perform: load)
+            .onChange(of: isLibraryOpen) { load() }
+            .onChange(of: groups) { save() }
+            .onChange(of: keywords) { save() }
+    }
+
+    private func load() {
+        guard let key = key() else {
+            groups = []
+            keywords = []
+            return
+        }
+        let stored = UserDefaults.standard.dictionary(forKey: key) ?? [:]
+        groups = Set((stored["groups"] as? [Int64]) ?? [])
+        keywords = Set((stored["keywords"] as? [Int64]) ?? [])
+    }
+
+    private func save() {
+        guard let key = key() else { return }
+        if groups.isEmpty, keywords.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(
+                ["groups": groups.sorted(), "keywords": keywords.sorted()], forKey: key
+            )
+        }
     }
 }
