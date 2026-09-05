@@ -308,11 +308,24 @@ struct PhotoGridView: NSViewRepresentable {
                 bucket: bucket,
                 isSelected: selection.isSelected(photo.id),
                 selectionColor: selectionColor,
-                pipeline: pipeline
+                pipeline: pipeline,
+                dragURLs: { [weak self] id in self?.dragURLs(from: id) ?? [] }
             ) { [weak self] id, modifiers, clickCount in
                 self?.viewModel.handleClick(on: id, modifiers: modifiers, clickCount: clickCount)
             }
             return item
+        }
+
+        /// U51: drag-out payload. A cell inside the selection drags the whole
+        /// selection in display order; any other cell drags itself alone.
+        private func dragURLs(from id: Int64) -> [URL] {
+            let ids: [Int64]
+            if selection.isSelected(id) {
+                ids = orderedIds.filter { selection.isSelected($0) }
+            } else {
+                ids = [id]
+            }
+            return ids.compactMap { indexById[$0] }.map { URL(fileURLWithPath: photos[$0].path) }
         }
     }
 }

@@ -21,11 +21,13 @@ final class GridViewItem: NSCollectionViewItem {
         isSelected: Bool,
         selectionColor: NSColor,
         pipeline: ThumbnailPipeline,
+        dragURLs: @escaping (Int64) -> [URL],
         onClick: @escaping (Int64, NSEvent.ModifierFlags, Int) -> Void
     ) {
         let isSamePhoto = photoId == photo.id
         photoId = photo.id
         itemView.onClick = { modifiers, clickCount in onClick(photo.id, modifiers, clickCount) }
+        itemView.dragURLs = { dragURLs(photo.id) }
         itemView.setOrientation(photo.orientation)
         setSelected(isSelected, color: selectionColor)
         loadTask?.cancel()
@@ -72,8 +74,18 @@ final class GridViewItem: NSCollectionViewItem {
 /// Fill-crop is TOP-aligned (Q22) by selecting the square `contentsRect` of
 /// the source bitmap that, after the orientation transform, shows the top of
 /// the displayed image.
-final class GridItemView: NSView {
+final class GridItemView: NSView, NSDraggingSource {
     var onClick: ((NSEvent.ModifierFlags, Int) -> Void)?
+    /// U51: the files a drag from this cell carries — the whole selection when
+    /// the cell is part of it, else just this photo (the coordinator decides).
+    var dragURLs: (() -> [URL])?
+
+    private(set) var isSelected = false
+    /// A plain click on an already-selected cell is NOT applied on mouse-down
+    /// (it would collapse a multi-selection before a drag could pick it up);
+    /// it fires on mouse-up unless the mouse moved far enough to become a drag.
+    private var pendingClick: (NSEvent.ModifierFlags, Int)?
+    private var mouseDownLocation = NSPoint.zero
 
     private let imageLayer = CALayer()
     private var transform = OrientationTransform.forEXIF(1)
@@ -108,6 +120,7 @@ final class GridItemView: NSView {
     }
 
     func setSelectedVisual(_ selected: Bool, color: NSColor) {
+        isSelected = selected
         CATransaction.withoutAnimation {
             layer?.borderWidth = selected ? 3 : 0
             layer?.borderColor = color.cgColor
@@ -130,8 +143,62 @@ final class GridItemView: NSView {
         imageLayer.contentsScale = window?.backingScaleFactor ?? 2
     }
 
+    // MARK: Mouse — click on mouse-down (spec §9.3), drag-out as file copy (U51)
+
     override func mouseDown(with event: NSEvent) {
-        onClick?(event.modifierFlags, event.clickCount)
+        mouseDownLocation = event.locationInWindow
+        pendingClick = nil
+        let plain = event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty
+        if plain, event.clickCount == 1, isSelected {
+            pendingClick = (event.modifierFlags, event.clickCount)
+        } else {
+            onClick?(event.modifierFlags, event.clickCount)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if let (modifiers, clickCount) = pendingClick {
+            pendingClick = nil
+            onClick?(modifiers, clickCount)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let delta = hypot(
+            event.locationInWindow.x - mouseDownLocation.x,
+            event.locationInWindow.y - mouseDownLocation.y
+        )
+        guard delta >= 4, let urls = dragURLs?(), !urls.isEmpty else { return }
+        pendingClick = nil
+        beginFileDrag(urls: urls, event: event)
+    }
+
+    /// Drags the files as `NSURL`s: Finder and other apps COPY them (the
+    /// source allows only `.copy`), the originals never move. The drag image
+    /// is this cell's thumbnail; further files stack behind it.
+    private func beginFileDrag(urls: [URL], event: NSEvent) {
+        let image = dragImage()
+        let items = urls.map { url -> NSDraggingItem in
+            let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+            item.setDraggingFrame(bounds, contents: image)
+            return item
+        }
+        let session = beginDraggingSession(with: items, event: event, source: self)
+        session.draggingFormation = .stack
+    }
+
+    private func dragImage() -> NSImage {
+        let image = NSImage(size: bounds.size)
+        guard bounds.width > 0, bounds.height > 0,
+              let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return image }
+        cacheDisplay(in: bounds, to: rep)
+        image.addRepresentation(rep)
+        return image
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        // Nothing inside the app accepts photo drops; outside it is a copy.
+        context == .outsideApplication ? .copy : []
     }
 
     private func applyTransform() {
