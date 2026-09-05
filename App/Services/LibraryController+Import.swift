@@ -321,15 +321,46 @@ extension LibraryController {
     /// afterwards (paths are everywhere: facts, thumbnails, the AI cache).
     func relinkFolder(_ folder: FolderRecord, to newURL: URL, inLibraryAt url: URL) async {
         guard let folderId = folder.id else { return }
-        let newPath = newURL.path
+        let newPath = BackupPlan.normalized(newURL.path)
+        let oldPath = BackupPlan.normalized(folder.path)
         let bookmark = try? PortableBookmark.make(newURL)
         if url.path == libraryURL?.path {
-            guard let pipeline = writePipeline else { return }
+            guard let pipeline = writePipeline, let snapshot else { return }
+            // Validation (review finding): the wrong directory would mark
+            // every photo missing. At least one of the folder's photos must
+            // exist under the new path (first 200 checked), and the photo
+            // paths must actually carry the old prefix (a Unicode
+            // normalisation mismatch would otherwise relink 0 photos).
+            let photos = snapshot.photos.filter { $0.folderId == folderId }
+            if !photos.isEmpty {
+                let prefix = oldPath + "/"
+                let sample = photos.prefix(200)
+                let prefixed = sample.filter { $0.path.hasPrefix(prefix) }
+                guard !prefixed.isEmpty else {
+                    errorMessage = "Could not relink “\(folder.path)”: its photo paths do not start with the folder path."
+                    return
+                }
+                let found = prefixed.contains { photo in
+                    let below = photo.path.dropFirst(prefix.count)
+                    return FileManager.default.fileExists(atPath: newPath + "/" + below)
+                }
+                guard found else {
+                    errorMessage = "No photos of “\(folder.path)” were found in “\(newPath)”. Choose the folder that contains the same files."
+                    return
+                }
+            }
             do {
                 let changed = try await pipeline.submitAndWait { db in
                     try ImportDAO.relinkFolder(folderId, to: newPath, bookmark: bookmark, in: db)
                 }
                 await refreshSnapshot()
+                // Undo relinks back; that call registers the redo in turn.
+                if let relinked = self.snapshot?.folders.first(where: { $0.id == folderId }) {
+                    let oldURL = URL(fileURLWithPath: oldPath, isDirectory: true)
+                    registerUndo("Relink Folder") { controller in
+                        Task { await controller.relinkFolder(relinked, to: oldURL, inLibraryAt: url) }
+                    }
+                }
                 infoMessage = "Relinked “\(folder.path)” to “\(newPath)” — \(changed) photo\(changed == 1 ? "" : "s") updated."
             } catch {
                 errorMessage = "Could not relink the folder.\n\(error.localizedDescription)"

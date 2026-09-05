@@ -24,7 +24,8 @@ struct AIWindow: View {
     @State private var selection: Selection?
     @State private var pendingDeletion: AIProfile?
 
-    private var profiles: [AIProfile] { controller.snapshot?.aiProfiles ?? [] }
+    /// The mirror, not `snapshot`: the window must not re-render per rating.
+    private var profiles: [AIProfile] { controller.aiProfiles }
 
     private var selectedProfile: AIProfile? {
         guard case .profile(let id) = selection else { return nil }
@@ -82,7 +83,7 @@ struct AIWindow: View {
                         .contentShape(Rectangle())
                 }
                 .help("New questionnaire")
-                .disabled(controller.snapshot == nil || runner.isRunning)
+                .disabled(!controller.isLibraryOpen || runner.isRunning)
                 Button {
                     pendingDeletion = selectedProfile
                 } label: {
@@ -108,7 +109,7 @@ struct AIWindow: View {
                         .tag(Selection.profile(profile.id ?? -1))
                 }
                 if profiles.isEmpty {
-                    Text(controller.snapshot == nil ? "Open a library first." : "None yet — add one below.")
+                    Text(!controller.isLibraryOpen ? "Open a library first." : "None yet — add one below.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -156,7 +157,7 @@ struct AIWindow: View {
 
     @ViewBuilder
     private var detail: some View {
-        if controller.snapshot == nil {
+        if !controller.isLibraryOpen {
             ContentUnavailableView("No Library Open", systemImage: "books.vertical", description: Text("Questionnaires live in the library. Open one from the Library menu."))
         } else if let profile = selectedProfile {
             AIQuestionnaireEditor(profile: profile)

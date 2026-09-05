@@ -162,9 +162,26 @@ final class BackupService {
         var freeBytes: Int64?
     }
 
+    /// Per destination, measured off the main thread (`stat` on a vanished
+    /// network share can block for a long time — review finding). Nil until
+    /// the first measurement.
+    private(set) var driveStatuses: [UUID: DriveStatus] = [:]
+
+    /// Re-measures every destination; called by Settings ▸ Backup on appear,
+    /// on mount/unmount and after a run.
+    func refreshDriveStatuses() async {
+        let list = destinations
+        let measured = await Task.detached(priority: .utility) { () -> [UUID: DriveStatus] in
+            var result: [UUID: DriveStatus] = [:]
+            for destination in list { result[destination.id] = Self.driveStatus(destination) }
+            return result
+        }.value
+        driveStatuses = measured
+    }
+
     /// Whether a drive destination's folder is reachable right now and how
     /// much room its volume has. Servers report `isConnected` true (checked
-    /// only by running).
+    /// only by running). Blocking I/O — call off the main thread.
     nonisolated static func driveStatus(_ destination: BackupDestination) -> DriveStatus {
         guard case .drive(let path) = destination.kind else { return DriveStatus(isConnected: true, freeBytes: nil) }
         var isDirectory: ObjCBool = false
@@ -218,22 +235,83 @@ final class BackupService {
         cancelFlag.cancel()
     }
 
+    /// Why a run is refused before it starts (shown as the failed phase).
+    static func refusal(
+        libraryURL: URL, folders: [FolderRecord], destination: BackupDestination
+    ) -> String? {
+        switch destination.kind {
+        case .drive:
+            // Backing up a library that lives INSIDE the destination root would
+            // rename the fresh snapshot over the database GRDB has open (every
+            // later change lost, a foreign WAL left beside it) — the exact
+            // "opened the backup in place" restore flow. A root inside a
+            // library folder would be re-imported by the next rescan and
+            // copied into itself, one level deeper each run.
+            let root = canonicalPath(destination.rootPath)
+            let library = canonicalPath(libraryURL.path)
+            if library == root || library.hasPrefix(root + "/") {
+                return "This library lives inside the backup destination (“\(destination.displayName)”). Open the original library, or choose another destination."
+            }
+            for folder in folders {
+                let path = canonicalPath(folder.path)
+                if path == root || path.hasPrefix(root + "/") {
+                    return "The folder “\(folder.path)” lies inside the backup destination — it would be copied onto itself."
+                }
+                if root.hasPrefix(path + "/") {
+                    return "The destination lies inside the library folder “\(folder.path)” — the backup would be imported as photos and copied into itself."
+                }
+            }
+        case .server(_, _, _, let path):
+            if !RsyncCommand.isRemotePathSafe(path) {
+                return "The server folder must not contain line breaks or runs of spaces."
+            }
+        }
+        return nil
+    }
+
+    /// `realpath` (Foundation's `resolvingSymlinksInPath` leaves `/tmp` →
+    /// `/private/tmp` alone), walking up to the longest existing prefix for a
+    /// path that does not exist yet (the backup root before the first run).
+    nonisolated static func canonicalPath(_ path: String) -> String {
+        let normalized = BackupPlan.normalized(path)
+        if let resolved = realpath(normalized, nil) {
+            defer { free(resolved) }
+            return BackupPlan.normalized(String(cString: resolved))
+        }
+        let parent = (normalized as NSString).deletingLastPathComponent
+        guard !parent.isEmpty, parent != normalized else { return normalized }
+        return (canonicalPath(parent) as NSString).appendingPathComponent((normalized as NSString).lastPathComponent)
+    }
+
     func run(_ destination: BackupDestination, controller: LibraryController, transport: Transport = .auto) {
-        guard !isRunning, let library = controller.library, let libraryURL = controller.libraryURL else { return }
+        guard !isRunning, let library = controller.library, let libraryURL = controller.libraryURL,
+              let startSnapshot = controller.snapshot
+        else { return }
+        summary = nil
+        activeDestinationId = destination.id
+        if let refusal = Self.refusal(libraryURL: libraryURL, folders: startSnapshot.folders, destination: destination) {
+            phase = .failed(refusal)
+            return
+        }
 
         var password: String?
         if case .server(let host, let user, _, _) = destination.kind {
-            guard let entered = Self.askPassword(user: user, host: host) else { return }
+            guard let entered = Self.askPassword(user: user, host: host) else {
+                activeDestinationId = nil
+                return
+            }
             password = entered
         }
         let sshPassword = password
+        // The library at the start; a switch during the run aborts it.
+        let libraryUUID = startSnapshot.meta.libraryUUID
 
-        summary = nil
-        activeDestinationId = destination.id
         phase = .preparing("Writing pending changes to files…")
         cancelFlag = CancelFlag()
         let flag = cancelFlag
         let started = Date()
+        let relay = ProgressRelay()
+        progressRelay = relay
 
         task = Task { [weak self] in
             guard let self else { return }
@@ -242,11 +320,12 @@ final class BackupService {
             await controller.fileWriteThrough?.flushAll()
             await controller.writePipeline?.flush()
             guard !flag.isCancelled else { self.finishCancelled(); return }
-            guard let snapshot = controller.snapshot else {
-                self.phase = .failed("No library open.")
+            guard let snapshot = controller.snapshot, snapshot.meta.libraryUUID == libraryUUID,
+                  controller.libraryURL?.path == libraryURL.path
+            else {
+                self.phase = .failed("The library changed while the backup was starting — nothing was copied.")
                 return
             }
-            let libraryUUID = snapshot.meta.libraryUUID
             let folders = snapshot.folders
             let plan = BackupPlan.make(folders: folders, photos: snapshot.photos)
             let packageName = libraryURL.lastPathComponent
@@ -275,9 +354,12 @@ final class BackupService {
                 BackupPlan.Item(sourcePath: settingsCopy.path, relativePath: Self.settingsFilename),
             ]
 
+            // Reports are numbered so a late hop can never step the bar back
+            // or leak into the next run.
             let progress: @Sendable (Int, Int, Int64, Int64) -> Void = { [weak self] done, total, bytesDone, bytesTotal in
+                let sequence = relay.next()
                 Task { @MainActor in
-                    guard let self, self.isRunning else { return }
+                    guard let self, self.progressRelay === relay, relay.accept(sequence) else { return }
                     self.phase = .copying(done: done, total: total, bytesDone: bytesDone, bytesTotal: bytesTotal)
                 }
             }
@@ -310,6 +392,7 @@ final class BackupService {
                     )
                 }.value
             }
+            self.progressRelay = nil
 
             if flag.isCancelled {
                 self.finishCancelled()
@@ -335,6 +418,30 @@ final class BackupService {
                     self.recordBackup(libraryUUID: libraryUUID, destination: destination)
                 }
             }
+            await self.refreshDriveStatuses()
+        }
+    }
+
+    @ObservationIgnored private var progressRelay: ProgressRelay?
+
+    /// Monotonic sequence for progress hops (see `run`).
+    final class ProgressRelay: @unchecked Sendable {
+        private let lock = NSLock()
+        private var issued = 0
+        private var applied = 0
+
+        func next() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            issued += 1
+            return issued
+        }
+
+        /// True when `sequence` is newer than anything applied so far.
+        func accept(_ sequence: Int) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard sequence > applied else { return false }
+            applied = sequence
+            return true
         }
     }
 
@@ -473,6 +580,13 @@ final class BackupService {
                 // Keep the source's mtime: it is the "unchanged" key next time.
                 var times = [timespec(tv_sec: entry.mtime.tv_sec, tv_nsec: entry.mtime.tv_nsec), entry.mtime]
                 _ = utimensat(AT_FDCWD, temp, &times, 0)
+                if entry.dest.hasSuffix("/library.sqlite") {
+                    // A backup library that was opened in place leaves a WAL
+                    // beside the file; it must not be replayed into the new
+                    // snapshot on the next open.
+                    try? fm.removeItem(atPath: entry.dest + "-wal")
+                    try? fm.removeItem(atPath: entry.dest + "-shm")
+                }
                 guard rename(temp, entry.dest) == 0 else {
                     throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
                 }
@@ -496,9 +610,10 @@ final class BackupService {
 
     /// Off the MainActor. One rsync run per library folder (`--files-from`
     /// with the plan's relative paths) plus one for the staged extras. With
-    /// a server, ssh gets the password through an askpass helper script
-    /// that prints an environment variable — the password never touches
-    /// the command line or a file.
+    /// a server, ssh gets the password through an askpass helper that reads
+    /// a private FIFO fed by this process for the duration of the run — the
+    /// password is neither on the command line, nor in a file, nor in the
+    /// environment of rsync/ssh.
     nonisolated private static func pushWithRsync(
         plan: BackupPlan,
         folders: [FolderRecord],
@@ -526,33 +641,37 @@ final class BackupService {
                     result.missing += 1
                     continue
                 }
+                let below = String(item.relativePath.dropFirst(prefix.count))
+                guard RsyncCommand.isListableName(below) else {
+                    result.failed.append("\(item.sourcePath): the name contains a line break, which rsync cannot list")
+                    continue
+                }
                 bytesTotal += Int64(st.st_size)
-                files.append(String(item.relativePath.dropFirst(prefix.count)))
+                files.append(below)
             }
             guard !files.isEmpty else { continue }
-            batches.append(Batch(
-                sourceDir: BackupPlan.normalized(folder.path), files: files,
-                targetDir: (root as NSString).appendingPathComponent(name)
-            ))
+            let targetDir = (root as NSString).appendingPathComponent(name)
+            if server != nil, !RsyncCommand.isRemotePathSafe(targetDir) {
+                return .failure("The folder name “\(name)” cannot be sent to the server (line break or runs of spaces).")
+            }
+            batches.append(Batch(sourceDir: BackupPlan.normalized(folder.path), files: files, targetDir: targetDir))
         }
         batches.append(Batch(sourceDir: staging.path, files: extras.map(\.relativePath), targetDir: root))
         let total = batches.reduce(0) { $0 + $1.files.count }
 
-        var askpass: URL?
         var environment = ProcessInfo.processInfo.environment
+        var feeder: PasswordFeeder?
         if let server {
-            let script = staging.appendingPathComponent("askpass.sh")
             do {
-                try "#!/bin/sh\nprintf '%s\\n' \"$BV_SSH_PASSWORD\"\n".write(to: script, atomically: true, encoding: .utf8)
-                try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+                let started = try PasswordFeeder(directory: staging, password: server.password)
+                feeder = started
+                environment["SSH_ASKPASS"] = started.scriptPath
+                environment["SSH_ASKPASS_REQUIRE"] = "force"
+                environment["DISPLAY"] = environment["DISPLAY"] ?? ":0"
+                environment["BV_ASKPASS_FIFO"] = started.fifoPath
             } catch {
                 return .failure("Could not prepare the ssh helper: \(error.localizedDescription)")
             }
-            askpass = script
-            environment["SSH_ASKPASS"] = script.path
-            environment["SSH_ASKPASS_REQUIRE"] = "force"
-            environment["DISPLAY"] = environment["DISPLAY"] ?? ":0"
-            environment["BV_SSH_PASSWORD"] = server.password
         } else {
             do {
                 try fm.createDirectory(atPath: root, withIntermediateDirectories: true)
@@ -560,7 +679,7 @@ final class BackupService {
                 return .failure("Could not create “\(root)”: \(error.localizedDescription)")
             }
         }
-        _ = askpass
+        defer { feeder?.stop() }
 
         var done = 0
         progress(0, total, 0, bytesTotal)
@@ -592,22 +711,26 @@ final class BackupService {
             process.standardOutput = stdout
             process.standardError = stderr
 
-            let expected = Set(batch.files)
-            let counter = LineCounter(expected: expected)
+            // One blocking reader per pipe (no readabilityHandler: two readers
+            // on one descriptor interleave chunks and miscount lines).
+            let counter = LineCounter(expected: Set(batch.files))
+            let errorBuffer = DataBuffer()
             let batchStart = done
             let plannedBytes = bytesTotal
-            stdout.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty else { return }
-                let newlySeen = counter.consume(data)
-                if newlySeen > 0 {
-                    progress(batchStart + counter.count, total, 0, plannedBytes)
+            let readers = DispatchGroup()
+            let stdoutHandle = stdout.fileHandleForReading
+            let stderrHandle = stderr.fileHandleForReading
+            DispatchQueue.global(qos: .utility).async(group: readers) {
+                while let chunk = try? stdoutHandle.read(upToCount: 65_536), !chunk.isEmpty {
+                    if counter.consume(chunk) > 0 {
+                        progress(batchStart + counter.count, total, 0, plannedBytes)
+                    }
                 }
             }
-            let errorBuffer = DataBuffer()
-            stderr.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if !data.isEmpty { errorBuffer.append(data) }
+            DispatchQueue.global(qos: .utility).async(group: readers) {
+                while let chunk = try? stderrHandle.read(upToCount: 65_536), !chunk.isEmpty {
+                    errorBuffer.append(chunk)
+                }
             }
 
             do {
@@ -618,10 +741,7 @@ final class BackupService {
             flag.attach(process)
             process.waitUntilExit()
             flag.attach(nil)
-            stdout.fileHandleForReading.readabilityHandler = nil
-            stderr.fileHandleForReading.readabilityHandler = nil
-            _ = counter.consume(stdout.fileHandleForReading.readDataToEndOfFile())
-            errorBuffer.append(stderr.fileHandleForReading.readDataToEndOfFile())
+            readers.wait()
 
             let transferred = counter.count
             done += batch.files.count
@@ -635,7 +755,7 @@ final class BackupService {
             if status != 0, status != 23, status != 24 {
                 let text = String(decoding: errorBuffer.data, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                if text.contains("Permission denied") || text.contains("permission denied") {
+                if RsyncCommand.isAuthenticationFailure(text) {
                     return .failure("The server refused the password (or the user name is wrong).")
                 }
                 if text.contains("Host key verification failed") {
@@ -650,14 +770,83 @@ final class BackupService {
         return .success(result)
     }
 
+    /// Feeds the ssh password to the askpass helper through a private FIFO
+    /// (mode 0600 in the staging directory). Each ssh invocation runs the
+    /// helper once; the helper `cat`s the FIFO, the writer thread here
+    /// answers every open with the password and closes. `stop()` unblocks
+    /// the writer and removes the FIFO.
+    private final class PasswordFeeder: @unchecked Sendable {
+        let scriptPath: String
+        let fifoPath: String
+        private let password: [UInt8]
+        private let lock = NSLock()
+        private var stopped = false
+        private let finished = DispatchSemaphore(value: 0)
+
+        init(directory: URL, password: String) throws {
+            let script = directory.appendingPathComponent("askpass.sh")
+            let fifo = directory.appendingPathComponent("askpass.fifo")
+            try "#!/bin/sh\ncat \"$BV_ASKPASS_FIFO\"\n".write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+            guard mkfifo(fifo.path, 0o600) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            scriptPath = script.path
+            fifoPath = fifo.path
+            self.password = Array((password + "\n").utf8)
+            let thread = Thread { [self] in self.serve() }
+            thread.name = "BackupService.askpass"
+            thread.start()
+        }
+
+        private var isStopped: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return stopped
+        }
+
+        private func serve() {
+            defer { finished.signal() }
+            while !isStopped {
+                let fd = open(fifoPath, O_WRONLY)  // blocks until a reader opens
+                guard fd >= 0 else { break }
+                if !isStopped {
+                    password.withUnsafeBufferPointer { buffer in
+                        _ = write(fd, buffer.baseAddress, buffer.count)
+                    }
+                }
+                close(fd)
+            }
+        }
+
+        func stop() {
+            lock.lock()
+            stopped = true
+            lock.unlock()
+            // Unblock a writer waiting in open(): become the reader once.
+            let fd = open(fifoPath, O_RDONLY | O_NONBLOCK)
+            if fd >= 0 {
+                var scratch = [UInt8](repeating: 0, count: 256)
+                _ = read(fd, &scratch, scratch.count)
+                close(fd)
+            }
+            _ = finished.wait(timeout: .now() + 2)
+            unlink(fifoPath)
+        }
+    }
+
     /// Counts transferred files in rsync's `-v` output as it streams.
     private final class LineCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var buffer = Data()
         private let expected: Set<String>
-        private(set) var count = 0
+        private var matched = 0
 
         init(expected: Set<String>) { self.expected = expected }
+
+        var count: Int {
+            lock.lock(); defer { lock.unlock() }
+            return matched
+        }
 
         /// Returns how many new matches this chunk produced.
         func consume(_ data: Data) -> Int {
@@ -666,10 +855,9 @@ final class BackupService {
             var newly = 0
             while let newline = buffer.firstIndex(of: 0x0A) {
                 let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
-                    .trimmingCharacters(in: .whitespaces)
                 buffer.removeSubrange(buffer.startIndex...newline)
                 if expected.contains(line) {
-                    count += 1
+                    matched += 1
                     newly += 1
                 }
             }
@@ -679,11 +867,16 @@ final class BackupService {
 
     private final class DataBuffer: @unchecked Sendable {
         private let lock = NSLock()
-        private(set) var data = Data()
+        private var bytes = Data()
+
+        var data: Data {
+            lock.lock(); defer { lock.unlock() }
+            return bytes
+        }
 
         func append(_ chunk: Data) {
             lock.lock(); defer { lock.unlock() }
-            data.append(chunk)
+            bytes.append(chunk)
         }
     }
 

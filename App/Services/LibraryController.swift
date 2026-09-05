@@ -126,6 +126,15 @@ final class LibraryController {
         var groups: [KeywordGroupRecord] = []
     }
     private(set) var vocabulary = KeywordVocabulary()
+    /// The questionnaires, mirrored from the snapshot for the AI window — a
+    /// window reading `snapshot` directly re-renders on every rating (review
+    /// finding). Assigned only when they actually changed.
+    private(set) var aiProfiles: [AIProfile] = []
+
+    func refreshAIProfiles() {
+        let current = snapshot?.aiProfiles ?? []
+        if current != aiProfiles { aiProfiles = current }
+    }
 
     /// Call after any change to `snapshot.keywordTree`/`keywordGroups`.
     func refreshVocabulary() {
@@ -133,6 +142,7 @@ final class LibraryController {
             tree: snapshot?.keywordTree ?? KeywordTree(records: []),
             groups: snapshot?.keywordGroups ?? []
         )
+        refreshAIProfiles()
     }
 
     /// Derived query facts per photo (resolved keyword paths + effective group

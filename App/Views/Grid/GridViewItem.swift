@@ -157,10 +157,11 @@ final class GridItemView: NSView, NSDraggingSource {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if let (modifiers, clickCount) = pendingClick {
-            pendingClick = nil
-            onClick?(modifiers, clickCount)
-        }
+        guard let (modifiers, clickCount) = pendingClick else { return }
+        pendingClick = nil
+        // Released elsewhere (a short drag that never became a session): no click.
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        onClick?(modifiers, clickCount)
     }
 
     override func mouseDragged(with event: NSEvent) {

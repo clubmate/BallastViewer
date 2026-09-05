@@ -162,6 +162,7 @@ extension LibraryController {
         else { return }
         let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
         mutateSnapshot { $0.keywordTree = $0.keywordTree.renaming(id, to: name) }
+        takeOwnershipOfCoinedKeyword(id)
         refreshVocabulary()
         // Only the carriers' facts changed — wiping the whole cache would make
         // the next rebuild re-derive 50k photos.
@@ -279,6 +280,7 @@ extension LibraryController {
         else { return }
         let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
         mutateSnapshot { $0.keywordTree = $0.keywordTree.settingGroup(groupId, of: id) }
+        takeOwnershipOfCoinedKeyword(id)
         refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)
         emitCatalogEvent(.photosUpdated(carriers))
@@ -303,6 +305,7 @@ extension LibraryController {
         }
         let result: MoveResult? = writeSync { db in
             try KeywordDAO.moveToTopLevel(id, groupId: groupId, in: db)
+            try KeywordDAO.clearAICreated(id, in: db)  // the user sorted it: theirs now
             return MoveResult(
                 records: try KeywordDAO.fetchAll(db),
                 keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db),

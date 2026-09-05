@@ -208,6 +208,18 @@ public struct KeywordTree: Sendable {
         KeywordTree(records: allRecords + records.map(Self.normalized))
     }
 
+    /// U50 review fix: a coined keyword the user curated (renamed, moved,
+    /// regrouped, accepted) is theirs — no longer collectable as an orphan.
+    public func clearingAICreated(_ id: Int64) -> KeywordTree {
+        guard node(id)?.aiCreated == true else { return self }
+        return KeywordTree(records: allRecords.map { record in
+            guard record.id == id else { return record }
+            var kept = record
+            kept.aiCreated = false
+            return kept
+        })
+    }
+
     public func renaming(_ id: Int64, to name: String) -> KeywordTree {
         let normalized = KeywordDAO.normalize(name)
         return KeywordTree(records: allRecords.map { record in

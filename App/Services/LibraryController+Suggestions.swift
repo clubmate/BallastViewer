@@ -49,6 +49,9 @@ extension LibraryController {
         }
         guard !changed.isEmpty else { return }
         let photoIds = changed
+        // Accepting a coined keyword makes it the user's (review finding):
+        // it must not be collected as an orphan later.
+        takeOwnershipOfCoinedKeyword(keywordId)
         invalidateFacts(forPhotoIds: photoIds)
         registerUndo("Accept Suggestion") { $0.demotePendingKeyword(id: keywordId, forPhotoIds: photoIds) }
         persist { db in try PhotoDAO.confirmPendingKeyword(keywordId, forPhotoIds: photoIds, in: db) }
@@ -146,6 +149,10 @@ extension LibraryController {
     /// parent keyword vanished mid-run.
     func ensureCoinedKeyword(_ coined: AICoinedKeyword) -> Int64? {
         guard let snapshot else { return nil }
+        // Structural writes are refused during bulk transactions (writeSync
+        // would post the "busy" alert — once per photo in a run). Skip
+        // quietly; the run counts the answer as not applied.
+        guard !isBusy else { return nil }
         if let parentId = coined.parentKeywordId, snapshot.keywordTree.node(parentId) == nil { return nil }
         guard let result: (id: Int64, created: KeywordRecord?) = writeSync({ db in
             try KeywordDAO.ensureChild(named: coined.name, parentId: coined.parentKeywordId, aiCreated: true, in: db)
@@ -178,19 +185,25 @@ extension LibraryController {
     @discardableResult
     func collectOrphanedAIKeywords(_ keywordIds: Set<Int64>) -> [KeywordRecord] {
         guard let snapshot else { return [] }
+        // Only ai-created leaves are candidates; decide that first so the
+        // O(photos) sweep below runs at most once, not per keyword.
+        let candidates = keywordIds.compactMap { id -> KeywordRecord? in
+            guard let node = snapshot.keywordTree.node(id), node.aiCreated,
+                  snapshot.keywordTree.children(of: id).isEmpty else { return nil }
+            return node
+        }
+        guard !candidates.isEmpty else { return [] }
         var referenced = Set<Int64>()
         for profile in snapshot.aiProfiles {
             referenced.formUnion(profile.keywordIds)
             referenced.formUnion(profile.allQuestions.compactMap(\.parentKeywordId))
         }
-        var orphans: [KeywordRecord] = []
-        for id in keywordIds.subtracting(referenced) {
-            guard let node = snapshot.keywordTree.node(id), node.aiCreated,
-                  snapshot.keywordTree.children(of: id).isEmpty,
-                  !snapshot.keywordIdsByPhoto.values.contains(where: { $0.contains(id) }),
-                  !snapshot.pendingKeywordIdsByPhoto.values.contains(where: { $0.contains(id) })
-            else { continue }
-            orphans.append(node)
+        var carried = Set<Int64>()
+        for ids in snapshot.keywordIdsByPhoto.values { carried.formUnion(ids) }
+        for ids in snapshot.pendingKeywordIdsByPhoto.values { carried.formUnion(ids) }
+        let orphans = candidates.filter { node in
+            guard let id = node.id else { return false }
+            return !referenced.contains(id) && !carried.contains(id)
         }
         guard !orphans.isEmpty else { return [] }
         mutateSnapshot { snapshot in
@@ -204,6 +217,15 @@ extension LibraryController {
             for id in ids { try KeywordDAO.deleteSubtree(id, in: db) }
         }
         return orphans
+    }
+
+    /// A coined keyword the user renamed, moved, regrouped or accepted is
+    /// theirs: clear `aiCreated` (memory + DB) so orphan collection leaves it.
+    func takeOwnershipOfCoinedKeyword(_ id: Int64) {
+        guard snapshot?.keywordTree.node(id)?.aiCreated == true else { return }
+        mutateSnapshot { $0.keywordTree = $0.keywordTree.clearingAICreated(id) }
+        refreshVocabulary()
+        persist { db in try KeywordDAO.clearAICreated(id, in: db) }
     }
 
     /// Undo counterpart of `collectOrphanedAIKeywords`: the rows come back
@@ -295,6 +317,7 @@ extension LibraryController {
                 snapshot.aiProfiles.append(saved)
             }
         }
+        refreshAIProfiles()
         return saved
     }
 
@@ -302,11 +325,13 @@ extension LibraryController {
         guard snapshot?.aiProfiles.contains(where: { $0.id == id }) == true else { return }
         guard writeSync({ db in try AIProfileDAO.delete(id, in: db) }) != nil else { return }
         mutateSnapshot { $0.aiProfiles.removeAll { $0.id == id } }
+        refreshAIProfiles()
     }
 
     func setAIProfileEnabled(_ id: Int64, _ enabled: Bool) {
         guard let index = snapshot?.aiProfiles.firstIndex(where: { $0.id == id }) else { return }
         guard writeSync({ db in try AIProfileDAO.setEnabled(enabled, profileId: id, in: db) }) != nil else { return }
         mutateSnapshot { $0.aiProfiles[index].enabled = enabled }
+        refreshAIProfiles()
     }
 }

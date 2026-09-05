@@ -32,6 +32,8 @@ struct LibraryCommands: Commands {
                         }
                     )
                 )
+                // U53: a switch mid-backup would flush A and copy B's plan.
+                .disabled(backup.isRunning)
             }
             Divider()
             Button("Manage Libraries…") {

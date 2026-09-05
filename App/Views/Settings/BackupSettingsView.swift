@@ -48,6 +48,11 @@ struct BackupSettingsView: View {
         }
         .formStyle(.grouped)
         .task(id: measureKey) { await backup.measure(controller: controller) }
+        // Drive status is blocking I/O (a vanished share): measured off-main,
+        // re-measured on mount/unmount, after runs and when the list changes.
+        .task(id: "\(backup.volumeGeneration)|\(backup.destinations.map(\.id))") {
+            await backup.refreshDriveStatuses()
+        }
         .sheet(isPresented: $addingServer) { serverSheet }
         .alert(
             "Remove Destination",
@@ -135,12 +140,10 @@ struct BackupSettingsView: View {
     }
 
     private func destinationRow(_ destination: BackupDestination) -> some View {
-        // Re-read on mount/unmount and after a run.
-        let _ = backup.volumeGeneration
-        let status = BackupService.driveStatus(destination)
+        let status = backup.driveStatuses[destination.id]
         return HStack(spacing: 10) {
             Image(systemName: destination.isServer ? "server.rack" : "externaldrive")
-                .foregroundStyle(status.isConnected ? Color.accentColor : Color.secondary)
+                .foregroundStyle(status?.isConnected == true ? Color.accentColor : Color.secondary)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(destination.displayName)
@@ -152,7 +155,7 @@ struct BackupSettingsView: View {
             Spacer()
             Button("Back Up Now") { backup.run(destination, controller: controller) }
                 .controlSize(.small)
-                .disabled(!canRun || !status.isConnected)
+                .disabled(!canRun || status?.isConnected != true)
             Button {
                 pendingRemoval = destination
             } label: {
@@ -168,14 +171,18 @@ struct BackupSettingsView: View {
         controller.isLibraryOpen && !backup.isRunning && !controller.isBusy
     }
 
-    private func statusLine(_ destination: BackupDestination, status: BackupService.DriveStatus) -> String {
+    private func statusLine(_ destination: BackupDestination, status: BackupService.DriveStatus?) -> String {
         var parts: [String] = []
         if destination.isServer {
             parts.append("Server")
-        } else if status.isConnected {
-            parts.append(status.freeBytes.map { "Connected · \(BackupService.format(bytes: $0)) free" } ?? "Connected")
+        } else if let status {
+            if status.isConnected {
+                parts.append(status.freeBytes.map { "Connected · \(BackupService.format(bytes: $0)) free" } ?? "Connected")
+            } else {
+                parts.append("Not connected")
+            }
         } else {
-            parts.append("Not connected")
+            parts.append("Checking…")
         }
         if let uuid = libraryUUID {
             if let date = backup.lastBackup(libraryUUID: uuid, destination: destination) {
@@ -268,7 +275,7 @@ struct BackupSettingsView: View {
                     addingServer = false
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!serverDraft.isValid)
+                .disabled(!serverDraft.isValid || !RsyncCommand.isRemotePathSafe(serverDraft.path.trimmingCharacters(in: .whitespaces)))
             }
         }
         .padding(20)

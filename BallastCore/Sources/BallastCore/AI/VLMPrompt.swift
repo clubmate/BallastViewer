@@ -232,8 +232,17 @@ public enum VLMAnswerParser {
         return KeywordDAO.normalize(joined)
     }
 
-    /// Replies that copied the shape's placeholder instead of answering.
-    static let placeholders: Set<String> = ["one or two words", "words", "word", "answer", "value", "n/a", "na", "none", "null", "nil"]
+    /// Replies that copied the shape's placeholder instead of answering, or
+    /// that are a "no answer" in the model's own words — an open question
+    /// without a `none` exit must not coin UNKNOWN / NOT VISIBLE as keywords
+    /// (review finding 2026-09-05).
+    static let placeholders: Set<String> = [
+        "one or two words", "words", "word", "answer", "value", "n/a", "na", "none", "null", "nil",
+        "unknown", "not visible", "nothing", "no", "not sure", "unsure", "unclear", "cannot tell",
+        "can't tell", "cant tell", "not applicable", "none visible", "not shown", "no answer",
+        "unspecified", "undetermined", "indeterminate", "not available", "not present", "absent",
+        "n.a", "-", "—", "?",
+    ]
 
     static func isNotApplicable(_ text: String) -> Bool {
         let needle = normalize(text)

@@ -97,6 +97,12 @@ public enum KeywordDAO {
 
     /// One UPDATE — every photo carrying this keyword (or a descendant) reflects
     /// the new derived path immediately (fixes C4).
+    /// The user took ownership of a coined keyword (rename, move, regroup,
+    /// accept): it stays even when nothing references it any more.
+    public static func clearAICreated(_ id: Int64, in db: Database) throws {
+        try db.execute(sql: "UPDATE keyword SET aiCreated = 0 WHERE id = ?", arguments: [id])
+    }
+
     public static func rename(_ id: Int64, to newName: String, in db: Database) throws {
         let name = normalize(newName)
         guard !name.isEmpty else { throw KeywordDAOError.emptyName }

@@ -69,21 +69,40 @@ struct BackupTests {
     @Test func rsyncArgumentsForServerAndLocal() {
         let remote = RsyncCommand.arguments(
             filesFrom: "/tmp/list.txt", sourceDir: "/Users/x/2008",
-            target: RsyncCommand.remoteTarget(user: "me", host: "nas", path: "/srv/BallastViewerBackup/2008"),
-            remotePath: "/srv/BallastViewerBackup/2008", sshPort: 2222
+            target: RsyncCommand.remoteTarget(user: "me", host: "nas", path: "/srv/BallastViewerBackup/Platte1 - 2008"),
+            remotePath: "/srv/BallastViewerBackup/Platte1 - 2008", sshPort: 2222
         )
         #expect(remote == [
-            "-t", "-v", "--partial", "--files-from=/tmp/list.txt",
+            "-t", "-v", "--partial-dir=.bvpartial", "--files-from=/tmp/list.txt",
             "--rsh=ssh -p 2222 -o StrictHostKeyChecking=accept-new -o NumberOfPasswordPrompts=1",
-            "--rsync-path=mkdir -p '/srv/BallastViewerBackup/2008' && rsync",
-            "/Users/x/2008/", "me@nas:/srv/BallastViewerBackup/2008/",
+            "--rsync-path=mkdir -p /srv/BallastViewerBackup/Platte1\\ -\\ 2008 && rsync",
+            "/Users/x/2008/", "me@nas:/srv/BallastViewerBackup/Platte1\\ -\\ 2008/",
         ])
         let local = RsyncCommand.arguments(
             filesFrom: "/tmp/list.txt", sourceDir: "/Users/x/2008/", target: "/Volumes/USB/BallastViewerBackup/2008",
             remotePath: nil, sshPort: nil
         )
-        #expect(local == ["-t", "-v", "--partial", "--files-from=/tmp/list.txt", "/Users/x/2008/", "/Volumes/USB/BallastViewerBackup/2008/"])
-        #expect(RsyncCommand.shellQuoted("it's") == "'it'\\''s'")
+        #expect(local == ["-t", "-v", "--partial-dir=.bvpartial", "--files-from=/tmp/list.txt", "/Users/x/2008/", "/Volumes/USB/BallastViewerBackup/2008/"])
+    }
+
+    @Test func shellEscapingCoversMetacharactersAndKeepsUnicode() {
+        #expect(RsyncCommand.shellEscaped("/srv/Urlaub 2008") == "/srv/Urlaub\\ 2008")
+        #expect(RsyncCommand.shellEscaped("it's $x & y|z;(w)*?[a]\"q\"") == "it\\'s\\ \\$x\\ \\&\\ y\\|z\\;\\(w\\)\\*\\?\\[a\\]\\\"q\\\"")
+        #expect(RsyncCommand.shellEscaped("/backup/Fotos Müller/2008") == "/backup/Fotos\\ Müller/2008")
+        #expect(RsyncCommand.isRemotePathSafe("/srv/Urlaub 2008"))
+        #expect(!RsyncCommand.isRemotePathSafe("/srv/Urlaub  2008"))
+        #expect(!RsyncCommand.isRemotePathSafe("/srv/a\nb"))
+        #expect(!RsyncCommand.isRemotePathSafe(""))
+        #expect(RsyncCommand.isListableName("a b/c.jpg"))
+        #expect(!RsyncCommand.isListableName("a\nb.jpg"))
+        #expect(RsyncCommand.isAuthenticationFailure("me@nas: Permission denied (publickey,password)."))
+        #expect(RsyncCommand.isAuthenticationFailure("Permission denied, please try again."))
+        #expect(!RsyncCommand.isAuthenticationFailure("rsync: mkstemp failed: Permission denied (13)"))
+    }
+
+    @Test func folderNamesAreSanitisedForTheRemoteShell() {
+        let names = BackupPlan.targetNames(for: [folder(1, "/x/Urlaub   2008\t"), folder(2, "/y/Urlaub   2008")])
+        #expect(Set(names.values) == ["x - Urlaub 2008", "y - Urlaub 2008"])
     }
 
     @Test func transferredPathsIgnoreRsyncChatter() {
@@ -91,12 +110,13 @@ struct BackupTests {
             building file list ... done
             a.jpg
             sub/b.jpg
+             leading space.jpg
 
             sent 1234 bytes  received 42 bytes  2552.00 bytes/sec
             total size is 999  speedup is 0.78
             """
-        let found = RsyncCommand.transferredPaths(inOutput: output, expected: ["a.jpg", "sub/b.jpg", "c.jpg"])
-        #expect(found == ["a.jpg", "sub/b.jpg"])
+        let found = RsyncCommand.transferredPaths(inOutput: output, expected: ["a.jpg", "sub/b.jpg", "c.jpg", " leading space.jpg"])
+        #expect(found == ["a.jpg", "sub/b.jpg", " leading space.jpg"])
     }
 
     @Test func scheduleIsDueAfterIntervalUnlessSnoozed() {

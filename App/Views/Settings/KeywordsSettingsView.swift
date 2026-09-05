@@ -97,7 +97,7 @@ struct KeywordsSettingsView: View {
         // request 2026-09-05), per library — ids are per-library autoincrements.
         .modifier(CollapseStatePersistence(
             key: { collapseStateKey },
-            isLibraryOpen: controller.isLibraryOpen,
+            libraryPath: controller.libraryURL?.path,
             groups: $collapsedGroups,
             keywords: $collapsedKeywords
         ))
@@ -626,14 +626,16 @@ private struct PaletteSwatch: View {
 /// type-checker's limit.
 private struct CollapseStatePersistence: ViewModifier {
     let key: () -> String?
-    let isLibraryOpen: Bool
+    /// Observable library identity (NOT the snapshot): a switch A → B with
+    /// Settings open must reload B's state instead of saving A's under B.
+    let libraryPath: String?
     @Binding var groups: Set<Int64>
     @Binding var keywords: Set<Int64>
 
     func body(content: Content) -> some View {
         content
             .onAppear(perform: load)
-            .onChange(of: isLibraryOpen) { load() }
+            .onChange(of: libraryPath) { load() }
             .onChange(of: groups) { save() }
             .onChange(of: keywords) { save() }
     }

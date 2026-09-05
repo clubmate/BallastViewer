@@ -73,12 +73,20 @@ public struct BackupPlan: Sendable, Equatable {
             folder.id.map { ($0, normalized(folder.path)) }
         }.sorted { $0.path < $1.path }
 
+        // Whitespace runs collapse to one space and control characters go:
+        // the name travels through ssh argv to a remote shell (see
+        // RsyncCommand) and must survive that unchanged.
+        func sanitized(_ name: String) -> String {
+            let cleaned = name.unicodeScalars.filter { $0.value >= 32 && $0.value != 127 }
+            return String(String.UnicodeScalarView(cleaned))
+                .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        }
         func base(_ path: String) -> String {
-            let name = (path as NSString).lastPathComponent
+            let name = sanitized((path as NSString).lastPathComponent)
             return name.isEmpty ? "Photos" : name
         }
         func withParent(_ path: String) -> String {
-            let parent = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+            let parent = sanitized(((path as NSString).deletingLastPathComponent as NSString).lastPathComponent)
             return parent.isEmpty ? base(path) : "\(parent) - \(base(path))"
         }
 
