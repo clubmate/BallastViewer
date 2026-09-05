@@ -139,33 +139,6 @@ extension LibraryController {
         emitCatalogEvent(.photosUpdated(photoIds))
     }
 
-    /// AI ▸ Reject All Suggestions on Selection: every pending chip of the
-    /// given photos at once (one undo step each — they land in the same event
-    /// group). There is deliberately NO accept-all counterpart (user decision
-    /// 2026-09-01, reaffirmed 2026-09-05): accepting stays photo-by-photo.
-    func rejectAllPendingKeywords(forPhotoIds photoIds: [Int64]) {
-        for (keywordId, photos) in pendingByKeyword(forPhotoIds: photoIds) {
-            rejectPendingKeyword(id: keywordId, forPhotoIds: photos)
-        }
-    }
-
-    /// Whether any of the photos carries a pending suggestion.
-    func hasPendingKeywords(forPhotoIds photoIds: [Int64]) -> Bool {
-        guard let snapshot else { return false }
-        return photoIds.contains { !(snapshot.pendingKeywordIdsByPhoto[$0]?.isEmpty ?? true) }
-    }
-
-    private func pendingByKeyword(forPhotoIds photoIds: [Int64]) -> [Int64: [Int64]] {
-        guard let snapshot else { return [:] }
-        var result: [Int64: [Int64]] = [:]
-        for photoId in photoIds {
-            for keywordId in snapshot.pendingKeywordIdsByPhoto[photoId] ?? [] {
-                result[keywordId, default: []].append(photoId)
-            }
-        }
-        return result
-    }
-
     // MARK: Coined keywords (U50)
 
     /// Finds or coins the keyword for an open answer — a sync write because

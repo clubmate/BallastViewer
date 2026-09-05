@@ -3,9 +3,10 @@ import SwiftUI
 
 /// U50: the AI menu — present only while Settings ▸ AI ▸ "Enable AI
 /// auto-tagging" is on. Everything auto-tagging in one place: the window
-/// with the questionnaires and system prompt, the runs (selection, current
-/// view; the sidebar's right-click keeps the per-collection scope), the
-/// calibration preview, and the review commands.
+/// with the questionnaires and system prompt, the run on the selection (the
+/// sidebar's right-click keeps the per-collection scope), the calibration
+/// preview, and the review commands. Accept/Reject-All and "current view"
+/// were removed on user request (2026-09-05): review is photo-by-photo.
 ///
 /// Menu enablement reads only `center.hasAnchor` and the runner's phase —
 /// never the snapshot — so the menu is not rebuilt on every photo mutation.
@@ -31,12 +32,6 @@ struct AICommands: Commands {
                     runner.run(controller: controller, models: models, photos: selectedPhotos, scopeName: "the selection")
                 }
                 .disabled(!hasAnchor || runner.isRunning)
-                Button("Auto-Tag Current View") {
-                    guard let snapshot = controller.snapshot else { return }
-                    let photos = AutoTagRunner.photos(withIds: center.visiblePhotos.map(\.id), in: snapshot)
-                    runner.run(controller: controller, models: models, photos: photos, scopeName: "the current view")
-                }
-                .disabled(runner.isRunning)
                 // U49: the calibration view — answers for the selection, nothing
                 // applied. Capped at `AutoTagRunner.previewLimit` photos.
                 Button("Preview Auto-Tagging on Selection…") {
@@ -48,10 +43,6 @@ struct AICommands: Commands {
                 Divider()
                 Button("Review Keywords") { center.selectSidebarItem(.pendingReview) }
                     .help("Show the photos with suggestions waiting for review")
-                Button("Reject All Suggestions on Selection") {
-                    controller.rejectAllPendingKeywords(forPhotoIds: Array(center.selection.selectedIds))
-                }
-                .disabled(!hasAnchor)
                 Button("Discard All Suggestions…") { runner.confirmingDiscard = true }
                     .disabled(runner.isRunning)
                 Divider()
