@@ -8,9 +8,14 @@ import SwiftUI
 struct LibraryCommands: Commands {
     let controller: LibraryController
     let settingsRouter: SettingsRouter
+    let backup: BackupService
 
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
+
+    private var canBackUp: Bool {
+        controller.libraryURL != nil && !controller.isBusy && !backup.isRunning
+    }
 
     var body: some Commands {
         CommandMenu("Library") {
@@ -41,6 +46,23 @@ struct LibraryCommands: Commands {
                 controller.presentImportLightroomPanel()
             }
             .disabled(controller.libraryURL == nil || controller.isBusy)
+            Divider()
+            // U53: a copy of the files + a database snapshot to a drive or server.
+            if backup.destinations.count == 1, let only = backup.destinations.first {
+                Button("Back Up Now") { backup.run(only, controller: controller) }
+                    .disabled(!canBackUp)
+            } else if backup.destinations.count > 1 {
+                Menu("Back Up Now") {
+                    ForEach(backup.destinations) { destination in
+                        Button(destination.displayName) { backup.run(destination, controller: controller) }
+                    }
+                }
+                .disabled(!canBackUp)
+            }
+            Button("Backup Settings…") {
+                settingsRouter.selectedTab = .backup
+                openSettings()
+            }
             Divider()
             Button("BallastPicker") { openWindow(id: "photoPicker") }
                 .keyboardShortcut("p", modifiers: [.shift, .command])

@@ -26,6 +26,9 @@ struct SettingsView: View {
             ShortcutsSettingsView()
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
                 .tag(SettingsRouter.Tab.shortcuts)
+            BackupSettingsView()
+                .tabItem { Label("Backup", systemImage: "externaldrive.badge.timemachine") }
+                .tag(SettingsRouter.Tab.backup)
         }
         .frame(width: 600, height: 500)
     }

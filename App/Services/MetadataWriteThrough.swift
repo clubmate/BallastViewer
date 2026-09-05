@@ -113,6 +113,19 @@ final class MetadataWriteThrough {
         if ids.count >= 25 { beginBulkRun() }
     }
 
+    /// U53 backup: fold every debounce into the queue and wait until the
+    /// writer has drained, so the files carry every change before they are
+    /// copied. Unlike termination the writer stays open afterwards.
+    func flushAll() async {
+        for (id, task) in debounces {
+            task.cancel()
+            enqueue(id)
+        }
+        debounces = [:]
+        updatePendingCount()
+        await drain?.value
+    }
+
     /// Termination: fold every debounce into the queue and wait for the
     /// writer, capped so a stuck volume cannot hold ⌘Q hostage. Whatever is
     /// left stays flagged for the next open.
@@ -239,6 +252,7 @@ final class MetadataWriteThrough {
             generation: generation[id] ?? 0,
             values: PhotoFileMetadata(
                 rating: photo.rating,
+                orientation: photo.orientation,
                 keywords: MetadataReader.normalizeKeywordPaths(paths)
             ),
             keywordPaths: paths
@@ -254,7 +268,10 @@ final class MetadataWriteThrough {
         }
         guard MetadataSync.differs(job.values, fileValues) else { return .inSync }
         do {
-            try MetadataWriter.write(rating: job.values.rating, keywordPaths: job.keywordPaths, to: url)
+            try MetadataWriter.write(
+                rating: job.values.rating, keywordPaths: job.keywordPaths,
+                orientation: job.values.orientation, to: url
+            )
             return .written
         } catch {
             return .failed(String(describing: error))

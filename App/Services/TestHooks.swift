@@ -41,7 +41,8 @@ enum TestHooks {
         keyMap: KeyMapStore,
         midiMap: MidiMapStore,
         models: VLMModelStore,
-        runner: AutoTagRunner
+        runner: AutoTagRunner,
+        backup: BackupService
     ) async {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
@@ -113,6 +114,14 @@ enum TestHooks {
         }
         if let path = env["BV_TEST_QTN"] {
             runQuarantineProbe(zipAt: path)
+        }
+        // U52/U53: rotation reaches the file; a backup to a drive folder
+        // (BV_TEST_BACKUP_RSYNC=1 forces the rsync transport, no server needed).
+        if let dir = env["BV_TEST_BACKUP"] {
+            await runBackupChecks(
+                controller, center: center, dispatcher: dispatcher, backup: backup,
+                dir: dir, rsync: env["BV_TEST_BACKUP_RSYNC"] != nil
+            )
         }
         if env["BV_TEST_STEP9"] != nil {
             runStep9Checks(controller, center: center, dispatcher: dispatcher, keyMap: keyMap)
@@ -1023,6 +1032,69 @@ enum TestHooks {
             "info=\(quoted(controller.infoMessage))",
             "error=\(quoted(controller.errorMessage))"
         )
+    }
+
+    /// Rotates the anchor, backs up twice (second run must copy nothing),
+    /// reads the rotation back from the file, relinks the first folder into
+    /// the backup and back again.
+    @MainActor
+    private static func runBackupChecks(
+        _ controller: LibraryController, center: CenterViewModel, dispatcher: ActionDispatcher,
+        backup: BackupService, dir: String, rsync: Bool
+    ) async {
+        guard let anchor = center.anchorPhoto ?? controller.snapshot?.photos.first.map({
+            GridPhoto(id: $0.id!, path: $0.path, orientation: $0.orientation)
+        }) else {
+            print("BVBACKUP no photos")
+            return
+        }
+        let before = MetadataReader.read(from: URL(fileURLWithPath: anchor.path)).orientation
+        dispatcher.dispatch(.app(.rotate))
+        let expected = controller.photo(withId: anchor.id)?.orientation ?? -1
+
+        let destination = BackupDestination(kind: .drive(path: dir))
+        backup.destinations = [destination]
+        backup.intervalDays = 30
+        func runOnce(_ label: String) async {
+            backup.run(destination, controller: controller, transport: rsync ? .rsync : .auto)
+            var waited = 0
+            while backup.isRunning, waited < 6000 {
+                try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
+            }
+            print("BVBACKUP \(label) phase=\(backup.phase) summary=\(quoted(backup.summary))")
+        }
+        await runOnce("first")
+        let after = MetadataReader.read(from: URL(fileURLWithPath: anchor.path)).orientation
+        print("BVBACKUP rotation file=\(before)→\(after) library=\(expected) written=\(after == expected)")
+
+        let root = destination.rootPath
+        let enumerator = FileManager.default.enumerator(atPath: root)
+        var files = 0
+        while let entry = enumerator?.nextObject() as? String {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent(entry), isDirectory: &isDir), !isDir.boolValue {
+                files += 1
+            }
+        }
+        let uuid = controller.snapshot?.meta.libraryUUID ?? ""
+        print("BVBACKUP root=\(root) files=\(files) photos=\(controller.snapshot?.photos.count ?? 0) lastBackupSet=\(backup.lastBackup(libraryUUID: uuid) != nil) due=\(backup.isDue(libraryUUID: uuid))")
+        await runOnce("second")
+
+        // Relink the first folder into the backup copy and back.
+        if let folder = controller.snapshot?.folders.first, let libraryURL = controller.libraryURL,
+           let name = BackupPlan.targetNames(for: controller.snapshot?.folders ?? [])[folder.id!] {
+            let copy = URL(fileURLWithPath: (root as NSString).appendingPathComponent(name), isDirectory: true)
+            await controller.relinkFolder(folder, to: copy, inLibraryAt: libraryURL)
+            let moved = controller.snapshot?.photos.first { $0.folderId == folder.id }
+            let exists = moved.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            print("BVBACKUP relink folder=\(controller.snapshot?.folders.first?.path ?? "-") photo=\(moved?.path ?? "-") exists=\(exists) info=\(quoted(controller.infoMessage))")
+            if let relinked = controller.snapshot?.folders.first(where: { $0.id == folder.id }) {
+                await controller.relinkFolder(relinked, to: URL(fileURLWithPath: folder.path, isDirectory: true), inLibraryAt: libraryURL)
+                let back = controller.snapshot?.photos.first { $0.folderId == folder.id }
+                print("BVBACKUP relink-back folder=\(controller.snapshot?.folders.first?.path ?? "-") photo=\(back?.path ?? "-")")
+            }
+        }
     }
 
     private static func quoted(_ message: String?) -> String {

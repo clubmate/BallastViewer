@@ -166,6 +166,16 @@ struct LibrariesSettingsView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
+                        // U53: point the folder at its new location (restored
+                        // backup, renamed disk) without re-importing.
+                        Button {
+                            relinkFolder(folder, inLibraryAt: url)
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Relink Folder… — the photos moved; choose where they are now")
                         Button {
                             Task {
                                 pendingFolderRemoval = FolderRemoval(
@@ -199,6 +209,21 @@ struct LibrariesSettingsView: View {
         let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != (controller.libraryNames[url.path] ?? "") else { return }
         Task { await controller.setLibraryName(trimmed, forLibraryAt: url) }
+    }
+
+    private func relinkFolder(_ folder: FolderRecord, inLibraryAt url: URL) {
+        let panel = NSOpenPanel()
+        panel.title = "Relink Folder"
+        panel.message = "Where are the photos of “\(folder.path)” now?"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: folder.path).deletingLastPathComponent()
+        guard panel.runModal() == .OK, let newURL = panel.url else { return }
+        Task {
+            await controller.relinkFolder(folder, to: newURL, inLibraryAt: url)
+            reloadFolders()
+        }
     }
 
     private func reloadFolders() {

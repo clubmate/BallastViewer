@@ -24,6 +24,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 ### Culling
 
 - **Grid and single view** with instant switching, zoomable thumbnails, and full-resolution single view — double-click a photo to enter it, double-click again to return to the grid. The single view's footer always names the active filter — the selected collection, star row, or keyword, plus any search — so you never wonder why photos are hidden.
+- **Backups:** Settings ▸ Backup shows how much space the library needs (photo files plus database), and takes any number of destinations — a drive (USB disk, stick, network share) or a server reached with rsync over ssh (password asked per run, never stored). A backup is a plain copy: every photo file lands under `BallastViewerBackup/<folder name>/…` on the destination with the library file next to it, unchanged files are skipped, nothing is ever deleted there. Run it from Library ▸ Back Up Now, the settings tab, or the BACKUP notice the sidebar shows once the last backup is older than the reminder interval (30 days by default). Restoring is opening the backed-up library; if the photos moved, Relink Folder… in Settings ▸ Libraries points a folder at its new place without re-importing.
 - **Drag photos out of the grid:** drag the selected photos onto the Desktop, a Finder folder or another app and the files are copied there. The originals stay where they are — BallastViewer never moves them.
 - **Ratings 0–5**, applied to the whole selection at once; batches are one undo step. ⌘A selects every visible photo.
 - **The neighbour rule:** rating a photo inside a filtered view advances to its neighbour instead of jumping to the top — cull forward without ever touching the mouse.
@@ -52,7 +53,7 @@ BallastViewer is a keyboard-first tool for the unglamorous part of photography: 
 
 ### Metadata — Lightroom-compatible, automatic
 
-- Ratings and keywords are written into your image files **automatically** (debounced, crash-safe): `xmp:Rating`, `dc:subject`, and the hierarchical `lr:hierarchicalSubject` — the exact format Lightroom Classic reads and writes.
+- Ratings, keywords and rotation are written into your image files **automatically** (debounced, crash-safe): `xmp:Rating`, the EXIF orientation tag, `dc:subject`, and the hierarchical `lr:hierarchicalSubject` — the exact format Lightroom Classic reads and writes.
 - A **bulk progress panel** appears in the sidebar whenever a change touches 100 or more files at once — a Lightroom import, or renaming or moving a keyword that hundreds of photos carry — so you can see the files being written and when it is safe to quit.
 
 ### Lightroom Classic import

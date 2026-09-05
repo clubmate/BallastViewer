@@ -59,6 +59,21 @@ public struct LibraryDatabase: Sendable {
         return LibraryDatabase(packageURL: url, pool: pool)
     }
 
+    /// U53: a consistent copy of the database for a backup, written with
+    /// SQLite's online backup API from a read connection — safe while the
+    /// write pipeline keeps committing (WAL), and the copy is a single
+    /// self-contained file (no `-wal`/`-shm` to chase). `url` must not exist.
+    public func snapshotDatabase(to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        var config = Configuration()
+        config.foreignKeysEnabled = true
+        let queue = try DatabaseQueue(path: url.path, configuration: config)
+        try pool.backup(to: queue)
+        try queue.close()
+    }
+
     private static func makePool(in packageURL: URL) throws -> DatabasePool {
         let dbURL = packageURL.appendingPathComponent(databaseFilename)
         var config = Configuration()

@@ -27,9 +27,15 @@ public enum MetadataWriteError: Error {
 /// would otherwise resurrect stale keywords from the IPTC block.
 ///
 /// `write` is the automatic write-through (`MetadataWriteThrough` in the app:
-/// every keyword/rating change lands in the file seconds later);
+/// every keyword/rating/rotation change lands in the file seconds later);
 /// `writeOrientation` is the BallastPicker's rotation. No other code writes
 /// image files.
+///
+/// Orientation (U52, user decision 2026-09-05 — until then library-only):
+/// ImageIO refuses `kCGImageDestinationMetadata` together with
+/// `kCGImageDestinationOrientation`, so `write` patches the XMP first and
+/// then re-copies the patched temp file with the orientation option before
+/// the atomic replace. Both copies are byte-verbatim for the image data.
 ///
 /// PIXEL INVARIANT (CLAUDE.md): this is one of only two places that write an
 /// image file. Every change here must keep `PixelInvariantTests` green — it
@@ -43,9 +49,12 @@ public enum MetadataWriter {
     /// `keywordPaths`: one component array per keyword path, already
     /// UPPERCASE (the storage invariant); `["PEOPLE", "ANNA"]` becomes
     /// `PEOPLE|ANNA`. Order is not significant; the writer sorts.
+    /// `orientation`: EXIF value 1…8 written into the TIFF/EXIF tag (and, by
+    /// ImageIO, the XMP `tiff:Orientation`); nil leaves the file's untouched.
     public static func write(
         rating: Int,
         keywordPaths: [[String]],
+        orientation: Int? = nil,
         to url: URL
     ) throws {
         let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
@@ -85,7 +94,11 @@ public enum MetadataWriter {
             throw MetadataWriteError.writeFailed("Could not build the metadata patch.")
         }
 
-        try copyPatched(source: source, type: type, patch: patch, extraOptions: [:], to: url)
+        var extraOptions: [CFString: Any] = [:]
+        if let orientation, (1...8).contains(orientation) {
+            extraOptions[kCGImageDestinationOrientation] = orientation
+        }
+        try copyPatched(source: source, type: type, patch: patch, extraOptions: extraOptions, to: url)
     }
 
     /// ImageIO writes no XMP at all into a PNG that carries no metadata chunk
@@ -169,7 +182,40 @@ public enum MetadataWriter {
             options[kCGImageDestinationMetadata] = patch
             options[kCGImageDestinationMergeMetadata] = true
         }
-        options.merge(extraOptions) { _, new in new }
+        // Metadata patch + orientation cannot share one copy (ImageIO
+        // rejects the combination): the orientation goes in a second pass
+        // over the patched temp file below.
+        let deferredOptions = patch == nil ? [:] : extraOptions
+        if patch == nil { options.merge(extraOptions) { _, new in new } }
+        try copy(source: source, into: destination, options: options)
+        if let patch {
+            try ensurePNGCarriesPatch(patch, tempURL: tempURL, type: type)
+        }
+
+        var finalURL = tempURL
+        if !deferredOptions.isEmpty {
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let patched = CGImageSourceCreateWithURL(tempURL as CFURL, sourceOptions) else {
+                throw MetadataWriteError.writeFailed("Could not reopen the patched file.")
+            }
+            let secondURL = tempDir
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(url.pathExtension)
+            guard let second = CGImageDestinationCreateWithURL(
+                secondURL as CFURL, type, CGImageSourceGetCount(patched), nil
+            ) else {
+                throw MetadataWriteError.writeFailed("Could not create the destination file.")
+            }
+            try copy(source: patched, into: second, options: deferredOptions)
+            finalURL = secondURL
+        }
+
+        _ = try FileManager.default.replaceItemAt(url, withItemAt: finalURL)
+    }
+
+    private static func copy(
+        source: CGImageSource, into destination: CGImageDestination, options: [CFString: Any]
+    ) throws {
         var copyError: Unmanaged<CFError>?
         guard CGImageDestinationCopyImageSource(
             destination, source, options as CFDictionary, &copyError
@@ -178,11 +224,6 @@ public enum MetadataWriter {
                 ?? "unknown error"
             throw MetadataWriteError.writeFailed(reason)
         }
-        if let patch {
-            try ensurePNGCarriesPatch(patch, tempURL: tempURL, type: type)
-        }
-
-        _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
     }
 }
 
@@ -239,7 +280,9 @@ enum PNGChunks {
 /// path SET already match the library is not rewritten. Orientation is
 /// library-only (Q5) and capture date is read-only — neither takes part.
 public enum MetadataSync {
+    /// Rating, keyword set and (U52) orientation — the three values the
+    /// write-through owns. Capture date is read-only.
     public static func differs(_ a: PhotoFileMetadata, _ b: PhotoFileMetadata) -> Bool {
-        a.rating != b.rating || Set(a.keywords) != Set(b.keywords)
+        a.rating != b.rating || a.orientation != b.orientation || Set(a.keywords) != Set(b.keywords)
     }
 }

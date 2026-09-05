@@ -43,8 +43,9 @@ extension LibraryController {
     }
 
     /// Advances each photo's stored orientation through the spec §6.6 cycle.
-    /// Library-only — orientation is never written to files (U17); display
-    /// rotates in the view layer (Q5), so this is instant. One batch = one undo step (U8).
+    /// Display rotates in the view layer (Q5), so this is instant; the file's
+    /// orientation tag follows through the debounced write-through (U52 —
+    /// library-only before). One batch = one undo step (U8).
     func rotatePhotos(ids: [Int64]) {
         let before = captureOrientations(of: ids)
         let changed = mutatePhotos(ids: ids) { photo in
@@ -57,6 +58,7 @@ extension LibraryController {
         let updates = changed.map { (photoId: $0.id!, orientation: $0.orientation) }
         persist { db in try PhotoDAO.setOrientations(updates, in: db) }
         emitCatalogEvent(.photosUpdated(updates.map(\.photoId)))
+        markNeedsFileWrite(updates.map(\.photoId))
     }
 
     /// Restores absolute per-photo orientations — the undo/redo path.
@@ -74,6 +76,7 @@ extension LibraryController {
         let updates = changed.map { (photoId: $0.id!, orientation: $0.orientation) }
         persist { db in try PhotoDAO.setOrientations(updates, in: db) }
         emitCatalogEvent(.photosUpdated(updates.map(\.photoId)))
+        markNeedsFileWrite(updates.map(\.photoId))
     }
 
     // MARK: Metadata write-through bookkeeping

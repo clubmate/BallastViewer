@@ -314,6 +314,38 @@ extension LibraryController {
         }
     }
 
+    /// U53 "Relink Folder…" (Settings ▸ Libraries): the folder's files now
+    /// live at `newURL` (a restored backup, a renamed disk). Rewrites the
+    /// folder record and every photo path's prefix — ids, ratings, keywords
+    /// and orientation stay. The open library reloads its snapshot
+    /// afterwards (paths are everywhere: facts, thumbnails, the AI cache).
+    func relinkFolder(_ folder: FolderRecord, to newURL: URL, inLibraryAt url: URL) async {
+        guard let folderId = folder.id else { return }
+        let newPath = newURL.path
+        let bookmark = try? PortableBookmark.make(newURL)
+        if url.path == libraryURL?.path {
+            guard let pipeline = writePipeline else { return }
+            do {
+                let changed = try await pipeline.submitAndWait { db in
+                    try ImportDAO.relinkFolder(folderId, to: newPath, bookmark: bookmark, in: db)
+                }
+                await refreshSnapshot()
+                infoMessage = "Relinked “\(folder.path)” to “\(newPath)” — \(changed) photo\(changed == 1 ? "" : "s") updated."
+            } catch {
+                errorMessage = "Could not relink the folder.\n\(error.localizedDescription)"
+            }
+        } else {
+            let changed = await Self.withClosedLibraryPool(at: url) { pool in
+                try pool.write { try ImportDAO.relinkFolder(folderId, to: newPath, bookmark: bookmark, in: $0) }
+            }
+            if let changed {
+                infoMessage = "Relinked “\(folder.path)” to “\(newPath)” — \(changed) photo\(changed == 1 ? "" : "s") updated."
+            } else {
+                errorMessage = "Could not relink the folder."
+            }
+        }
+    }
+
     /// "Add Existing…": takes a `.ballastlib` from disk (another machine, a
     /// backup) into the known list WITHOUT opening it — validated by a brief
     /// open/close so a broken file fails loudly here, not later in the menu.

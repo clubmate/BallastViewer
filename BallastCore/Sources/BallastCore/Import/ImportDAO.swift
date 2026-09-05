@@ -114,4 +114,33 @@ public enum ImportDAO {
         try FolderRecord.deleteOne(db, key: folderId)
         return count
     }
+
+    /// U53 "Relink Folder…": the folder moved (a restored backup, a renamed
+    /// disk) — point the record and every photo path at the new location.
+    /// Only the prefix is rewritten; the part below the folder stays, so the
+    /// photos keep their ids, ratings, keywords and orientation. Returns the
+    /// number of photos re-pathed. Files on disk are untouched.
+    @discardableResult
+    public static func relinkFolder(
+        _ folderId: Int64, to newPath: String, bookmark: Data?, in db: Database
+    ) throws -> Int {
+        guard var folder = try FolderRecord.fetchOne(db, key: folderId) else { return 0 }
+        let oldPrefix = BackupPlan.normalized(folder.path) + "/"
+        let newPrefix = BackupPlan.normalized(newPath) + "/"
+        folder.path = BackupPlan.normalized(newPath)
+        if let bookmark { folder.bookmark = bookmark }
+        try folder.update(db)
+        guard oldPrefix != newPrefix else { return 0 }
+        // SQLite's substr counts Unicode code points (APFS paths are often
+        // decomposed: "ü" is two scalars, one Swift Character).
+        let length = oldPrefix.unicodeScalars.count
+        try db.execute(
+            sql: """
+                UPDATE photo SET path = ? || substr(path, ?)
+                WHERE folderId = ? AND substr(path, 1, ?) = ?
+                """,
+            arguments: [newPrefix, length + 1, folderId, length, oldPrefix]
+        )
+        return db.changesCount
+    }
 }

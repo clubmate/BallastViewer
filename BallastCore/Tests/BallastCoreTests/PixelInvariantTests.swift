@@ -177,6 +177,45 @@ struct PixelInvariantTests {
         #expect(MetadataReader.read(from: url).keywords.isEmpty)
     }
 
+    /// U52: the write-through carries the orientation too. That is the
+    /// two-pass copy (XMP patch, then the orientation option over the patched
+    /// temp file) — its own gate, and the values must actually land.
+    @Test(arguments: [UTType.jpeg, UTType.png])
+    func libraryWriteWithOrientationKeepsImageData(type: UTType) throws {
+        let url = try writeFixture(type: type)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try assertPixelsUntouched(url) {
+            try MetadataWriter.write(rating: 4, keywordPaths: [["PEOPLE", "ANNA"]], orientation: 6, to: url)
+        }
+        var read = MetadataReader.read(from: url)
+        #expect(read.orientation == 6)
+        #expect(read.rating == 4)
+        #expect(read.keywords == ["PEOPLE > ANNA"])
+        // Rotating on: 6 → 3 → 8 → 1, rating/keywords riding along each time.
+        for (orientation, rating) in [(3, 2), (8, 5), (1, 0)] {
+            try assertPixelsUntouched(url) {
+                try MetadataWriter.write(rating: rating, keywordPaths: [["TRIP"]], orientation: orientation, to: url)
+            }
+            read = MetadataReader.read(from: url)
+            #expect(read.orientation == orientation)
+            #expect(read.rating == rating)
+            #expect(read.keywords == ["TRIP"])
+        }
+        // nil leaves the file's orientation alone.
+        try assertPixelsUntouched(url) {
+            try MetadataWriter.write(rating: 1, keywordPaths: [], orientation: nil, to: url)
+        }
+        #expect(MetadataReader.read(from: url).orientation == 1)
+        try assertPixelsUntouched(url) {
+            try MetadataWriter.write(rating: 1, keywordPaths: [], orientation: 8, to: url)
+        }
+        try assertPixelsUntouched(url) {
+            try MetadataWriter.write(rating: 2, keywordPaths: [], orientation: nil, to: url)
+        }
+        #expect(MetadataReader.read(from: url).orientation == 8)
+    }
+
     // MARK: BallastPicker write path (rotation written straight to the file)
 
     @Test(arguments: [UTType.jpeg, UTType.png])

@@ -96,6 +96,7 @@ struct SidebarView: View {
             }
 
             AutoTagStatusSection()
+            BackupStatusSection()
             FileWriteStatusSection()
             Divider()
             HStack {

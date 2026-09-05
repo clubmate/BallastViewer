@@ -5,7 +5,7 @@ import Observation
 @MainActor @Observable
 final class SettingsRouter {
     enum Tab: Hashable {
-        case libraries, appearance, midi, keywords, ai, shortcuts
+        case libraries, appearance, midi, keywords, ai, shortcuts, backup
     }
 
     var selectedTab: Tab = .libraries

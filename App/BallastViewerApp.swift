@@ -19,6 +19,7 @@ struct BallastViewerApp: App {
     @State private var updater = AppUpdater()
     @State private var vlmModels = VLMModelStore()
     @State private var autoTagRunner = AutoTagRunner()
+    @State private var backup = BackupService()
 
     init() {
         // U42: BEFORE anything reads UserDefaults — the sandboxed builds kept
@@ -70,12 +71,14 @@ struct BallastViewerApp: App {
                 .environment(updater)
                 .environment(vlmModels)
                 .environment(autoTagRunner)
+                .environment(backup)
+                .environment(settingsRouter)
                 .background(PhotoPickerAutoOpen())
                 .task {
                     await TestHooks.runIfRequested(
                         controller, center: center, sidebar: sidebar,
                         dispatcher: dispatcher, keyMap: keyMap, midiMap: midiMap,
-                        models: vlmModels, runner: autoTagRunner
+                        models: vlmModels, runner: autoTagRunner, backup: backup
                     )
                 }
         }
@@ -87,7 +90,7 @@ struct BallastViewerApp: App {
                 Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
                     .keyboardShortcut("w")
             }
-            LibraryCommands(controller: controller, settingsRouter: settingsRouter)
+            LibraryCommands(controller: controller, settingsRouter: settingsRouter, backup: backup)
             PhotoCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
             ViewCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
             // U50: the AI menu — present only while Settings ▸ AI is switched on.
@@ -126,6 +129,7 @@ struct BallastViewerApp: App {
                 .environment(settingsRouter)
                 .environment(vlmModels)
                 .environment(autoTagRunner)
+                .environment(backup)
         }
     }
 }

@@ -206,12 +206,12 @@ struct MetadataSyncTests {
         #expect(!MetadataSync.differs(a, b))
     }
 
-    @Test func detectsRatingAndKeywordsOnly() {
+    @Test func detectsRatingKeywordsAndOrientation() {
         let base = PhotoFileMetadata(rating: 3, orientation: 1, keywords: ["A"])
         #expect(MetadataSync.differs(base, PhotoFileMetadata(rating: 4, orientation: 1, keywords: ["A"])))
         #expect(MetadataSync.differs(base, PhotoFileMetadata(rating: 3, orientation: 1, keywords: [])))
-        // Orientation is library-only (Q5): not a file-sync attribute.
-        #expect(!MetadataSync.differs(base, PhotoFileMetadata(rating: 3, orientation: 6, keywords: ["A"])))
+        // U52: the write-through owns the orientation tag too.
+        #expect(MetadataSync.differs(base, PhotoFileMetadata(rating: 3, orientation: 6, keywords: ["A"])))
     }
 
     @Test func ignoresCaptureDate() {
