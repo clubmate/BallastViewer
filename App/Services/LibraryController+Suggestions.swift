@@ -139,15 +139,10 @@ extension LibraryController {
         emitCatalogEvent(.photosUpdated(photoIds))
     }
 
-    /// AI ▸ Accept / Reject All Suggestions on Selection: every pending chip
-    /// of the given photos at once (one undo step each — they land in the
-    /// same event group).
-    func acceptAllPendingKeywords(forPhotoIds photoIds: [Int64]) {
-        for (keywordId, photos) in pendingByKeyword(forPhotoIds: photoIds) {
-            acceptPendingKeyword(id: keywordId, forPhotoIds: photos)
-        }
-    }
-
+    /// AI ▸ Reject All Suggestions on Selection: every pending chip of the
+    /// given photos at once (one undo step each — they land in the same event
+    /// group). There is deliberately NO accept-all counterpart (user decision
+    /// 2026-09-01, reaffirmed 2026-09-05): accepting stays photo-by-photo.
     func rejectAllPendingKeywords(forPhotoIds photoIds: [Int64]) {
         for (keywordId, photos) in pendingByKeyword(forPhotoIds: photoIds) {
             rejectPendingKeyword(id: keywordId, forPhotoIds: photos)

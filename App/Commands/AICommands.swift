@@ -48,10 +48,6 @@ struct AICommands: Commands {
                 Divider()
                 Button("Review Keywords") { center.selectSidebarItem(.pendingReview) }
                     .help("Show the photos with suggestions waiting for review")
-                Button("Accept All Suggestions on Selection") {
-                    controller.acceptAllPendingKeywords(forPhotoIds: Array(center.selection.selectedIds))
-                }
-                .disabled(!hasAnchor)
                 Button("Reject All Suggestions on Selection") {
                     controller.rejectAllPendingKeywords(forPhotoIds: Array(center.selection.selectedIds))
                 }
