@@ -32,10 +32,16 @@ final class AutoTagRunner {
         var question: String
         var value: String
         var keywordPath: String?
+        /// U50: the keyword does not exist yet — a run would coin it.
+        var isNew = false
     }
 
     struct PreviewReply: Sendable {
         var profileName: String
+        /// Everything the model was sent as text: system prompt, then the
+        /// questionnaire (user request 2026-09-05 — the wording is what the
+        /// preview is for).
+        var prompt: String
         var raw: String
         var answers: [PreviewAnswer]
     }
@@ -95,6 +101,33 @@ final class AutoTagRunner {
         summary = nil
     }
 
+    /// "Discard All Suggestions…" awaiting confirmation — the alert lives on
+    /// the main window so the sidebar and the AI menu share it.
+    var confirmingDiscard = false
+
+    /// U50: existing keyword names per parent keyword — the vocabulary hint
+    /// of open questions (children of the keyword the answers go under).
+    static func vocabulary(for profiles: [AIProfile], tree: KeywordTree) -> [Int64: [String]] {
+        var result: [Int64: [String]] = [:]
+        for profile in profiles {
+            for question in profile.allQuestions where question.kind == .open {
+                guard let parentId = question.parentKeywordId, result[parentId] == nil else { continue }
+                result[parentId] = tree.children(of: parentId).compactMap { tree.node($0)?.name }
+            }
+        }
+        return result
+    }
+
+    /// The photos as records, in `ids` order (the grid knows ids, the run
+    /// wants records).
+    static func photos(withIds ids: [Int64], in snapshot: LibrarySnapshot) -> [PhotoRecord] {
+        let byId = Dictionary(
+            snapshot.photos.compactMap { photo in photo.id.map { ($0, photo) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return ids.compactMap { byId[$0] }
+    }
+
     /// Runs the enabled profiles over `photos` (a smart collection's members,
     /// or the whole library from the ALL PHOTOS row).
     func run(
@@ -110,11 +143,11 @@ final class AutoTagRunner {
         }
         let profiles = snapshot.aiProfiles.filter { $0.enabled && !$0.questions.isEmpty }
         guard !profiles.isEmpty else {
-            phase = .failed("No questionnaire is switched on — set one up in Settings ▸ AI.")
+            phase = .failed("No questionnaire is switched on — set one up under AI ▸ Keyword Questionnaires.")
             return
         }
-        guard profiles.contains(where: { !$0.keywordIds.isEmpty }) else {
-            phase = .failed("No answer of the enabled questionnaires is mapped to a keyword yet — see Settings ▸ AI.")
+        guard profiles.contains(where: { !$0.keywordIds.isEmpty || $0.hasOpenQuestions }) else {
+            phase = .failed("No answer of the enabled questionnaires is mapped to a keyword yet — see AI ▸ Keyword Questionnaires.")
             return
         }
         guard let model = models.selected, models.isSelectedReady else {
@@ -131,6 +164,9 @@ final class AutoTagRunner {
         // re-checks every pair against the LIVE snapshot, so edits made while
         // the run is going can only remove suggestions, never corrupt state.
         let rejected = controller.fetchRejectedSuggestionPairs()
+        // U50: rejection memory of coined keywords, by path.
+        let rejectedPaths = controller.fetchRejectedAIAnswerPaths()
+        let vocabulary = Self.vocabulary(for: profiles, tree: snapshot.keywordTree)
         let libraryUUID = snapshot.meta.libraryUUID
         let confirmedByPhoto = snapshot.keywordIdsByPhoto
         let pendingByPhoto = snapshot.pendingKeywordIdsByPhoto
@@ -152,7 +188,7 @@ final class AutoTagRunner {
             systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution
         )
         let questionnaires = profiles.map {
-            ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash, VLMPrompt.userPrompt(for: $0))
+            ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash, VLMPrompt.userPrompt(for: $0, vocabulary: vocabulary))
         }
 
         task = Task { [weak self, weak controller] in
@@ -173,6 +209,7 @@ final class AutoTagRunner {
                 var unanswered = 0
                 var unreadable = 0
                 var skipped = 0
+                var coinedCount = 0
                 var libraryChanged = false
                 var lastProgress = ContinuousClock.now
                 // Time-left estimate: an exponential moving average of the
@@ -202,8 +239,9 @@ final class AutoTagRunner {
                     for (profile, questionnaire, userPrompt) in questionnaires {
                         // Every keyword this profile could assign is already
                         // confirmed, pending or rejected on the photo — asking
-                        // again could not change anything.
-                        if profile.keywordIds.isSubset(of: decided) {
+                        // again could not change anything. (An open question
+                        // can always coin something new.)
+                        if !profile.hasOpenQuestions, profile.keywordIds.isSubset(of: decided) {
                             skipped += 1
                             continue
                         }
@@ -243,6 +281,19 @@ final class AutoTagRunner {
                         let parsed = VLMAnswerParser.parse(reply ?? "", profile: profile)
                         if parsed.isEmpty { unanswered += 1 }
                         keywordIds.formUnion(VLMAnswerParser.keywordIds(in: parsed))
+                        // U50: the model's own words become keywords — found
+                        // or coined now, skipped where this photo rejected
+                        // the same words before.
+                        for coined in VLMAnswerParser.coinedKeywords(in: parsed) {
+                            guard let controller,
+                                  let path = controller.coinedKeywordPath(coined),
+                                  !(rejectedPaths[photoId]?.contains(path) ?? false)
+                            else { continue }
+                            let existed = controller.snapshot?.keywordTree.find(pathComponents: path.components(separatedBy: " > ")) != nil
+                            guard let id = controller.ensureCoinedKeyword(coined) else { continue }
+                            if !existed { coinedCount += 1 }
+                            keywordIds.insert(id)
+                        }
                     }
                     if imageMissing { unreadable += 1 }
                     done += 1
@@ -272,6 +323,7 @@ final class AutoTagRunner {
                         + (unanswered > 0 ? "; \(unanswered) repl\(unanswered == 1 ? "y" : "ies") could not be read" : "")
                         + (unreadable > 0 ? "; \(unreadable) photo\(unreadable == 1 ? "" : "s") could not be decoded" : "")
                         + (skipped > 0 ? "; \(skipped) already fully reviewed" : "")
+                        + (coinedCount > 0 ? "; \(coinedCount) new keyword\(coinedCount == 1 ? "" : "s") coined" : "")
                         + "."
                 self?.phase = .idle
             } catch is CancellationError {
@@ -296,7 +348,7 @@ final class AutoTagRunner {
         let state = PreviewState(total: photos.count)
         preview = state
         guard !profiles.isEmpty else {
-            state.error = "No questionnaire is switched on — set one up in Settings ▸ AI."
+            state.error = "No questionnaire is switched on — set one up under AI ▸ Keyword Questionnaires."
             state.isRunning = false
             return
         }
@@ -320,10 +372,11 @@ final class AutoTagRunner {
         let settingsHash = VLMPrompt.settingsHash(
             systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution
         )
-        let questionnaires = profiles.map {
-            ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash, VLMPrompt.userPrompt(for: $0))
-        }
         let tree = snapshot.keywordTree
+        let vocabulary = Self.vocabulary(for: profiles, tree: tree)
+        let questionnaires = profiles.map {
+            ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash, VLMPrompt.userPrompt(for: $0, vocabulary: vocabulary))
+        }
         let libraryUUID = snapshot.meta.libraryUUID
 
         task = Task { [weak self] in
@@ -366,15 +419,26 @@ final class AutoTagRunner {
                             reply = fresh
                         }
                         let parsed = VLMAnswerParser.parse(reply ?? "", profile: profile)
-                        let answers = profile.questions.compactMap { question -> PreviewAnswer? in
+                        let answers = profile.allQuestions.compactMap { question -> PreviewAnswer? in
                             guard let id = question.id, let answer = parsed[id] else { return nil }
+                            if let coined = answer.coined {
+                                // The keyword the words would become — existing, or new.
+                                let parentPath = coined.parentKeywordId.flatMap { tree.node($0) != nil ? tree.path(of: $0) : nil }
+                                let path = parentPath.map { $0 + " > " + coined.name } ?? coined.name
+                                let exists = tree.find(pathComponents: path.components(separatedBy: " > ")) != nil
+                                return PreviewAnswer(question: question.text, value: answer.value, keywordPath: path, isNew: !exists)
+                            }
                             return PreviewAnswer(
                                 question: question.text,
                                 value: answer.value,
                                 keywordPath: answer.keywordId.flatMap { tree.node($0) != nil ? tree.path(of: $0) : nil }
                             )
                         }
-                        replies.append(PreviewReply(profileName: profile.name, raw: reply ?? "", answers: answers))
+                        replies.append(PreviewReply(
+                            profileName: profile.name,
+                            prompt: "SYSTEM\n" + systemPrompt + "\n\nUSER\n" + userPrompt,
+                            raw: reply ?? "", answers: answers
+                        ))
                     }
                     state.items.append(PreviewItem(id: photoId, path: photo.path, filename: (photo.path as NSString).lastPathComponent, orientation: photo.orientation, replies: replies
                     ))

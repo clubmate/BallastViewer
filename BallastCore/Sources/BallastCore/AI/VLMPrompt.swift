@@ -5,8 +5,15 @@ import Foundation
 /// instructions, then every question with its allowed answers, then the
 /// exact JSON shape to return. Answers come back keyed "q1", "q2", … in
 /// question order; the parser maps them back to answer records.
+///
+/// U50 — one pass, whatever the tree looks like: a follow-up question is
+/// listed right after the question it depends on, marked "Only if q2 is
+/// "female"", with "n/a" as its extra allowed value; the PARSER drops its
+/// answer when the gate was not chosen, so consistency never depends on the
+/// model honouring the condition. An open question asks for one or two
+/// words; the words become a keyword.
 public enum VLMPrompt {
-    /// The default system prompt — editable in Settings ▸ AI (the app stores
+    /// The default system prompt — editable in the AI window (the app stores
     /// the user's version; this is what Reset restores).
     public static let systemPrompt =
         "You are a photo cataloguing assistant. Look at the photo and answer every question by choosing exactly one of the allowed answers. Answer with a single JSON object and nothing else."
@@ -14,7 +21,17 @@ public enum VLMPrompt {
     /// Bumped whenever the rendered prompt TEMPLATE changes (wording around
     /// the questions, the return shape) so cached replies from the old
     /// template are not mistaken for answers to the new one.
-    public static let promptVersion = 2
+    public static let promptVersion = 3
+
+    /// The literal a gated question is answered with when its gate is not
+    /// met — never an answer, never cached as one.
+    public static let notApplicable = "n/a"
+
+    /// Placeholder for the free-text slot in the return shape.
+    static let openPlaceholder = "<one or two words>"
+
+    /// At most this many vocabulary words are offered per open question.
+    static let vocabularyLimit = 40
 
     /// Fingerprint of the run settings that change a reply without touching
     /// the profile — system prompt, thinking, image resolution, template
@@ -30,40 +47,111 @@ public enum VLMPrompt {
     public static func key(forQuestionAt index: Int) -> String { "q\(index + 1)" }
 
     /// The user message for one profile (the photo is attached alongside).
-    public static func userPrompt(for profile: AIProfile) -> String {
+    /// `vocabulary` — existing keyword names per parent keyword id, offered
+    /// to open questions as the preferred wording (NOT part of the cache
+    /// key: it only nudges spelling, an older reply stays a valid answer).
+    public static func userPrompt(for profile: AIProfile, vocabulary: [Int64: [String]] = [:]) -> String {
         var lines: [String] = []
         let instructions = profile.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         if !instructions.isEmpty {
             lines.append(instructions)
             lines.append("")
         }
+        let flat = profile.flattened
         lines.append("Questions (answer each with exactly one of its allowed values):")
-        for (index, question) in profile.questions.enumerated() {
-            let values = question.answers.map { "\"\($0.value)\"" }.joined(separator: ", ")
-            lines.append("\(index + 1). \"\(key(forQuestionAt: index))\": \(question.text) One of: \(values)")
-        }
-        // The allowed values repeat INSIDE the return shape: small models
-        // copy the shape literally, which keeps answers on the list.
-        let shape = profile.questions.enumerated()
-            .map { index, question in
-                "\"\(key(forQuestionAt: index))\": \"\(question.answers.map(\.value).joined(separator: "|"))\""
+        var shape: [String] = []
+        for (index, entry) in flat.enumerated() {
+            let key = key(forQuestionAt: index)
+            let question = entry.question
+            var text = ""
+            var gate: String?
+            if let parent = entry.parentAnswer, let parentKey = entry.parentKey {
+                gate = "\(parentKey) is \"\(parent.value)\""
+                text += "Only if \(gate!): "
             }
-            .joined(separator: ", ")
-        lines.append("Return exactly this shape, one value per key: {\(shape)}")
+            text += question.text
+            var values: [String]
+            switch question.kind {
+            case .choice:
+                values = question.answers.map(\.value)
+                text += " One of: " + values.map { "\"\($0)\"" }.joined(separator: ", ")
+            case .open:
+                text += " Answer in one or two English words"
+                let words = question.parentKeywordId.flatMap { vocabulary[$0] }?.prefix(vocabularyLimit) ?? []
+                if !words.isEmpty {
+                    text += " (prefer one of: " + words.map { "\"\($0.lowercased())\"" }.joined(separator: ", ") + ")"
+                }
+                values = [openPlaceholder]
+                // The exits ("none") are the only fixed answers of an open question.
+                for answer in question.answers {
+                    text += ", or \"\(answer.value)\" if that does not apply"
+                    values.append(answer.value)
+                }
+            }
+            if let gate {
+                text += ", or \"\(notApplicable)\" unless \(gate)"
+                values.append(notApplicable)
+            }
+            lines.append("\(index + 1). \"\(key)\": \(text)")
+            // The allowed values repeat INSIDE the return shape: small models
+            // copy the shape literally, which keeps answers on the list.
+            shape.append("\"\(key)\": \"\(values.joined(separator: "|"))\"")
+        }
+        lines.append("Return exactly this shape, one value per key: {\(shape.joined(separator: ", "))}")
         return lines.joined(separator: "\n")
     }
 
     /// Fingerprint of everything that changes what the model is ASKED — the
-    /// cache key of a raw answer. Keyword mappings are deliberately left out:
-    /// re-mapping an answer to another keyword must reuse cached answers.
+    /// cache key of a raw answer. Keyword mappings (and the vocabulary hint
+    /// of open questions) are deliberately left out: re-mapping an answer to
+    /// another keyword must reuse cached answers.
     public static func questionnaireHash(for profile: AIProfile) -> String {
         var parts: [String] = [profile.instructions]
-        for question in profile.questions {
-            parts.append(question.text)
-            parts.append(question.answers.map(\.value).joined(separator: "\u{1F}"))
+        for entry in profile.flattened {
+            parts.append((entry.parentKey ?? "") + "=" + (entry.parentAnswer?.value ?? ""))
+            parts.append(entry.question.kind.rawValue)
+            parts.append(entry.question.text)
+            parts.append(entry.question.answers.map(\.value).joined(separator: "\u{1F}"))
         }
         let joined = parts.joined(separator: "\u{1E}")
         return FNV1a.hex(joined)
+    }
+}
+
+/// A keyword an open question's answer would create (or reuse): the model's
+/// words as a keyword name (UPPERCASE) and the parent it goes under.
+public struct AICoinedKeyword: Hashable, Sendable {
+    public var name: String
+    public var parentKeywordId: Int64?
+
+    public init(name: String, parentKeywordId: Int64?) {
+        self.name = name
+        self.parentKeywordId = parentKeywordId
+    }
+}
+
+/// One parsed answer: which answer was chosen (or which words came back).
+public struct AIParsedAnswer: Hashable, Sendable {
+    /// The chosen literal, or the model's words for an open question.
+    public var value: String
+    /// The answer row chosen (nil for an open answer in the model's words).
+    public var answerId: Int64?
+    /// The keyword the chosen answer maps to.
+    public var keywordId: Int64?
+    public var stopsProfile: Bool
+    /// Open answer: the keyword these words become.
+    public var coined: AICoinedKeyword?
+
+    public init(value: String, answerId: Int64? = nil, keywordId: Int64? = nil, stopsProfile: Bool = false, coined: AICoinedKeyword? = nil) {
+        self.value = value
+        self.answerId = answerId
+        self.keywordId = keywordId
+        self.stopsProfile = stopsProfile
+        self.coined = coined
+    }
+
+    init(_ answer: AIAnswerRecord) {
+        self.init(value: answer.value, answerId: answer.id, keywordId: answer.keywordId, stopsProfile: answer.stopsProfile)
     }
 }
 
@@ -72,16 +160,26 @@ public enum VLMPrompt {
 /// the values: an answer that is not one of the allowed values counts as
 /// "no answer" for that question, never as a guess.
 public enum VLMAnswerParser {
-    /// Chosen answer per question id (questions the model skipped or answered
-    /// off-list are absent). A chosen answer with `stopsProfile` ends the
-    /// questionnaire: later questions are dropped even if answered.
-    public static func parse(_ reply: String, profile: AIProfile) -> [Int64: AIAnswerRecord] {
-        guard let object = extractObject(from: reply, keys: profile.questions.indices.map(VLMPrompt.key)) else {
+    /// Chosen answer per question id (questions the model skipped, answered
+    /// off-list or with "n/a" are absent). A follow-up whose gate answer was
+    /// not chosen is dropped whatever the model said; a chosen answer with
+    /// `stopsProfile` ends the questionnaire: later questions are dropped
+    /// even if answered.
+    public static func parse(_ reply: String, profile: AIProfile) -> [Int64: AIParsedAnswer] {
+        let flat = profile.flattened
+        guard let object = extractObject(from: reply, keys: flat.indices.map(VLMPrompt.key)) else {
             return [:]
         }
-        var result: [Int64: AIAnswerRecord] = [:]
-        for (index, question) in profile.questions.enumerated() {
+        var result: [Int64: AIParsedAnswer] = [:]
+        // Answer id chosen per question id — the gates of follow-ups.
+        var chosen: [Int64: Int64] = [:]
+        for (index, entry) in flat.enumerated() {
+            let question = entry.question
             guard let questionId = question.id else { continue }
+            if let gate = entry.parentAnswer {
+                // The parent question's id is on the gate's record.
+                guard let gateId = gate.id, chosen[gate.questionId] == gateId else { continue }
+            }
             let key = VLMPrompt.key(forQuestionAt: index)
             guard let raw = object[key] else { continue }
             let text: String
@@ -90,18 +188,56 @@ public enum VLMAnswerParser {
             case let number as NSNumber: text = number.stringValue
             default: continue
             }
-            if let answer = match(text, in: question.answers) {
-                result[questionId] = answer
+            if isNotApplicable(text) { continue }
+            let records = question.answers.map(\.record)
+            if let answer = match(text, in: records) {
+                result[questionId] = AIParsedAnswer(answer)
+                if let answerId = answer.id { chosen[questionId] = answerId }
                 if answer.stopsProfile { break }
+            } else if question.kind == .open, let name = keywordName(from: text) {
+                result[questionId] = AIParsedAnswer(
+                    value: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    coined: AICoinedKeyword(name: name, parentKeywordId: question.parentKeywordId)
+                )
             }
         }
         return result
     }
 
     /// Keyword ids the parsed answers assign (answers without a keyword
-    /// contribute nothing).
-    public static func keywordIds(in parsed: [Int64: AIAnswerRecord]) -> Set<Int64> {
+    /// contribute nothing; coined keywords are resolved by the caller).
+    public static func keywordIds(in parsed: [Int64: AIParsedAnswer]) -> Set<Int64> {
         Set(parsed.values.compactMap(\.keywordId))
+    }
+
+    /// The keywords the open answers would create or reuse.
+    public static func coinedKeywords(in parsed: [Int64: AIParsedAnswer]) -> [AICoinedKeyword] {
+        parsed.values.compactMap(\.coined)
+    }
+
+    /// The model's words as a keyword name: trimmed, UPPERCASE, inner
+    /// whitespace collapsed. Nil for anything that is not a usable name —
+    /// the copied placeholder, a sentence, path or list characters.
+    public static func keywordName(from text: String) -> String? {
+        var cleaned = normalize(text)
+        cleaned = cleaned.replacingOccurrences(of: "_", with: " ")
+        guard !cleaned.isEmpty, !cleaned.contains("<"), !cleaned.contains(">"),
+              !cleaned.contains("|"), !cleaned.contains("{"), !cleaned.contains("}"),
+              !cleaned.contains("\n"), !cleaned.contains(":")
+        else { return nil }
+        let words = cleaned.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard (1...4).contains(words.count) else { return nil }
+        let joined = words.joined(separator: " ")
+        guard joined.count <= 40, !placeholders.contains(joined) else { return nil }
+        return KeywordDAO.normalize(joined)
+    }
+
+    /// Replies that copied the shape's placeholder instead of answering.
+    static let placeholders: Set<String> = ["one or two words", "words", "word", "answer", "value", "n/a", "na", "none", "null", "nil"]
+
+    static func isNotApplicable(_ text: String) -> Bool {
+        let needle = normalize(text)
+        return needle == "n/a" || needle == "na" || needle == "not applicable" || needle == "n.a"
     }
 
     /// Digits answered for number words ("1" for "one") — small models do.
@@ -126,6 +262,7 @@ public enum VLMAnswerParser {
         value.lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: ".\"'"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// The answer object in the reply. A thinking model first writes a

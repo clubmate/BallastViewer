@@ -15,17 +15,22 @@ public struct KeywordRecord: Codable, Hashable, Sendable, FetchableRecord, Mutab
     public var groupId: Int64?
     /// Single path component, ALWAYS UPPERCASE (invariant enforced by KeywordDAO).
     public var name: String
+    /// U50: coined by the model (an open question's answer). Collected again
+    /// once nothing carries or references it — see `KeywordDAO.collectOrphanedAIKeywords`.
+    public var aiCreated: Bool
 
     public init(
         id: Int64? = nil,
         parentId: Int64? = nil,
         groupId: Int64? = nil,
-        name: String
+        name: String,
+        aiCreated: Bool = false
     ) {
         self.id = id
         self.parentId = parentId
         self.groupId = groupId
         self.name = name
+        self.aiCreated = aiCreated
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {

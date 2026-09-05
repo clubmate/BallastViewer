@@ -223,6 +223,37 @@ public enum PhotoDAO {
         }
     }
 
+    // MARK: Rejection memory by path (U50, coined keywords)
+
+    /// Rejected open answers as (photoId, keyword path) — checked by the run
+    /// before it coins a keyword for a photo.
+    public static func fetchRejectedAIAnswerPaths(_ db: Database) throws -> [Int64: Set<String>] {
+        var result: [Int64: Set<String>] = [:]
+        let cursor = try Row.fetchCursor(db, sql: "SELECT photoId, keywordPath FROM rejectedAIAnswer")
+        while let row = try cursor.next() {
+            result[row[0] as Int64, default: []].insert(row[1] as String)
+        }
+        return result
+    }
+
+    public static func insertRejectedAIAnswer(path: String, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "INSERT OR IGNORE INTO rejectedAIAnswer (photoId, keywordPath) VALUES (?, ?)"
+        )
+        for id in ids {
+            try statement.execute(arguments: [id, path])
+        }
+    }
+
+    public static func deleteRejectedAIAnswer(path: String, forPhotoIds ids: [Int64], in db: Database) throws {
+        let statement = try db.cachedStatement(
+            sql: "DELETE FROM rejectedAIAnswer WHERE photoId = ? AND keywordPath = ?"
+        )
+        for id in ids {
+            try statement.execute(arguments: [id, path])
+        }
+    }
+
     /// The join table as keyword-id sets per photo id — the snapshot's
     /// in-memory form, built straight off a row cursor with positional
     /// column access (no intermediate row array or tuple list).

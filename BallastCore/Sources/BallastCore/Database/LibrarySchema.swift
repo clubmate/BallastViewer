@@ -248,6 +248,39 @@ public enum LibrarySchema {
             }
         }
 
+        migrator.registerMigration("v10-ai-branching") { db in
+            // U50: questions form a TREE — a follow-up question hangs off one
+            // answer of an earlier question and is asked only when that
+            // answer was chosen. Deleted with the parent answer (cascade).
+            // `kind`: 'choice' (pick one allowed answer) or 'open' (the
+            // model's own words become a keyword — created on demand under
+            // `parentKeywordId`, or at the top level when NULL).
+            try db.alter(table: "aiQuestion") { t in
+                t.add(column: "parentAnswerId", .integer)
+                    .references("aiAnswer", onDelete: .cascade)
+                t.add(column: "kind", .text).notNull().defaults(to: "choice")
+                t.add(column: "parentKeywordId", .integer)
+                    .references("keyword", onDelete: .setNull)
+            }
+            try db.create(index: "aiQuestion_parentAnswerId", on: "aiQuestion", columns: ["parentAnswerId"])
+            try db.create(index: "aiQuestion_parentKeywordId", on: "aiQuestion", columns: ["parentKeywordId"])
+            // Keywords the model coined (open answers). They are garbage-
+            // collected once nothing carries or references them any more —
+            // a rejected coinage must not linger in the tree.
+            try db.alter(table: "keyword") { t in
+                t.add(column: "aiCreated", .boolean).notNull().defaults(to: false)
+            }
+            // Rejection memory for coined keywords, keyed by PATH: the
+            // keyword row itself may be collected after the rejection, and a
+            // later run coining the same words must still skip the photo.
+            try db.create(table: "rejectedAIAnswer", options: [.withoutRowID]) { t in
+                t.column("photoId", .integer).notNull()
+                    .references("photo", onDelete: .cascade)
+                t.column("keywordPath", .text).notNull()
+                t.primaryKey(["photoId", "keywordPath"])
+            }
+        }
+
         return migrator
     }
 

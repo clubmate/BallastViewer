@@ -74,9 +74,16 @@ final class VLMModelStore {
     /// The sensible default on a 16–24 GB Mac.
     nonisolated static let defaultModelId = "mlx-community/Qwen3.5-9B-4bit"
 
+    private static let enabledKey = "aiEnabled"
+
     private(set) var custom: [ModelInfo]
     var selectedId: String {
         didSet { UserDefaults.standard.set(selectedId, forKey: Self.selectedKey) }
+    }
+    /// U50: the master switch (Settings ▸ AI). Off = no AI menu, no
+    /// auto-tag entries in the sidebar; models and the review queue stay.
+    var aiEnabled: Bool {
+        didSet { UserDefaults.standard.set(aiEnabled, forKey: Self.enabledKey) }
     }
     private(set) var states: [String: State] = [:]
     /// Error of the last "Add model" attempt, shown under the field.
@@ -89,6 +96,7 @@ final class VLMModelStore {
         let data = UserDefaults.standard.data(forKey: Self.customKey)
         custom = data.flatMap { try? JSONDecoder().decode([ModelInfo].self, from: $0) } ?? []
         selectedId = UserDefaults.standard.string(forKey: Self.selectedKey) ?? Self.defaultModelId
+        aiEnabled = UserDefaults.standard.bool(forKey: Self.enabledKey)
         refreshStates()
     }
 

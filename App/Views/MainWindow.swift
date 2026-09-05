@@ -134,6 +134,20 @@ struct MainWindow: View {
         .sheet(item: Binding(get: { autoTagRunner.preview }, set: { if $0 == nil { autoTagRunner.dismissPreview() } })) { state in
             AutoTagPreviewSheet(state: state)
         }
+        // U48 emergency exit, reachable from the REVIEW KEYWORDS row and AI menu.
+        .alert(
+            "Discard All Suggestions",
+            isPresented: Binding(get: { autoTagRunner.confirmingDiscard }, set: { autoTagRunner.confirmingDiscard = $0 })
+        ) {
+            Button("Discard", role: .destructive) {
+                controller.discardPendingSuggestions(controller.allPendingSuggestionPairs)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let pairs = controller.allPendingSuggestionPairs.count
+            let photos = sidebar.pendingReviewCount
+            Text("Remove all \(pairs) pending suggestion\(pairs == 1 ? "" : "s") on \(photos) photo\(photos == 1 ? "" : "s") — as if the run had never happened? Nothing is remembered as rejected, so a later run may suggest them again. Confirmed keywords and files are not affected. This can be undone.")
+        }
         .alert(
             "BallastViewer",
             isPresented: Binding(

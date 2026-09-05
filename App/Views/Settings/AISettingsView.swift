@@ -1,12 +1,11 @@
 import BallastCore
 import SwiftUI
 
-/// Settings ▸ AI (U49): the vision-language model (which one, downloaded or
-/// not, add your own by Hugging Face id) and the keyword QUESTIONNAIRES
-/// (`AIProfile` in code) — a list of questions per photo genre whose answers
-/// map to keywords, stored in the library. Runs start
-/// from the sidebar (right-click a smart collection or ALL PHOTOS ▸ Auto-Tag
-/// Photos); progress shows in the sidebar's AUTO-TAGGING section.
+/// Settings ▸ AI (U49/U50): the master switch, the vision-language model
+/// (which one, downloaded or not, add your own by Hugging Face id) and the
+/// two run switches. Everything about WHAT is asked — the keyword
+/// questionnaires and the system prompt — lives in the AI window (AI ▸
+/// Keyword Questionnaires…), which exists while the switch is on.
 /// Everything runs on-device; nothing leaves the machine except the
 /// one-time model download.
 struct AISettingsView: View {
@@ -26,38 +25,36 @@ struct AISettingsView: View {
     @Environment(LibraryController.self) private var controller
     @Environment(VLMModelStore.self) private var models
     @Environment(AutoTagRunner.self) private var runner
-    @AppStorage(AISettingsView.systemPromptKey) private var systemPrompt = VLMPrompt.systemPrompt
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(AISettingsView.thinkingKey) private var thinking = false
     @AppStorage(AISettingsView.fullResolutionKey) private var fullResolution = false
     @State private var customRepo = ""
-    @State private var editing: AIProfile?
-    @State private var pendingDeletion: AIProfile?
     @State private var pendingModelRemoval: VLMModelStore.ModelInfo?
 
     var body: some View {
+        @Bindable var models = models
         Form {
+            Section {
+                Toggle("Enable AI auto-tagging", isOn: $models.aiEnabled)
+                    .disabled(runner.isRunning)
+                if models.aiEnabled {
+                    HStack(spacing: 8) {
+                        Text("Questionnaires, the system prompt and every auto-tagging action are in the AI menu.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Open AI Window…") { openWindow(id: AIWindow.id) }
+                            .controlSize(.small)
+                            .disabled(controller.snapshot == nil)
+                    }
+                }
+            } footer: {
+                Text("On: an AI menu appears with the keyword questionnaires, the auto-tag actions and the review commands. Off: those disappear; downloaded models and any suggestions waiting for review stay.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             modelSection
-            promptSection
-            profilesSection
+            runSection
         }
         .formStyle(.grouped)
-        .sheet(item: $editing) { profile in
-            AIProfileEditor(profile: profile) { saved in
-                controller.saveAIProfile(saved)
-            }
-        }
-        .alert(
-            "Delete Questionnaire",
-            isPresented: Binding(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }),
-            presenting: pendingDeletion
-        ) { profile in
-            Button("Delete", role: .destructive) {
-                if let id = profile.id { controller.deleteAIProfile(id) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { profile in
-            Text("“\(profile.name)” and its questions are removed from this library. Suggestions already made stay.")
-        }
         .alert(
             models.state(of: pendingModelRemoval?.id ?? "") == .ready ? "Remove Model Files" : "Discard Partial Download",
             isPresented: Binding(get: { pendingModelRemoval != nil }, set: { if !$0 { pendingModelRemoval = nil } }),
@@ -206,23 +203,10 @@ struct AISettingsView: View {
         customRepo = ""
     }
 
-    // MARK: Prompt & run settings
+    // MARK: Run settings
 
-    private var promptSection: some View {
+    private var runSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("System prompt").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Reset") { systemPrompt = VLMPrompt.systemPrompt }
-                        .controlSize(.small)
-                        .disabled(systemPrompt == VLMPrompt.systemPrompt)
-                }
-                TextEditor(text: $systemPrompt)
-                    .font(.body)
-                    .frame(minHeight: 60, maxHeight: 120)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
-            }
             Toggle("Let the model think before answering", isOn: $thinking)
             Text("Off: the model answers directly (a few seconds per photo). On: it first writes a reasoning trace, then answers — several times slower, sometimes more careful on counting and ambiguous scenes.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -230,85 +214,11 @@ struct AISettingsView: View {
             Text("Off: photos are sent at 768 px on the long edge — enough for faces, headcounts and scenes. On: the decoded original goes in (the library holds previews up to about 2K); slower and more memory, helps only with small details.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: {
-            Text("Prompt & Run")
+            Text("Run")
         } footer: {
-            Text("The system prompt is sent before every questionnaire's instructions and questions. Changing any of these settings re-asks the model on the next run (earlier answers stay cached under the old settings).")
+            Text("Changing either switch re-asks the model on the next run (earlier answers stay cached under the old settings).")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .disabled(runner.isRunning)
     }
-
-    // MARK: Questionnaires
-
-    private var profiles: [AIProfile] { controller.snapshot?.aiProfiles ?? [] }
-
-    private var profilesSection: some View {
-        Section {
-            if controller.snapshot == nil {
-                Text("Open a library first.").foregroundStyle(.secondary)
-            } else if profiles.isEmpty {
-                Text("No questionnaire yet. A questionnaire is a list of questions the model answers about every photo — each answer can assign a keyword. Questionnaires are saved in the library.")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(profiles, id: \.id) { profile in
-                profileRow(profile)
-            }
-            HStack(spacing: 8) {
-                Button("New Questionnaire") {
-                    editing = AIProfile(
-                        record: AIProfileRecord(name: "New Questionnaire", instructions: AIProfile.defaultInstructions),
-                        questions: [AIQuestion(record: AIQuestionRecord(profileId: 0, text: ""), answers: [])]
-                    )
-                }
-            }
-            .disabled(controller.snapshot == nil)
-        } header: {
-            Text("Keyword Questionnaires (\(profiles.count))")
-        } footer: {
-            Text("Every enabled questionnaire is asked once per photo. Then right-click a smart collection (or ALL PHOTOS) in the sidebar and choose Auto-Tag Photos; the answers arrive as pending suggestions to review photo by photo.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func profileRow(_ profile: AIProfile) -> some View {
-        HStack(spacing: 10) {
-            Toggle("", isOn: Binding(
-                get: { profile.enabled },
-                set: { if let id = profile.id { controller.setAIProfileEnabled(id, $0) } }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .disabled(runner.isRunning)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(profile.name).fontWeight(.medium)
-                Text(profileSummary(profile)).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            Button("Edit…") { editing = profile }
-                .disabled(runner.isRunning)
-            Button {
-                pendingDeletion = profile
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .disabled(runner.isRunning)
-            .help("Delete questionnaire")
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func profileSummary(_ profile: AIProfile) -> String {
-        let questions = profile.questions.count
-        let mapped = profile.questions.flatMap(\.answers).filter { $0.keywordId != nil }.count
-        var parts = ["\(questions) question\(questions == 1 ? "" : "s")", "\(mapped) answer\(mapped == 1 ? "" : "s") mapped to keywords"]
-        if mapped == 0 { parts.append("assigns nothing yet") }
-        return parts.joined(separator: " · ")
-    }
 }
-
-/// `id: Int64?` serves as the identity; unsaved drafts share nil, which is
-/// fine for one sheet at a time.
-extension AIProfile: Identifiable {}

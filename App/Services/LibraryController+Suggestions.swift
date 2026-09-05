@@ -80,6 +80,8 @@ extension LibraryController {
 
     /// ✗ on a pending chip: the suggestion disappears AND is remembered — a
     /// later run never re-suggests the pair. Nothing file-facing changed.
+    /// A keyword the model coined (U50) is remembered by PATH as well, and
+    /// collected when this was the last thing holding it.
     func rejectPendingKeyword(id keywordId: Int64, forPhotoIds photoIds: [Int64]) {
         var changed: [Int64] = []
         mutateSnapshot { snapshot in
@@ -91,16 +93,28 @@ extension LibraryController {
         }
         guard !changed.isEmpty else { return }
         let photoIds = changed
-        registerUndo("Reject Suggestion") { $0.restorePendingKeyword(id: keywordId, forPhotoIds: photoIds) }
+        let coinedPath = snapshot?.keywordTree.node(keywordId)?.aiCreated == true
+            ? snapshot?.keywordTree.path(of: keywordId) : nil
         persist { db in
             try PhotoDAO.deletePendingKeyword(keywordId, forPhotoIds: photoIds, in: db)
             try PhotoDAO.insertRejected(keywordId, forPhotoIds: photoIds, in: db)
+            if let coinedPath {
+                try PhotoDAO.insertRejectedAIAnswer(path: coinedPath, forPhotoIds: photoIds, in: db)
+            }
         }
         emitCatalogEvent(.photosUpdated(photoIds))
+        let collected = collectOrphanedAIKeywords([keywordId])
+        registerUndo("Reject Suggestion") {
+            $0.restorePendingKeyword(id: keywordId, forPhotoIds: photoIds, coinedPath: coinedPath, collected: collected)
+        }
     }
 
-    /// Undo of a reject: the suggestion comes back, the tombstones go away.
-    func restorePendingKeyword(id keywordId: Int64, forPhotoIds photoIds: [Int64]) {
+    /// Undo of a reject: the suggestion comes back, the tombstones go away
+    /// (and a collected coined keyword is re-created under its old id first).
+    func restorePendingKeyword(
+        id keywordId: Int64, forPhotoIds photoIds: [Int64], coinedPath: String? = nil, collected: [KeywordRecord] = []
+    ) {
+        restoreCollectedAIKeywords(collected)
         var changed: [Int64] = []
         mutateSnapshot { snapshot in
             for photoId in photoIds
@@ -115,11 +129,124 @@ extension LibraryController {
         registerUndo("Reject Suggestion") { $0.rejectPendingKeyword(id: keywordId, forPhotoIds: photoIds) }
         persist { db in
             try PhotoDAO.deleteRejected(keywordId, forPhotoIds: photoIds, in: db)
+            if let coinedPath {
+                try PhotoDAO.deleteRejectedAIAnswer(path: coinedPath, forPhotoIds: photoIds, in: db)
+            }
             try PhotoDAO.assignPendingKeywords(
                 photoIds.map { PhotoKeywordPair(photoId: $0, keywordId: keywordId) }, in: db
             )
         }
         emitCatalogEvent(.photosUpdated(photoIds))
+    }
+
+    /// AI ▸ Accept / Reject All Suggestions on Selection: every pending chip
+    /// of the given photos at once (one undo step each — they land in the
+    /// same event group).
+    func acceptAllPendingKeywords(forPhotoIds photoIds: [Int64]) {
+        for (keywordId, photos) in pendingByKeyword(forPhotoIds: photoIds) {
+            acceptPendingKeyword(id: keywordId, forPhotoIds: photos)
+        }
+    }
+
+    func rejectAllPendingKeywords(forPhotoIds photoIds: [Int64]) {
+        for (keywordId, photos) in pendingByKeyword(forPhotoIds: photoIds) {
+            rejectPendingKeyword(id: keywordId, forPhotoIds: photos)
+        }
+    }
+
+    /// Whether any of the photos carries a pending suggestion.
+    func hasPendingKeywords(forPhotoIds photoIds: [Int64]) -> Bool {
+        guard let snapshot else { return false }
+        return photoIds.contains { !(snapshot.pendingKeywordIdsByPhoto[$0]?.isEmpty ?? true) }
+    }
+
+    private func pendingByKeyword(forPhotoIds photoIds: [Int64]) -> [Int64: [Int64]] {
+        guard let snapshot else { return [:] }
+        var result: [Int64: [Int64]] = [:]
+        for photoId in photoIds {
+            for keywordId in snapshot.pendingKeywordIdsByPhoto[photoId] ?? [] {
+                result[keywordId, default: []].append(photoId)
+            }
+        }
+        return result
+    }
+
+    // MARK: Coined keywords (U50)
+
+    /// Finds or coins the keyword for an open answer — a sync write because
+    /// the id is needed for the suggestion pair right away. Nil when the
+    /// parent keyword vanished mid-run.
+    func ensureCoinedKeyword(_ coined: AICoinedKeyword) -> Int64? {
+        guard let snapshot else { return nil }
+        if let parentId = coined.parentKeywordId, snapshot.keywordTree.node(parentId) == nil { return nil }
+        guard let result: (id: Int64, created: KeywordRecord?) = writeSync({ db in
+            try KeywordDAO.ensureChild(named: coined.name, parentId: coined.parentKeywordId, aiCreated: true, in: db)
+        }) else { return nil }
+        if let created = result.created {
+            mutateSnapshot { $0.keywordTree = $0.keywordTree.inserting(created) }
+            refreshVocabulary()
+        }
+        return result.id
+    }
+
+    /// The path a coined keyword WOULD have — the key of its rejection memory.
+    func coinedKeywordPath(_ coined: AICoinedKeyword) -> String? {
+        guard let tree = snapshot?.keywordTree else { return nil }
+        guard let parentId = coined.parentKeywordId else { return coined.name }
+        guard tree.node(parentId) != nil else { return nil }
+        return tree.path(of: parentId) + " > " + coined.name
+    }
+
+    /// Rejection memory of coined keywords, by path — read once per run.
+    func fetchRejectedAIAnswerPaths() -> [Int64: Set<String>] {
+        writeSync { db in try PhotoDAO.fetchRejectedAIAnswerPaths(db) } ?? [:]
+    }
+
+    /// Deletes those of `keywordIds` the model coined and nothing holds any
+    /// more — no assignment (confirmed or pending), no child, no
+    /// questionnaire pointing at them. Decided in memory (the maps are the
+    /// authority), persisted in order behind the pending delete that freed
+    /// them. Returns the removed rows for undo.
+    @discardableResult
+    func collectOrphanedAIKeywords(_ keywordIds: Set<Int64>) -> [KeywordRecord] {
+        guard let snapshot else { return [] }
+        var referenced = Set<Int64>()
+        for profile in snapshot.aiProfiles {
+            referenced.formUnion(profile.keywordIds)
+            referenced.formUnion(profile.allQuestions.compactMap(\.parentKeywordId))
+        }
+        var orphans: [KeywordRecord] = []
+        for id in keywordIds.subtracting(referenced) {
+            guard let node = snapshot.keywordTree.node(id), node.aiCreated,
+                  snapshot.keywordTree.children(of: id).isEmpty,
+                  !snapshot.keywordIdsByPhoto.values.contains(where: { $0.contains(id) }),
+                  !snapshot.pendingKeywordIdsByPhoto.values.contains(where: { $0.contains(id) })
+            else { continue }
+            orphans.append(node)
+        }
+        guard !orphans.isEmpty else { return [] }
+        mutateSnapshot { snapshot in
+            for orphan in orphans {
+                if let id = orphan.id { snapshot.keywordTree = snapshot.keywordTree.deletingSubtree(id) }
+            }
+        }
+        refreshVocabulary()
+        let ids = orphans.compactMap(\.id)
+        persist { db in
+            for id in ids { try KeywordDAO.deleteSubtree(id, in: db) }
+        }
+        return orphans
+    }
+
+    /// Undo counterpart of `collectOrphanedAIKeywords`: the rows come back
+    /// under their old ids (skipping any that exist again).
+    func restoreCollectedAIKeywords(_ records: [KeywordRecord]) {
+        guard !records.isEmpty, let snapshot else { return }
+        let missing = records.filter { $0.id.map { snapshot.keywordTree.node($0) == nil } ?? false }
+        guard !missing.isEmpty else { return }
+        mutateSnapshot { $0.keywordTree = $0.keywordTree.inserting(contentsOf: missing) }
+        refreshVocabulary()
+        persist { db in try KeywordDAO.restore(missing, in: db) }
     }
 
     // MARK: Discard (emergency exit)
@@ -149,14 +276,16 @@ extension LibraryController {
         }
         guard !dropped.isEmpty else { return }
         let restore = dropped
-        registerUndo("Discard Suggestions") { $0.restoreDiscardedSuggestions(restore) }
         persist { db in try PhotoDAO.deletePendingPairs(restore, in: db) }
         emitCatalogEvent(.photosUpdated(Array(changed)))
+        let collected = collectOrphanedAIKeywords(Set(restore.map(\.keywordId)))
+        registerUndo("Discard Suggestions") { $0.restoreDiscardedSuggestions(restore, collected: collected) }
     }
 
     /// Undo of a discard: the suggestions come back as pending (skipping any
     /// pair that became confirmed or pending again in the meantime).
-    func restoreDiscardedSuggestions(_ pairs: [PhotoKeywordPair]) {
+    func restoreDiscardedSuggestions(_ pairs: [PhotoKeywordPair], collected: [KeywordRecord] = []) {
+        restoreCollectedAIKeywords(collected)
         var fresh: [PhotoKeywordPair] = []
         var changed = Set<Int64>()
         mutateSnapshot { snapshot in

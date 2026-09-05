@@ -30,22 +30,48 @@ public struct AIProfileRecord: Codable, Hashable, Sendable, FetchableRecord, Mut
     }
 }
 
-/// One question of a profile. The model must pick exactly one of the
-/// question's answers; `position` is both the order shown and the JSON key
-/// ("q1", "q2", …) the model answers under.
+/// How a question is answered (U50).
+public enum AIQuestionKind: String, Codable, Hashable, Sendable, DatabaseValueConvertible {
+    /// The model picks exactly one of the question's answers.
+    case choice
+    /// The model answers in its own words; the words become a keyword
+    /// (created on demand, as a pending suggestion like any other).
+    case open
+}
+
+/// One question of a profile. `position` is the order among its siblings;
+/// the JSON key the model answers under ("q1", "q2", …) follows the
+/// depth-first order of the whole profile (`AIProfile.flattened`).
+///
+/// A question either sits at the top level (`parentAnswerId` nil) or is a
+/// FOLLOW-UP of one answer of an earlier question (U50): it is asked only
+/// when that answer was chosen — "Is she wearing a dress?" hangs off
+/// "female". The follow-up rows are deleted with their parent answer.
 public struct AIQuestionRecord: Codable, Hashable, Sendable, FetchableRecord, MutablePersistableRecord {
     public static let databaseTableName = "aiQuestion"
 
     public var id: Int64?
     public var profileId: Int64
+    public var parentAnswerId: Int64?
     public var position: Int
     public var text: String
+    public var kind: AIQuestionKind
+    /// Open questions: the keyword the model's words are created UNDER
+    /// (nil = top level). Its existing children are offered to the model as
+    /// the preferred vocabulary. NULL when that keyword is deleted (FK).
+    public var parentKeywordId: Int64?
 
-    public init(id: Int64? = nil, profileId: Int64, position: Int = 0, text: String) {
+    public init(
+        id: Int64? = nil, profileId: Int64, parentAnswerId: Int64? = nil, position: Int = 0,
+        text: String, kind: AIQuestionKind = .choice, parentKeywordId: Int64? = nil
+    ) {
         self.id = id
         self.profileId = profileId
+        self.parentAnswerId = parentAnswerId
         self.position = position
         self.text = text
+        self.kind = kind
+        self.parentKeywordId = parentKeywordId
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
@@ -57,8 +83,12 @@ public struct AIQuestionRecord: Codable, Hashable, Sendable, FetchableRecord, Mu
 /// keyword-less answer ("none", "unsure") is how a question can decline —
 /// the model MUST pick something, so every question needs an exit that
 /// assigns nothing. `keywordId` goes NULL when the keyword is deleted (FK).
+/// An open question carries at most the "none" exit as an answer row.
 public struct AIAnswerRecord: Codable, Hashable, Sendable, FetchableRecord, MutablePersistableRecord {
     public static let databaseTableName = "aiAnswer"
+
+    /// The literal of the exit answer the editor's "Allow none" adds.
+    public static let noneValue = "none"
 
     public var id: Int64?
     public var questionId: Int64
@@ -88,14 +118,49 @@ public struct AIAnswerRecord: Codable, Hashable, Sendable, FetchableRecord, Muta
     }
 }
 
-/// A question with its answers, in order — the in-memory shape the prompt
-/// builder, the parser and the editor work on.
+/// An answer with the follow-up questions hanging off it (U50) — the
+/// in-memory tree node the prompt builder, the parser and the editor share.
+public struct AIAnswer: Hashable, Sendable {
+    public var record: AIAnswerRecord
+    public var followUps: [AIQuestion]
+
+    public init(record: AIAnswerRecord, followUps: [AIQuestion] = []) {
+        self.record = record
+        self.followUps = followUps
+    }
+
+    public init(value: String, keywordId: Int64? = nil, stopsProfile: Bool = false, followUps: [AIQuestion] = []) {
+        self.record = AIAnswerRecord(questionId: 0, value: value, keywordId: keywordId, stopsProfile: stopsProfile)
+        self.followUps = followUps
+    }
+
+    public var id: Int64? { record.id }
+    public var value: String {
+        get { record.value }
+        set { record.value = newValue }
+    }
+    public var keywordId: Int64? {
+        get { record.keywordId }
+        set { record.keywordId = newValue }
+    }
+    public var stopsProfile: Bool {
+        get { record.stopsProfile }
+        set { record.stopsProfile = newValue }
+    }
+}
+
+/// A question with its answers (and their follow-ups), in order.
 public struct AIQuestion: Hashable, Sendable {
     public var record: AIQuestionRecord
-    public var answers: [AIAnswerRecord]
+    public var answers: [AIAnswer]
 
-    public init(record: AIQuestionRecord, answers: [AIAnswerRecord]) {
+    public init(record: AIQuestionRecord, answers: [AIAnswer]) {
         self.record = record
+        self.answers = answers
+    }
+
+    public init(text: String, kind: AIQuestionKind = .choice, parentKeywordId: Int64? = nil, answers: [AIAnswer] = []) {
+        self.record = AIQuestionRecord(profileId: 0, text: text, kind: kind, parentKeywordId: parentKeywordId)
         self.answers = answers
     }
 
@@ -103,6 +168,27 @@ public struct AIQuestion: Hashable, Sendable {
     public var text: String {
         get { record.text }
         set { record.text = newValue }
+    }
+    public var kind: AIQuestionKind {
+        get { record.kind }
+        set { record.kind = newValue }
+    }
+    public var parentKeywordId: Int64? {
+        get { record.parentKeywordId }
+        set { record.parentKeywordId = newValue }
+    }
+
+    /// The keyword-less "none" exit, if the question has one.
+    public var noneAnswer: AIAnswer? {
+        answers.first { $0.value == AIAnswerRecord.noneValue && $0.keywordId == nil }
+    }
+
+    /// Every question below this one, depth first (follow-ups of follow-ups
+    /// included), each with the answer it hangs off.
+    var descendants: [(question: AIQuestion, parent: AIAnswerRecord)] {
+        answers.flatMap { answer in
+            answer.followUps.flatMap { [(question: $0, parent: answer.record)] + $0.descendants }
+        }
     }
 }
 
@@ -130,23 +216,55 @@ public struct AIProfile: Hashable, Sendable {
         set { record.instructions = newValue }
     }
 
+    /// One entry per question in PROMPT order (depth first: a follow-up comes
+    /// right after the question it depends on), with the answer that gates it.
+    public struct FlatQuestion: Hashable, Sendable {
+        public var question: AIQuestion
+        /// The answer this question is a follow-up of (nil = top level).
+        public var parentAnswer: AIAnswerRecord?
+        /// Prompt key of the question the parent answer belongs to.
+        public var parentKey: String?
+    }
+
+    /// The questions as the model sees them — keys "q1", "q2", … in this order.
+    public var flattened: [FlatQuestion] {
+        var result: [FlatQuestion] = []
+        func walk(_ question: AIQuestion, parent: AIAnswerRecord?, parentKey: String?) {
+            let key = VLMPrompt.key(forQuestionAt: result.count)
+            result.append(FlatQuestion(question: question, parentAnswer: parent, parentKey: parentKey))
+            for answer in question.answers {
+                for followUp in answer.followUps {
+                    walk(followUp, parent: answer.record, parentKey: key)
+                }
+            }
+        }
+        for question in questions { walk(question, parent: nil, parentKey: nil) }
+        return result
+    }
+
+    /// Every question of the profile, depth first.
+    public var allQuestions: [AIQuestion] { flattened.map(\.question) }
+
     /// Every keyword any answer of this profile can assign.
     public var keywordIds: Set<Int64> {
-        Set(questions.flatMap { $0.answers.compactMap(\.keywordId) })
+        Set(allQuestions.flatMap { $0.answers.compactMap(\.keywordId) })
+    }
+
+    /// Whether the profile can produce keywords that do not exist yet — an
+    /// open question is never "fully reviewed" on a photo.
+    public var hasOpenQuestions: Bool {
+        allQuestions.contains { $0.kind == .open }
     }
 
     /// The default guidance a new profile starts with.
     public static let defaultInstructions =
         "Judge by the main subject of the photo. Ignore people who are small, blurry or clearly in the background."
 
-    /// The starter questionnaire offered on an empty AI tab (keywords left
-    /// unmapped — the user connects answers to their own keyword tree).
+    /// The starter questionnaire (keywords left unmapped — the user connects
+    /// answers to their own keyword tree). Used by the `BV_TEST_VLM` hook.
     public static func starter() -> AIProfile {
         func question(_ text: String, _ values: [String], stop: String? = nil) -> AIQuestion {
-            AIQuestion(
-                record: AIQuestionRecord(profileId: 0, text: text),
-                answers: values.map { AIAnswerRecord(questionId: 0, value: $0, stopsProfile: $0 == stop) }
-            )
+            AIQuestion(text: text, answers: values.map { AIAnswer(value: $0, stopsProfile: $0 == stop) })
         }
         // One axis per question ("face cut off" is a framing fact, not an
         // angle); "none" on the headcount ends the questionnaire.

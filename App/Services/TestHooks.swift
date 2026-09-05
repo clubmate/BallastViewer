@@ -690,6 +690,27 @@ enum TestHooks {
                 profile.questions[qIndex].answers[aIndex].keywordId = id
             }
         }
+        // U50 (BV_TEST_VLM_TREE=1): a follow-up branch under "female" — a
+        // yes/no question, and under "yes" an OPEN question whose words are
+        // coined as keywords under VLM TEST > COLORS.
+        if env["BV_TEST_VLM_TREE"] != nil, profile.questions.count > 1,
+           let female = profile.questions[1].answers.firstIndex(where: { $0.value == "female" }) {
+            let colors = controller.snapshot?.keywordTree.find(pathComponents: ["VLM TEST", "COLORS"])
+                ?? controller.createKeyword(
+                    baseName: "COLORS",
+                    parentId: controller.snapshot?.keywordTree.find(pathComponents: ["VLM TEST"]),
+                    groupId: nil
+                )
+            let colour = AIQuestion(
+                text: "What is the main colour of her clothes?", kind: .open, parentKeywordId: colors,
+                answers: [AIAnswer(value: "none")]
+            )
+            let dress = AIQuestion(text: "Is she wearing a dress or skirt?", answers: [
+                AIAnswer(value: "yes", followUps: [colour]),
+                AIAnswer(value: "no"),
+            ])
+            profile.questions[1].answers[female].followUps = [dress]
+        }
         // Replace a previous test profile so reruns do not stack.
         if let stale = controller.snapshot?.aiProfiles.first(where: { $0.name == "VLM TEST" })?.id {
             controller.deleteAIProfile(stale)
@@ -698,7 +719,10 @@ enum TestHooks {
             print("BVVLM error=save-profile")
             return
         }
-        print("BVVLM profile=\(saved.id ?? -1) questions=\(saved.questions.count) mapped=\(saved.keywordIds.count)")
+        print("BVVLM profile=\(saved.id ?? -1) questions=\(saved.allQuestions.count) mapped=\(saved.keywordIds.count) open=\(saved.hasOpenQuestions)")
+        if env["BV_TEST_VLM_PROMPT"] != nil {
+            print("BVVLM prompt:\n" + VLMPrompt.userPrompt(for: saved, vocabulary: AutoTagRunner.vocabulary(for: [saved], tree: controller.snapshot!.keywordTree)))
+        }
         let photos = Array(snapshot.photos.prefix(count))
         let started = Date()
         runner.run(controller: controller, models: models, photos: photos, scopeName: "VLM TEST")
@@ -717,6 +741,8 @@ enum TestHooks {
                 .map { tree.path(of: $0) }.sorted()
             print("BVVLM photo=\((photo.path as NSString).lastPathComponent) pending=\(pending.joined(separator: " | "))")
         }
+        let coined = tree.allRecords.filter(\.aiCreated).map { tree.path(of: $0.id!) }.sorted()
+        print("BVVLM coined=\(coined.joined(separator: " | "))")
     }
 
     /// U41 acceptance, headless: a child collection ANDs the parent's rules

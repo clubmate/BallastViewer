@@ -88,12 +88,25 @@ struct BallastViewerApp: App {
                     .keyboardShortcut("w")
             }
             LibraryCommands(controller: controller, settingsRouter: settingsRouter)
-            PhotoCommands(
-                center: center, dispatcher: dispatcher, keyMap: keyMap,
-                controller: controller, models: vlmModels, runner: autoTagRunner
-            )
+            PhotoCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
             ViewCommands(center: center, dispatcher: dispatcher, keyMap: keyMap)
+            // U50: the AI menu — present only while Settings ▸ AI is switched on.
+            AICommands(
+                controller: controller, center: center, models: vlmModels,
+                runner: autoTagRunner, settingsRouter: settingsRouter
+            )
         }
+
+        // U50: the AI window — questionnaires, system prompt, run status.
+        Window("AI Keywording", id: AIWindow.id) {
+            AIWindow()
+                .environment(controller)
+                .environment(center)
+                .environment(vlmModels)
+                .environment(autoTagRunner)
+                .environment(settingsRouter)
+        }
+        .defaultSize(width: 1040, height: 720)
 
         // Standalone first-pass selection utility — shares nothing with the
         // library window except the image surface.

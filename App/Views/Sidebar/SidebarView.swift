@@ -11,8 +11,6 @@ struct SidebarView: View {
     @Environment(AutoTagRunner.self) private var runner
     let sidebar: SidebarViewModel
     let center: CenterViewModel
-    /// U48 emergency exit: "Discard All Suggestions…" awaiting confirmation.
-    @State private var confirmDiscardSuggestions = false
 
     /// Groups are drag-ordered; collections inside a group list
     /// alphabetically (U32) and are not draggable.
@@ -37,10 +35,12 @@ struct SidebarView: View {
                         Text("ALL PHOTOS")
                     }
                     .contextMenu {
-                        Button("Auto-Tag Photos") {
-                            autoTagPhotos(matching: .allPhotos, scopeName: "ALL PHOTOS")
+                        if models.aiEnabled {
+                            Button("Auto-Tag Photos") {
+                                autoTagPhotos(matching: .allPhotos, scopeName: "ALL PHOTOS")
+                            }
+                            .disabled(runner.isRunning)
                         }
-                        .disabled(runner.isRunning)
                     }
                     row(item: .lastImport, count: sidebar.counts.lastImport) {
                         Text("LAST IMPORT")
@@ -73,7 +73,7 @@ struct SidebarView: View {
                             // The emergency exit after a bad run: every pending
                             // suggestion goes, nothing is remembered as rejected.
                             Button("Discard All Suggestions…") {
-                                confirmDiscardSuggestions = true
+                                runner.confirmingDiscard = true
                             }
                             .disabled(runner.isRunning || sidebar.pendingReviewCount == 0)
                         }
@@ -112,16 +112,6 @@ struct SidebarView: View {
             .frame(height: PanelMetrics.footerHeight)
         }
         .sidebarPrompts(sidebar: sidebar, center: center, controller: controller)
-        .alert("Discard All Suggestions", isPresented: $confirmDiscardSuggestions) {
-            Button("Discard", role: .destructive) {
-                controller.discardPendingSuggestions(controller.allPendingSuggestionPairs)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            let pairs = controller.allPendingSuggestionPairs.count
-            let photos = sidebar.pendingReviewCount
-            Text("Remove all \(pairs) pending suggestion\(pairs == 1 ? "" : "s") on \(photos) photo\(photos == 1 ? "" : "s") — as if the run had never happened? Nothing is remembered as rejected, so a later run may suggest them again. Confirmed keywords and files are not affected. This can be undone.")
-        }
     }
 
     // MARK: Rows
@@ -290,13 +280,15 @@ struct SidebarView: View {
                 Button("Delete", role: .destructive) {
                     sidebar.pendingCollectionDeletion = collection
                 }
-                Divider()
                 // U48/U49: auto-tagging is scoped — right-click decides WHAT
-                // gets scanned; model and profiles live in Settings ▸ AI.
-                Button("Auto-Tag Photos") {
-                    autoTagPhotos(matching: .collection(collectionId), scopeName: collection.name)
+                // gets scanned; questionnaires live in the AI window.
+                if models.aiEnabled {
+                    Divider()
+                    Button("Auto-Tag Photos") {
+                        autoTagPhotos(matching: .collection(collectionId), scopeName: collection.name)
+                    }
+                    .disabled(runner.isRunning)
                 }
-                .disabled(runner.isRunning)
             }
         }
     }

@@ -180,6 +180,10 @@ public enum KeywordDAO {
             sql: "UPDATE aiAnswer SET keywordId = ? WHERE keywordId = ?",
             arguments: [targetId, sourceId]
         )
+        try db.execute(
+            sql: "UPDATE aiQuestion SET parentKeywordId = ? WHERE parentKeywordId = ?",
+            arguments: [targetId, sourceId]
+        )
         let children = try KeywordRecord.filter(Column("parentId") == sourceId).fetchAll(db)
         for child in children {
             guard let childId = child.id else { continue }
@@ -194,6 +198,57 @@ public enum KeywordDAO {
             }
         }
         try KeywordRecord.deleteOne(db, key: sourceId)
+    }
+
+    // MARK: Coined keywords (U50)
+
+    /// Finds the child of `parentId` (nil = top level) named `name`, or
+    /// creates it flagged `aiCreated`. Returns the id and the record when a
+    /// row was inserted (for the in-memory tree delta).
+    public static func ensureChild(
+        named rawName: String, parentId: Int64?, aiCreated: Bool, in db: Database
+    ) throws -> (id: Int64, created: KeywordRecord?) {
+        let name = normalize(rawName)
+        guard !name.isEmpty else { throw KeywordDAOError.emptyName }
+        let parentFilter: SQLExpression =
+            parentId == nil ? Column("parentId") == nil : Column("parentId") == parentId
+        if let existing = try KeywordRecord.filter(parentFilter && Column("name") == name).fetchOne(db),
+           let id = existing.id {
+            return (id, nil)
+        }
+        var record = KeywordRecord(parentId: parentId, groupId: nil, name: name, aiCreated: aiCreated)
+        try record.insert(db)
+        return (record.id!, record)
+    }
+
+    /// Among `candidates`, the coined keywords nothing holds on to any more:
+    /// no assignment (confirmed OR pending), no child, no questionnaire
+    /// referencing them. Deleted by the caller — with their rejection
+    /// tombstones, which is why coined rejections are ALSO kept by path.
+    public static func orphanedAIKeywords(among candidates: Set<Int64>, in db: Database) throws -> [KeywordRecord] {
+        guard !candidates.isEmpty else { return [] }
+        let referenced = try AIProfileDAO.referencedKeywordIds(db)
+        var orphans: [KeywordRecord] = []
+        for id in candidates.subtracting(referenced) {
+            guard let record = try KeywordRecord.fetchOne(db, key: id), record.aiCreated else { continue }
+            let carriers = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM photoKeyword WHERE keywordId = ?", arguments: [id]) ?? 0
+            guard carriers == 0 else { continue }
+            let children = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM keyword WHERE parentId = ?", arguments: [id]) ?? 0
+            guard children == 0 else { continue }
+            orphans.append(record)
+        }
+        return orphans
+    }
+
+    /// Re-inserts collected keywords under their old ids (undo of a reject
+    /// or discard that collected them). Rows that came back some other way
+    /// in the meantime are left alone.
+    public static func restore(_ records: [KeywordRecord], in db: Database) throws {
+        for record in records {
+            guard let id = record.id, try KeywordRecord.fetchOne(db, key: id) == nil else { continue }
+            var copy = record
+            try copy.insert(db)
+        }
     }
 
     public static func setGroup(_ groupId: Int64?, forKeywordId id: Int64, in db: Database) throws {

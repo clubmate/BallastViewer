@@ -42,7 +42,7 @@ struct AutoTagPreviewSheet: View {
             }
             Divider()
             HStack {
-                Text("Nothing was assigned — this is a preview. Adjust the questions in Settings ▸ AI, then run Auto-Tag Photos from the sidebar.")
+                Text("Nothing was assigned — this is a preview. Adjust the questions under AI ▸ Keyword Questionnaires, then run Auto-Tag from the AI menu or the sidebar.")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Close") { runner.dismissPreview() }
@@ -73,9 +73,21 @@ struct AutoTagPreviewSheet: View {
                                 if let path = answer.keywordPath {
                                     Text(path).font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
                                         .background(Color.accentColor.opacity(0.2), in: Capsule())
+                                    if answer.isNew {
+                                        // U50: an open answer whose keyword a run would coin.
+                                        Text("new").font(.caption2).foregroundStyle(.secondary)
+                                            .help("This keyword does not exist yet — a run would create it as a pending suggestion")
+                                    }
                                 }
                             }
                         }
+                        DisclosureGroup("Prompt sent to the model") {
+                            Text(reply.prompt)
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .font(.caption2)
                         DisclosureGroup("Raw reply") {
                             Text(reply.raw)
                                 .font(.system(.caption2, design: .monospaced))

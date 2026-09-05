@@ -43,9 +43,6 @@ struct PhotoCommands: Commands {
     let center: CenterViewModel
     let dispatcher: ActionDispatcher
     let keyMap: KeyMapStore
-    let controller: LibraryController
-    let models: VLMModelStore
-    let runner: AutoTagRunner
 
     /// Reads the flip-guarded flag, NOT `selection` — Observation would
     /// otherwise rebuild the menu on every anchor move at key-repeat rate.
@@ -66,19 +63,6 @@ struct PhotoCommands: Commands {
                 item("5 Stars", action: .rate5)
             }
             .disabled(!hasAnchor)
-            Divider()
-            // U49: the calibration view — answers for the selection, nothing
-            // applied. Capped at `AutoTagRunner.previewLimit` photos.
-            Button("Preview Auto-Tagging on Selection…") {
-                let selected = center.selection.selectedIds
-                let byId = Dictionary(
-                    (controller.snapshot?.photos ?? []).compactMap { photo in photo.id.map { ($0, photo) } },
-                    uniquingKeysWith: { first, _ in first }
-                )
-                let photos = center.visiblePhotos.map(\.id).filter { selected.contains($0) }.compactMap { byId[$0] }
-                runner.preview(controller: controller, models: models, photos: photos)
-            }
-            .disabled(!hasAnchor || runner.isRunning)
         }
     }
 
