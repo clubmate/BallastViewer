@@ -51,8 +51,12 @@ struct AISettingsView: View {
                 Text("On: an AI menu appears with the keyword questionnaires, the auto-tag actions and the review commands. Off: those disappear; downloaded models and any suggestions waiting for review stay.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            modelSection
-            runSection
+            // Model choice and run switches exist only while AI is on
+            // (user request 2026-09-05).
+            if models.aiEnabled {
+                modelSection
+                runSection
+            }
         }
         .formStyle(.grouped)
         .alert(
