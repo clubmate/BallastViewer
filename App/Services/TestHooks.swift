@@ -729,6 +729,22 @@ enum TestHooks {
             ])
             profile.questions[1].answers[female].followUps = [dress]
         }
+        // U55 (BV_TEST_VLM_MULTI=1): a multiple-choice question at the end —
+        // scene elements, each mapped under VLM TEST > SCENE <X>, "none" alone.
+        if env["BV_TEST_VLM_MULTI"] != nil {
+            let parent = controller.snapshot?.keywordTree.find(pathComponents: ["VLM TEST"])
+                ?? controller.createKeyword(baseName: "VLM TEST", parentId: nil, groupId: nil)
+            let answers = ["sky", "water", "trees", "buildings", "road"].map { value -> AIAnswer in
+                let name = "SCENE \(value.uppercased())"
+                let id = controller.snapshot?.keywordTree.find(pathComponents: ["VLM TEST", name])
+                    ?? controller.createKeyword(baseName: name, parentId: parent, groupId: nil)
+                return AIAnswer(value: value, keywordId: id)
+            }
+            profile.questions.append(AIQuestion(
+                text: "Which of these are clearly visible in the photo?", kind: .multiple,
+                answers: answers + [AIAnswer(value: AIAnswerRecord.noneValue)]
+            ))
+        }
         // Replace a previous test profile so reruns do not stack.
         if let stale = controller.snapshot?.aiProfiles.first(where: { $0.name == "VLM TEST" })?.id {
             controller.deleteAIProfile(stale)

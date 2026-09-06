@@ -30,13 +30,20 @@ public struct AIProfileRecord: Codable, Hashable, Sendable, FetchableRecord, Mut
     }
 }
 
-/// How a question is answered (U50).
+/// How a question is answered (U50, U55).
 public enum AIQuestionKind: String, Codable, Hashable, Sendable, DatabaseValueConvertible {
     /// The model picks exactly one of the question's answers.
     case choice
     /// The model answers in its own words; the words become a keyword
     /// (created on demand, as a pending suggestion like any other).
     case open
+    /// U55: the model picks EVERY answer that applies (a JSON list); each
+    /// chosen answer assigns its keyword. A keyword-less "none" (or an
+    /// answer that ends the questionnaire) counts only when chosen alone.
+    case multiple
+
+    /// Whether the question is answered from its fixed answer rows.
+    public var hasAnswerRows: Bool { self != .open }
 }
 
 /// One question of a profile. `position` is the order among its siblings;

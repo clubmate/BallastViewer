@@ -12,16 +12,21 @@ import Foundation
 /// answer when the gate was not chosen, so consistency never depends on the
 /// model honouring the condition. An open question asks for one or two
 /// words; the words become a keyword.
+///
+/// U55 — a MULTIPLE question asks for a JSON list of every answer that
+/// applies; the parser takes the list (or a comma-separated string), drops
+/// the "none" exit whenever a real answer sits beside it, and treats a
+/// literal copy of the shape's `"a|b|c"` placeholder as no answer.
 public enum VLMPrompt {
     /// The default system prompt — editable in the AI window (the app stores
     /// the user's version; this is what Reset restores).
     public static let systemPrompt =
-        "You are a photo cataloguing assistant. Look at the photo and answer every question by choosing exactly one of the allowed answers. Answer with a single JSON object and nothing else."
+        "You are a photo cataloguing assistant. Look at the photo and answer every question by choosing from its allowed answers: exactly one, or every answer that applies where the question says so. Answer with a single JSON object and nothing else."
 
     /// Bumped whenever the rendered prompt TEMPLATE changes (wording around
     /// the questions, the return shape) so cached replies from the old
     /// template are not mistaken for answers to the new one.
-    public static let promptVersion = 3
+    public static let promptVersion = 4
 
     /// The literal a gated question is answered with when its gate is not
     /// met — never an answer, never cached as one.
@@ -83,7 +88,14 @@ public enum VLMPrompt {
             lines.append("")
         }
         let flat = profile.flattened
-        lines.append("Questions (answer each with exactly one of its allowed values):")
+        // The list wording appears only when a question takes a list, so
+        // a questionnaire without one renders (and caches) as before.
+        let hasList = flat.contains { $0.question.kind == .multiple }
+        lines.append(
+            hasList
+                ? "Questions (answer each with exactly one of its allowed values; a question that asks for every answer that applies takes a list):"
+                : "Questions (answer each with exactly one of its allowed values):"
+        )
         var shape: [String] = []
         for (index, entry) in flat.enumerated() {
             let key = key(forQuestionAt: index)
@@ -96,10 +108,18 @@ public enum VLMPrompt {
             }
             text += question.text
             var values: [String]
+            var isList = false
             switch question.kind {
             case .choice:
                 values = question.answers.map(\.value)
                 text += " One of: " + values.map { "\"\($0)\"" }.joined(separator: ", ")
+            case .multiple:
+                isList = true
+                values = question.answers.map(\.value)
+                text += " Every answer that applies, as a list, from: " + values.map { "\"\($0)\"" }.joined(separator: ", ")
+                if let none = question.noneAnswer {
+                    text += " (\"\(none.value)\" alone if nothing applies)"
+                }
             case .open:
                 text += " Answer in one or two English words"
                 let words = question.parentKeywordId.flatMap { vocabulary[$0] }?.prefix(vocabularyLimit) ?? []
@@ -120,9 +140,13 @@ public enum VLMPrompt {
             lines.append("\(index + 1). \"\(key)\": \(text)")
             // The allowed values repeat INSIDE the return shape: small models
             // copy the shape literally, which keeps answers on the list.
-            shape.append("\"\(key)\": \"\(values.joined(separator: "|"))\"")
+            let placeholder = "\"\(values.joined(separator: "|"))\""
+            shape.append("\"\(key)\": " + (isList ? "[\(placeholder)]" : placeholder))
         }
-        lines.append("Return exactly this shape, one value per key: {\(shape.joined(separator: ", "))}")
+        lines.append(
+            (hasList ? "Return exactly this shape, one value per key, a list where the shape shows one: " : "Return exactly this shape, one value per key: ")
+                + "{\(shape.joined(separator: ", "))}"
+        )
         return lines.joined(separator: "\n")
     }
 
@@ -155,29 +179,40 @@ public struct AICoinedKeyword: Hashable, Sendable {
     }
 }
 
-/// One parsed answer: which answer was chosen (or which words came back).
+/// One parsed answer: which answer rows were chosen (or which words came
+/// back). A choice question chooses one row, a multiple question (U55) any
+/// number, an open question none (its words are `coined`).
 public struct AIParsedAnswer: Hashable, Sendable {
-    /// The chosen literal, or the model's words for an open question.
+    /// The chosen literal(s) — joined with ", " for a multiple question —
+    /// or the model's words for an open question.
     public var value: String
-    /// The answer row chosen (nil for an open answer in the model's words).
-    public var answerId: Int64?
-    /// The keyword the chosen answer maps to.
-    public var keywordId: Int64?
-    public var stopsProfile: Bool
+    /// The answer rows chosen, in the question's order.
+    public var chosen: [AIAnswerRecord]
     /// Open answer: the keyword these words become.
     public var coined: AICoinedKeyword?
 
-    public init(value: String, answerId: Int64? = nil, keywordId: Int64? = nil, stopsProfile: Bool = false, coined: AICoinedKeyword? = nil) {
+    public init(value: String, chosen: [AIAnswerRecord] = [], coined: AICoinedKeyword? = nil) {
         self.value = value
-        self.answerId = answerId
-        self.keywordId = keywordId
-        self.stopsProfile = stopsProfile
+        self.chosen = chosen
         self.coined = coined
     }
 
     init(_ answer: AIAnswerRecord) {
-        self.init(value: answer.value, answerId: answer.id, keywordId: answer.keywordId, stopsProfile: answer.stopsProfile)
+        self.init(value: answer.value, chosen: [answer])
     }
+
+    init(chosen: [AIAnswerRecord]) {
+        self.init(value: chosen.map(\.value).joined(separator: ", "), chosen: chosen)
+    }
+
+    /// The single answer row chosen (nil for an open answer or a multiple
+    /// question — those carry `chosen`).
+    public var answerId: Int64? { chosen.count == 1 ? chosen[0].id : nil }
+    /// The keyword of the single chosen answer (see `answerId`).
+    public var keywordId: Int64? { chosen.count == 1 ? chosen[0].keywordId : nil }
+    /// Every keyword the chosen answers assign.
+    public var keywordIds: [Int64] { chosen.compactMap(\.keywordId) }
+    public var stopsProfile: Bool { chosen.contains { $0.stopsProfile } }
 }
 
 /// Parses the model's reply. Lenient on purpose — small models wrap JSON in
@@ -196,28 +231,31 @@ public enum VLMAnswerParser {
             return [:]
         }
         var result: [Int64: AIParsedAnswer] = [:]
-        // Answer id chosen per question id — the gates of follow-ups.
-        var chosen: [Int64: Int64] = [:]
+        // Answer ids chosen per question id — the gates of follow-ups.
+        var chosen: [Int64: Set<Int64>] = [:]
         for (index, entry) in flat.enumerated() {
             let question = entry.question
             guard let questionId = question.id else { continue }
             if let gate = entry.parentAnswer {
                 // The parent question's id is on the gate's record.
-                guard let gateId = gate.id, chosen[gate.questionId] == gateId else { continue }
+                guard let gateId = gate.id, chosen[gate.questionId]?.contains(gateId) == true else { continue }
             }
             let key = VLMPrompt.key(forQuestionAt: index)
             guard let raw = object[key] else { continue }
-            let text: String
-            switch raw {
-            case let string as String: text = string
-            case let number as NSNumber: text = number.stringValue
-            default: continue
-            }
-            if isNotApplicable(text) { continue }
             let records = question.answers.map(\.record)
+            if question.kind == .multiple {
+                let picked = matchList(raw, in: records)
+                guard !picked.isEmpty else { continue }
+                result[questionId] = AIParsedAnswer(chosen: picked)
+                chosen[questionId] = Set(picked.compactMap(\.id))
+                if picked.contains(where: \.stopsProfile) { break }
+                continue
+            }
+            guard let text = scalar(raw) else { continue }
+            if isNotApplicable(text) { continue }
             if let answer = match(text, in: records) {
                 result[questionId] = AIParsedAnswer(answer)
-                if let answerId = answer.id { chosen[questionId] = answerId }
+                if let answerId = answer.id { chosen[questionId] = [answerId] }
                 if answer.stopsProfile { break }
             } else if question.kind == .open, let name = keywordName(from: text) {
                 result[questionId] = AIParsedAnswer(
@@ -232,7 +270,7 @@ public enum VLMAnswerParser {
     /// Keyword ids the parsed answers assign (answers without a keyword
     /// contribute nothing; coined keywords are resolved by the caller).
     public static func keywordIds(in parsed: [Int64: AIParsedAnswer]) -> Set<Int64> {
-        Set(parsed.values.compactMap(\.keywordId))
+        Set(parsed.values.flatMap(\.keywordIds))
     }
 
     /// The keywords the open answers would create or reuse.
@@ -279,6 +317,46 @@ public enum VLMAnswerParser {
         "0": "none", "1": "one", "2": "two", "3": "three", "4": "four", "5": "five",
         "6": "six", "7": "seven", "8": "eight", "9": "nine", "10": "ten",
     ]
+
+    /// A JSON value as answer text: a string, a number ("1"), or a
+    /// one-element list (a choice question answered `["one"]`).
+    static func scalar(_ raw: Any) -> String? {
+        switch raw {
+        case let string as String: return string
+        case let number as NSNumber: return number.stringValue
+        case let list as [Any]: return list.count == 1 ? scalar(list[0]) : nil
+        default: return nil
+        }
+    }
+
+    /// U55: the answer rows a multiple question's value names — a JSON list
+    /// (`["sky", "trees"]`), or one string split at commas, semicolons or
+    /// `|` ("sky, trees"). A literal copy of the shape placeholder (every
+    /// value joined with `|`) is no answer, `n/a` never one. The exits — the
+    /// keyword-less "none" and any answer that ends the questionnaire — are
+    /// dropped when a real answer sits beside them: "none" and "sky" is
+    /// "sky". Duplicates collapse; the order is the question's.
+    static func matchList(_ raw: Any, in answers: [AIAnswerRecord]) -> [AIAnswerRecord] {
+        var items: [String]
+        switch raw {
+        case let list as [Any]:
+            items = list.compactMap(scalar)
+        case let string as String:
+            if normalize(string) == answers.map(\.value).joined(separator: "|").lowercased() { return [] }
+            items = string.split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "|" || $0.isNewline }).map(String.init)
+        case let number as NSNumber:
+            items = [number.stringValue]
+        default:
+            return []
+        }
+        items = items.filter { !isNotApplicable($0) }
+        var picked = Set(items.compactMap { match($0, in: answers).flatMap(\.id) })
+        let exits = answers.filter { $0.stopsProfile || ($0.value == AIAnswerRecord.noneValue && $0.keywordId == nil) }
+        if picked.contains(where: { id in !exits.contains { $0.id == id } }) {
+            for exit in exits { if let id = exit.id { picked.remove(id) } }
+        }
+        return answers.filter { $0.id.map(picked.contains) ?? false }
+    }
 
     static func match(_ text: String, in answers: [AIAnswerRecord]) -> AIAnswerRecord? {
         var needle = normalize(text)

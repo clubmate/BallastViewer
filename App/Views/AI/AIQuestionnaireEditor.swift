@@ -148,7 +148,7 @@ struct AIQuestionnaireEditor: View {
             HStack {
                 Text("Questions").font(.headline)
                 Spacer()
-                Text("Ask in English. Choices: the model picks one answer, each answer can assign a keyword. Open answer: the model's own words become a keyword. ⤵ adds a follow-up question that is asked only after that answer.")
+                Text("Ask in English. Choices: the model picks one answer, each answer can assign a keyword. Multiple choices: it picks every answer that applies. Open answer: the model's own words become a keyword. ⤵ adds a follow-up question that is asked only after that answer.")
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: 460, alignment: .trailing)
                     .multilineTextAlignment(.trailing)
@@ -182,7 +182,8 @@ struct AIQuestionnaireEditor: View {
             let questions = draft.allQuestions.count
             let mapped = draft.allQuestions.flatMap(\.answers).filter { $0.keywordId != nil }.count
             let open = draft.allQuestions.filter { $0.kind == .open }.count
-            Text("\(questions) question\(questions == 1 ? "" : "s") · \(mapped) answer\(mapped == 1 ? "" : "s") mapped" + (open > 0 ? " · \(open) open" : ""))
+            let multiple = draft.allQuestions.filter { $0.kind == .multiple }.count
+            Text("\(questions) question\(questions == 1 ? "" : "s") · \(mapped) answer\(mapped == 1 ? "" : "s") mapped" + (multiple > 0 ? " · \(multiple) multiple" : "") + (open > 0 ? " · \(open) open" : ""))
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
@@ -197,7 +198,7 @@ struct AIQuestionnaireEditor: View {
         for question in draft.allQuestions {
             if question.text.trimmingCharacters(in: .whitespaces).isEmpty { return "every question needs text." }
             if question.text.contains("\"") { return "questions cannot contain double quotes." }
-            guard question.kind == .choice else { continue }
+            guard question.kind.hasAnswerRows else { continue }
             let values = question.answers.map { $0.value.trimmingCharacters(in: .whitespaces).lowercased() }
             if values.count + (question.allowsNone ? 1 : 0) < 2 { return "every question needs at least two answers (“none” counts)." }
             if values.contains("") { return "every answer needs a value." }
@@ -240,7 +241,7 @@ struct AIQuestionnaireEditor: View {
         func live(_ id: Int64?) -> Int64? { id.flatMap { tree?.node($0) != nil ? $0 : nil } }
         func question(_ q: Draft.Question) -> AIQuestion {
             var answers: [AIAnswer] = []
-            if q.kind == .choice {
+            if q.kind.hasAnswerRows {
                 answers = q.answers.map { answer in
                     AIAnswer(
                         value: answer.value.trimmingCharacters(in: .whitespaces).lowercased(),
@@ -285,7 +286,7 @@ private struct QuestionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             titleRow
-            if question.kind == .choice {
+            if question.kind.hasAnswerRows {
                 answerRows
             } else {
                 openRows
@@ -318,16 +319,17 @@ private struct QuestionCard: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(depth == 0 ? Color.secondary : Self.branchColor(depth - 1), in: Capsule())
-                TextField("", text: $question.text, prompt: Text(question.kind == .open ? "Question, e.g. What colour is the dress?" : "Question, e.g. How many people are the subject of the photo?"))
+                TextField("", text: $question.text, prompt: Text(questionPlaceholder))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                 Picker("", selection: $question.kind) {
                     Text("Choices").tag(AIQuestionKind.choice)
+                    Text("Multiple choices").tag(AIQuestionKind.multiple)
                     Text("Open answer").tag(AIQuestionKind.open)
                 }
                 .labelsHidden()
                 .fixedSize()
-                .help("Choices: the model picks one of the answers below. Open answer: the model answers in its own words, which become a keyword.")
+                .help("Choices: the model picks one of the answers below. Multiple choices: it picks every answer that applies, each assigns its keyword. Open answer: the model answers in its own words, which become a keyword.")
                 Button(action: onRemove) {
                     Image(systemName: "trash")
                 }
@@ -337,10 +339,26 @@ private struct QuestionCard: View {
         }
     }
 
+    private var questionPlaceholder: String {
+        switch question.kind {
+        case .choice: "Question, e.g. How many people are the subject of the photo?"
+        case .multiple: "Question, e.g. Which of these are visible in the photo?"
+        case .open: "Question, e.g. What colour is the dress?"
+        }
+    }
+
     // MARK: Choices
 
     private var answerRows: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if question.kind == .multiple {
+                HStack(spacing: 8) {
+                    Image(systemName: "checklist").foregroundStyle(.tertiary)
+                    Text("The model picks every answer that applies; each chosen answer assigns its keyword. Keep the list short and the answers clearly visible things — small models tend to over-tick.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.leading, 4)
+            }
             ForEach($question.answers) { $answer in
                 AnswerRow(
                     answer: $answer, questionLabel: label, depth: depth,
@@ -370,7 +388,9 @@ private struct QuestionCard: View {
             Toggle(isOn: $question.allowsNone) {
                 HStack(spacing: 4) {
                     Text("Allow “none”").font(.callout)
-                    Text("— the model may answer that nothing applies; assigns no keyword")
+                    Text(question.kind == .multiple
+                         ? "— the model may answer that nothing applies (counts only when chosen alone); assigns no keyword"
+                         : "— the model may answer that nothing applies; assigns no keyword")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

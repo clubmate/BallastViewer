@@ -429,20 +429,23 @@ final class AutoTagRunner {
                             reply = fresh
                         }
                         let parsed = VLMAnswerParser.parse(reply ?? "", profile: profile)
-                        let answers = profile.allQuestions.compactMap { question -> PreviewAnswer? in
-                            guard let id = question.id, let answer = parsed[id] else { return nil }
+                        let answers = profile.allQuestions.flatMap { question -> [PreviewAnswer] in
+                            guard let id = question.id, let answer = parsed[id] else { return [] }
                             if let coined = answer.coined {
                                 // The keyword the words would become — existing, or new.
                                 let parentPath = coined.parentKeywordId.flatMap { tree.node($0) != nil ? tree.path(of: $0) : nil }
                                 let path = parentPath.map { $0 + " > " + coined.name } ?? coined.name
                                 let exists = tree.find(pathComponents: path.components(separatedBy: " > ")) != nil
-                                return PreviewAnswer(question: question.text, value: answer.value, keywordPath: path, isNew: !exists)
+                                return [PreviewAnswer(question: question.text, value: answer.value, keywordPath: path, isNew: !exists)]
                             }
-                            return PreviewAnswer(
-                                question: question.text,
-                                value: answer.value,
-                                keywordPath: answer.keywordId.flatMap { tree.node($0) != nil ? tree.path(of: $0) : nil }
-                            )
+                            // U55: a multiple question lists one row per chosen answer.
+                            return answer.chosen.map { chosen in
+                                PreviewAnswer(
+                                    question: question.text,
+                                    value: chosen.value,
+                                    keywordPath: chosen.keywordId.flatMap { tree.node($0) != nil ? tree.path(of: $0) : nil }
+                                )
+                            }
                         }
                         replies.append(PreviewReply(
                             profileName: profile.name,
