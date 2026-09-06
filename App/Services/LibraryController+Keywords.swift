@@ -294,19 +294,42 @@ extension LibraryController {
     func moveKeywordToTopLevel(_ id: Int64, groupId: Int64?) {
         guard let snapshot, snapshot.keywordTree.node(id) != nil else { return }
         if let groupId, !snapshot.keywordGroups.contains(where: { $0.id == groupId }) { return }
-        // Every carrier of the subtree gets a new derived path ("JAHRE >
-        // 2008" → "2008") — captured BEFORE the move while the ids exist.
+        rehomeKeyword(id) { db in try KeywordDAO.moveToTopLevel(id, groupId: groupId, in: db) }
+    }
+
+    /// U56: re-hangs a keyword (subtree included) UNDER `parentId` — "Move
+    /// Under Keyword…". A same-named child of the target absorbs it (U35
+    /// semantics); the moved node inherits the target's group (C2). Refused
+    /// for itself, its descendants and its current parent.
+    func moveKeyword(_ id: Int64, under parentId: Int64) {
+        guard let snapshot, let node = snapshot.keywordTree.node(id),
+              snapshot.keywordTree.node(parentId) != nil,
+              parentId != id, node.parentId != parentId,
+              !snapshot.keywordTree.descendants(of: id).contains(parentId) else { return }
+        rehomeKeyword(id) { db in try KeywordDAO.moveUnder(id, parentId: parentId, in: db) }
+    }
+
+    /// Shared tail of the structural moves: every carrier of the subtree gets
+    /// a new derived path ("JAHRE > 2008" → "2008"), captured BEFORE the move
+    /// while the ids exist; `move` returns the surviving id (a same-named
+    /// twin's after an absorb) so key/MIDI bindings on the old path can
+    /// re-point at it.
+    private func rehomeKeyword(_ id: Int64, move: (Database) throws -> Int64) {
+        guard let snapshot else { return }
+        let oldPath = snapshot.keywordTree.path(of: id)
         let carriers = photoIdsCarrying(keywordIds: subtreeIds(of: id))
         struct MoveResult {
+            var survivorId: Int64
             var records: [KeywordRecord]
             var keywordIdsByPhoto: [Int64: Set<Int64>]
             var pendingKeywordIdsByPhoto: [Int64: Set<Int64>]
             var aiProfiles: [AIProfile]
         }
         let result: MoveResult? = writeSync { db in
-            try KeywordDAO.moveToTopLevel(id, groupId: groupId, in: db)
-            try KeywordDAO.clearAICreated(id, in: db)  // the user sorted it: theirs now
+            let survivorId = try move(db)
+            try KeywordDAO.clearAICreated(survivorId, in: db)  // the user sorted it: theirs now
             return MoveResult(
+                survivorId: survivorId,
                 records: try KeywordDAO.fetchAll(db),
                 keywordIdsByPhoto: try PhotoDAO.fetchKeywordIdsByPhoto(db),
                 pendingKeywordIdsByPhoto: try PhotoDAO.fetchPendingKeywordIdsByPhoto(db),
@@ -322,6 +345,9 @@ extension LibraryController {
         }
         refreshVocabulary()
         invalidateFacts(forPhotoIds: carriers)
+        if let newPath = self.snapshot?.keywordTree.path(of: result.survivorId), newPath != oldPath {
+            keywordPathRenamed?(oldPath, newPath)
+        }
         emitCatalogEvent(.photosUpdated(carriers))
         markNeedsFileWrite(carriers)
     }

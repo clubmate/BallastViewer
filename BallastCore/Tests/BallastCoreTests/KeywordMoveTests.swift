@@ -148,6 +148,72 @@ import Testing
     }
 }
 
+/// U56: re-hanging a keyword under another keyword ("Move Under Keyword…").
+@Suite struct KeywordMoveUnderTests {
+    @Test func movesKeywordWithSubtreeUnderTargetAndDropsOwnGroup() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let group = try KeywordDAO.createGroup(name: "PLACES", color: "#FFAA00", in: db)
+            let rome = try KeywordDAO.ensurePath(["ROME", "COLOSSEUM"], groupId: group.id, in: db)
+            let romeRoot = try #require(try KeywordRecord.fetchOne(db, key: rome)?.parentId)
+            let italy = try KeywordDAO.ensurePath(["TRAVEL", "ITALY"], groupId: nil, in: db)
+
+            let survivor = try KeywordDAO.moveUnder(romeRoot, parentId: italy, in: db)
+
+            #expect(survivor == romeRoot)
+            let moved = try #require(try KeywordRecord.fetchOne(db, key: romeRoot))
+            #expect(moved.parentId == italy)
+            #expect(moved.groupId == nil)  // nested keywords inherit the group (C2)
+            #expect(try KeywordRecord.fetchOne(db, key: rome)?.parentId == romeRoot)
+            let tree = KeywordTree(records: try KeywordDAO.fetchAll(db))
+            #expect(tree.path(of: rome) == "TRAVEL > ITALY > ROME > COLOSSEUM")
+        }
+    }
+
+    @Test func sameNamedChildOfTargetAbsorbsTheMovedOne() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let folderId = try insertFolder(db)
+            let p1 = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/u1.jpg")
+            let p2 = try insertPhoto(db, folderId: folderId, path: "/tmp/photos/u2.jpg")
+            let existing = try KeywordDAO.ensurePath(["PEOPLE", "ANNA"], groupId: nil, in: db)
+            try PhotoDAO.assignKeyword(existing, toPhotoIds: [p1], in: db)
+            let loose = try KeywordDAO.ensurePath(["ANNA"], groupId: nil, in: db)
+            try PhotoDAO.assignKeyword(loose, toPhotoIds: [p2], in: db)
+            let people = try #require(try KeywordRecord.fetchOne(db, key: existing)?.parentId)
+
+            let survivor = try KeywordDAO.moveUnder(loose, parentId: people, in: db)
+
+            #expect(survivor == existing)
+            #expect(try KeywordRecord.fetchOne(db, key: loose) == nil)
+            let carriers = try Int64.fetchAll(
+                db, sql: "SELECT photoId FROM photoKeyword WHERE keywordId = ? ORDER BY photoId",
+                arguments: [survivor]
+            )
+            #expect(carriers == [p1, p2])
+        }
+    }
+
+    @Test func refusesItselfAndItsOwnDescendantsAndIgnoresNoOps() throws {
+        let dbQueue = try makeTestDatabase()
+        try dbQueue.write { db in
+            let c = try KeywordDAO.ensurePath(["A", "B", "C"], groupId: nil, in: db)
+            let b = try #require(try KeywordRecord.fetchOne(db, key: c)?.parentId)
+            let a = try #require(try KeywordRecord.fetchOne(db, key: b)?.parentId)
+            #expect(throws: KeywordDAOError.moveTargetInsideSource) {
+                try KeywordDAO.moveUnder(a, parentId: c, in: db)
+            }
+            #expect(throws: KeywordDAOError.moveTargetInsideSource) {
+                try KeywordDAO.moveUnder(a, parentId: a, in: db)
+            }
+            // Already there: nothing changes, no error.
+            #expect(try KeywordDAO.moveUnder(c, parentId: b, in: db) == c)
+            #expect(try KeywordRecord.fetchOne(db, key: c)?.parentId == b)
+            #expect(try KeywordRecord.filter(Column("name") == "A").fetchCount(db) == 1)
+        }
+    }
+}
+
 /// U40: the rename-collision merge — renaming "_STRASSE" next to an
 /// existing sibling "STRASSE" folds it into the sibling instead of failing.
 @Suite struct KeywordMergeTests {

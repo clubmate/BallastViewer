@@ -142,6 +142,40 @@ public enum KeywordDAO {
         return id
     }
 
+    /// U56: re-hangs a keyword (subtree included) UNDER another keyword —
+    /// "Move Under Keyword…" in the editor. A same-named child of the new
+    /// parent absorbs the moved one (U35 semantics: assignments union,
+    /// same-named children merge recursively, source deleted). The moved
+    /// node's own `groupId` is cleared: nested keywords inherit the group
+    /// of their top-level ancestor (C2). Moving under itself or one of its
+    /// descendants would form a cycle and is refused. Returns the surviving
+    /// id (the twin's after an absorb).
+    @discardableResult
+    public static func moveUnder(_ id: Int64, parentId: Int64, in db: Database) throws -> Int64 {
+        guard let node = try KeywordRecord.fetchOne(db, key: id),
+              try KeywordRecord.fetchOne(db, key: parentId) != nil else { return id }
+        guard parentId != id else { throw KeywordDAOError.moveTargetInsideSource }
+        var cursor = try KeywordRecord.fetchOne(db, key: parentId)?.parentId
+        while let current = cursor {
+            guard current != id else { throw KeywordDAOError.moveTargetInsideSource }
+            cursor = try KeywordRecord.fetchOne(db, key: current)?.parentId
+        }
+        guard node.parentId != parentId else { return id }
+        if let twin = try KeywordRecord
+            .filter(Column("parentId") == parentId && Column("name") == node.name && Column("id") != id)
+            .fetchOne(db), let twinId = twin.id
+        {
+            try merge(id, into: twinId, in: db)
+            return twinId
+        }
+        try KeywordRecord.filter(key: id).updateAll(
+            db,
+            Column("parentId").set(to: parentId),
+            Column("groupId").set(to: nil as Int64?)
+        )
+        return id
+    }
+
     /// Folds `sourceId` into `targetId`: assignments union (idempotent),
     /// same-named children merge recursively, the rest re-hang under the
     /// target; the source row is deleted (FK cascade drops its assignments).
@@ -313,4 +347,7 @@ public enum KeywordDAOError: Error, Equatable, Sendable {
     /// Merging a node into its own descendant would re-hang an ancestor
     /// under its child and turn the tree into a cycle.
     case mergeTargetInsideSource
+    /// Moving a keyword under itself or one of its descendants (U56) would
+    /// likewise turn the tree into a cycle.
+    case moveTargetInsideSource
 }

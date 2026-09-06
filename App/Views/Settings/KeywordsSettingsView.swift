@@ -40,6 +40,11 @@ struct KeywordsSettingsView: View {
     @State private var newKeywordText = ""
     @State private var pendingKeywordDeletion: Int64?
     @State private var pendingGroupDeletion: KeywordGroupRecord?
+    /// U56: the keyword whose "Move Under Keyword…" sheet is open.
+    private struct KeywordMoveDraft: Identifiable {
+        let id: Int64
+    }
+    @State private var keywordMove: KeywordMoveDraft?
 
     /// The vocabulary mirror, not `snapshot`: the editor must not re-render
     /// on every rating/rotation in the main window.
@@ -101,6 +106,17 @@ struct KeywordsSettingsView: View {
             groups: $collapsedGroups,
             keywords: $collapsedKeywords
         ))
+        .sheet(item: $keywordMove) { draft in
+            KeywordMoveSheet(sourceId: draft.id) { targetId in
+                controller.moveKeyword(draft.id, under: targetId)
+                // Reveal the destination: the target and its ancestors unfold.
+                var cursor: Int64? = targetId
+                while let id = cursor {
+                    collapsedKeywords.remove(id)
+                    cursor = tree.node(id)?.parentId
+                }
+            }
+        }
         .sheet(item: $editingGroup) { group in
             GroupEditSheet(group: group) { name, color in
                 if let id = group.id {
@@ -487,6 +503,8 @@ struct KeywordsSettingsView: View {
                     }
                 }
             }
+            // U56: re-hang under any other keyword (subtree included).
+            Button("Move Under Keyword…") { keywordMove = KeywordMoveDraft(id: id) }
             Button("Delete", role: .destructive) { pendingKeywordDeletion = id }
         }
     }
@@ -659,6 +677,104 @@ private struct CollapseStatePersistence: ViewModifier {
             UserDefaults.standard.set(
                 ["groups": groups.sorted(), "keywords": keywords.sorted()], forKey: key
             )
+        }
+    }
+}
+
+/// U56: "Move Under Keyword…" — picks the new parent with the searchable
+/// keyword field (a Lightroom-sized tree does not fit in a menu). Refuses
+/// the keyword itself, its descendants and its current parent; a same-named
+/// child of the target turns the button into "Merge" and says so, since an
+/// absorb cannot be undone.
+private struct KeywordMoveSheet: View {
+    @Environment(LibraryController.self) private var controller
+    @Environment(\.dismiss) private var dismiss
+    let sourceId: Int64
+    let onMove: (Int64) -> Void
+
+    @State private var targetId: Int64?
+
+    private var tree: KeywordTree { controller.vocabulary.tree }
+
+    private enum Verdict {
+        case pick, move, merge(String), refused(String)
+    }
+
+    private var verdict: Verdict {
+        guard let targetId, let target = tree.node(targetId), let source = tree.node(sourceId) else {
+            return .pick
+        }
+        if targetId == sourceId || tree.descendants(of: sourceId).contains(targetId) {
+            return .refused("A keyword cannot be moved under itself or one of its sub-keywords.")
+        }
+        if source.parentId == targetId {
+            return .refused("“\(source.name)” is already under “\(target.name)”.")
+        }
+        if let twin = tree.children(of: targetId).first(where: { tree.node($0)?.name == source.name }) {
+            let impact = controller.keywordDeletionImpact(sourceId)
+            var message = "“\(tree.path(of: twin))” already exists. “\(tree.path(of: sourceId))”"
+            if impact.keywordCount > 1 {
+                let subCount = impact.keywordCount - 1
+                message += " and its \(subCount) sub-keyword\(subCount == 1 ? "" : "s")"
+            }
+            message += " will be merged into it"
+            message += " — \(impact.photoCount) photo\(impact.photoCount == 1 ? "" : "s") affected."
+            message += "\nThis cannot be undone."
+            return .merge(message)
+        }
+        return .move
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Move Keyword").font(.headline)
+            Text("Move “\(tree.path(of: sourceId))” and its sub-keywords under:")
+            KeywordPathField(keywordId: $targetId)
+            Group {
+                switch verdict {
+                case .pick:
+                    Text("Type to search the keyword tree.").foregroundStyle(.secondary)
+                case .move:
+                    if let targetId {
+                        Text("New path: \(tree.path(of: targetId)) > \(tree.node(sourceId)?.name ?? "")")
+                            .foregroundStyle(.secondary)
+                    }
+                case .merge(let message):
+                    Text(message).foregroundStyle(.orange)
+                case .refused(let message):
+                    Text(message).foregroundStyle(.red)
+                }
+            }
+            .font(.callout)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(buttonTitle) {
+                    if let targetId { onMove(targetId) }
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canCommit)
+            }
+        }
+        .padding(20)
+        // Room for the dropdown to open below the field.
+        .frame(width: 460, height: 420, alignment: .top)
+        .keywordDropdownHost()
+    }
+
+    private var buttonTitle: String {
+        if case .merge = verdict { return "Merge" }
+        return "Move"
+    }
+
+    private var canCommit: Bool {
+        switch verdict {
+        case .move, .merge: return true
+        case .pick, .refused: return false
         }
     }
 }
