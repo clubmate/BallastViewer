@@ -11,21 +11,26 @@ import SwiftUI
 /// Edits a local draft with stable row identities and AUTOSAVES it (400 ms
 /// after the last change, and when the view goes away) whenever the draft
 /// is complete; an incomplete draft shows why it is not saved yet. The DAO
-/// replaces the whole profile per save, which is cheap.
+/// replaces the whole profile per save, which is cheap. A draft that is
+/// still incomplete when the view goes away is parked in `unsaved` (owned
+/// by the window, keyed by profile id) and picked up again when the same
+/// questionnaire is opened next — nothing typed is lost by switching.
 struct AIQuestionnaireEditor: View {
     @Environment(LibraryController.self) private var controller
 
     let profile: AIProfile
+    @Binding var unsaved: [Int64: Draft]
 
     @State private var draft: Draft
     @State private var lastSaved: Draft
     @State private var saveTask: Task<Void, Never>?
 
-    init(profile: AIProfile) {
+    init(profile: AIProfile, unsaved: Binding<[Int64: Draft]>) {
         self.profile = profile
-        let draft = Draft(profile)
-        _draft = State(initialValue: draft)
-        _lastSaved = State(initialValue: draft)
+        _unsaved = unsaved
+        let stored = Draft(profile)
+        _draft = State(initialValue: profile.id.flatMap { unsaved.wrappedValue[$0] } ?? stored)
+        _lastSaved = State(initialValue: stored)
     }
 
     // MARK: Draft
@@ -125,7 +130,13 @@ struct AIQuestionnaireEditor: View {
             footer
         }
         .onChange(of: draft) { _, _ in scheduleSave() }
-        .onDisappear { flushSave() }
+        // A restored draft that became saveable meanwhile (the keyword it
+        // needed exists now, the library is no longer busy) saves itself.
+        .onAppear { if draft != lastSaved { scheduleSave() } }
+        .onDisappear {
+            flushSave()
+            if let id = profile.id { unsaved[id] = draft == lastSaved ? nil : draft }
+        }
     }
 
     private var header: some View {
@@ -227,10 +238,17 @@ struct AIQuestionnaireEditor: View {
     }
 
     private func save() {
-        guard problem == nil, draft != lastSaved else { return }
+        guard draft != lastSaved else { return }
+        guard problem == nil else {
+            // Incomplete: park it so the sidebar shows the draft's name and
+            // the unsaved marker while the user is still typing.
+            if let id = profile.id { unsaved[id] = draft }
+            return
+        }
         let snapshot = draft
         if controller.saveAIProfile(assembled(snapshot)) != nil {
             lastSaved = snapshot
+            if let id = profile.id { unsaved[id] = nil }
         }
     }
 

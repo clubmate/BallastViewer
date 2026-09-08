@@ -23,9 +23,30 @@ struct AIWindow: View {
     @Environment(\.openSettings) private var openSettings
     @State private var selection: Selection?
     @State private var pendingDeletion: AIProfile?
+    /// Drafts the editor could not save (incomplete questionnaire) when the
+    /// user switched away, keyed by profile id: switching back restores
+    /// them instead of silently reverting to the saved state — a renamed
+    /// questionnaire that snapped back to its old name read as "the wrong
+    /// questionnaire loaded" (user report 2026-09-08).
+    @State private var unsavedDrafts: [Int64: AIQuestionnaireEditor.Draft] = [:]
 
     /// The mirror, not `snapshot`: the window must not re-render per rating.
-    private var profiles: [AIProfile] { controller.aiProfiles }
+    /// Alphabetical by the displayed name (user request 2026-09-08), ids as
+    /// the tie-breaker so equal names keep a stable order.
+    private var profiles: [AIProfile] {
+        controller.aiProfiles.sorted { a, b in
+            let order = displayName(a).localizedStandardCompare(displayName(b))
+            return order == .orderedSame ? (a.id ?? 0) < (b.id ?? 0) : order == .orderedAscending
+        }
+    }
+
+    /// The unsaved draft's name wins over the stored one, so the list and
+    /// the editor never disagree about what a questionnaire is called.
+    private func displayName(_ profile: AIProfile) -> String {
+        let name = profile.id.flatMap { unsavedDrafts[$0]?.name } ?? profile.name
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "Untitled" : trimmed
+    }
 
     private var selectedProfile: AIProfile? {
         guard case .profile(let id) = selection else { return nil }
@@ -50,6 +71,12 @@ struct AIWindow: View {
         .onChange(of: profiles.map(\.id)) { _, ids in
             // The selected questionnaire was deleted (or the library switched).
             if case .profile(let id) = selection, !ids.contains(id) { selection = nil }
+            unsavedDrafts = unsavedDrafts.filter { ids.contains($0.key) }
+        }
+        .onChange(of: controller.libraryURL) { _, _ in
+            // Ids repeat across libraries; a draft must never cross over.
+            unsavedDrafts = [:]
+            selection = nil
         }
         .onAppear {
             if selection == nil, let first = profiles.first?.id { selection = .profile(first) }
@@ -132,9 +159,14 @@ struct AIWindow: View {
             .controlSize(.mini)
             .disabled(runner.isRunning)
             .help(profile.enabled ? "Asked on every run" : "Switched off — not asked")
-            Text(profile.name.isEmpty ? "Untitled" : profile.name)
+            Text(displayName(profile))
                 .lineLimit(1)
                 .foregroundStyle(profile.enabled ? .primary : .secondary)
+            if let id = profile.id, unsavedDrafts[id] != nil {
+                Image(systemName: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.orange)
+                    .help("Has unsaved changes — open it to see what is still missing")
+            }
             Spacer(minLength: 4)
             Text("\(profile.allQuestions.count)")
                 .font(.caption2).monospacedDigit()
@@ -160,7 +192,7 @@ struct AIWindow: View {
         if !controller.isLibraryOpen {
             ContentUnavailableView("No Library Open", systemImage: "books.vertical", description: Text("Questionnaires live in the library. Open one from the Library menu."))
         } else if let profile = selectedProfile {
-            AIQuestionnaireEditor(profile: profile)
+            AIQuestionnaireEditor(profile: profile, unsaved: $unsavedDrafts)
                 .id(profile.id)
                 .disabled(runner.isRunning)
         } else if selection == .systemPrompt {
