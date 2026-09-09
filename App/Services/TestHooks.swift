@@ -754,9 +754,33 @@ enum TestHooks {
             return
         }
         print("BVVLM profile=\(saved.id ?? -1) questions=\(saved.allQuestions.count) mapped=\(saved.keywordIds.count) open=\(saved.hasOpenQuestions)")
-        if env["BV_TEST_VLM_PROMPT"] != nil {
-            print("BVVLM prompt:\n" + VLMPrompt.userPrompt(for: saved, vocabulary: AutoTagRunner.vocabulary(for: [saved], tree: controller.snapshot!.keywordTree)))
+        // U57: a second questionnaire proves the combined prompt and the
+        // per-questionnaire cut of the reply.
+        var profiles = [saved]
+        if env["BV_TEST_VLM_SPLIT"] != nil {
+            if let stale = controller.snapshot?.aiProfiles.first(where: { $0.name == "VLM TEST 2" })?.id {
+                controller.deleteAIProfile(stale)
+            }
+            let parent = controller.snapshot?.keywordTree.find(pathComponents: ["VLM TEST"])
+            let answers = ["indoors", "outdoors"].map { value -> AIAnswer in
+                let name = "PLACE \(value.uppercased())"
+                let id = controller.snapshot?.keywordTree.find(pathComponents: ["VLM TEST", name])
+                    ?? controller.createKeyword(baseName: name, parentId: parent, groupId: nil)
+                return AIAnswer(value: value, keywordId: id)
+            }
+            let second = AIProfile(
+                record: AIProfileRecord(name: "VLM TEST 2", instructions: "Judge the surroundings, not the people."),
+                questions: [AIQuestion(text: "Is the photo taken indoors or outdoors?", answers: answers + [AIAnswer(value: AIAnswerRecord.noneValue)])]
+            )
+            if let savedSecond = controller.saveAIProfile(second) { profiles.append(savedSecond) }
         }
+        if env["BV_TEST_VLM_PROMPT"] != nil {
+            let questions = VLMPrompt.questions(for: profiles, vocabulary: AutoTagRunner.vocabulary(for: profiles, tree: controller.snapshot!.keywordTree))
+            print("BVVLM prompt:\n" + VLMPrompt.instructions(systemPrompt: AISettingsView.currentSystemPrompt, questions: questions) + "\n---\n" + VLMPrompt.photoTurn)
+        }
+        // U57: BV_TEST_VLM_NOPREFIX=1 sends the full prompt per photo (the
+        // pre-U57 cost) for a timing comparison.
+        await models.service.setPrefixCaching(env["BV_TEST_VLM_NOPREFIX"] == nil)
         let photos = Array(snapshot.photos.prefix(count))
         let started = Date()
         runner.run(controller: controller, models: models, photos: photos, scopeName: "VLM TEST")
@@ -768,6 +792,10 @@ enum TestHooks {
             return
         }
         print("BVVLM summary=\(runner.summary ?? "-") seconds=\(Int(Date().timeIntervalSince(started)))")
+        if let info = await models.service.lastInfo {
+            print("BVVLM last-photo prompt-tokens=\(info.promptTokens) prefix-tokens=\(info.prefixTokens) prompt-seconds=\(String(format: "%.2f", info.promptSeconds)) generated=\(info.generatedTokens) generate-seconds=\(String(format: "%.2f", info.generateSeconds))")
+        }
+        await models.service.setPrefixCaching(true)
         guard let tree = controller.snapshot?.keywordTree else { return }
         for photo in photos {
             guard let id = photo.id else { continue }

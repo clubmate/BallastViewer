@@ -231,21 +231,27 @@ public struct AIProfile: Hashable, Sendable {
         public var parentAnswer: AIAnswerRecord?
         /// Prompt key of the question the parent answer belongs to.
         public var parentKey: String?
+        /// Index (in this list) of the question the parent answer belongs to
+        /// — U57: a combined prompt shifts the keys and re-derives the gate.
+        public var parentIndex: Int?
     }
 
     /// The questions as the model sees them — keys "q1", "q2", … in this order.
     public var flattened: [FlatQuestion] {
         var result: [FlatQuestion] = []
-        func walk(_ question: AIQuestion, parent: AIAnswerRecord?, parentKey: String?) {
-            let key = VLMPrompt.key(forQuestionAt: result.count)
-            result.append(FlatQuestion(question: question, parentAnswer: parent, parentKey: parentKey))
+        func walk(_ question: AIQuestion, parent: AIAnswerRecord?, parentIndex: Int?) {
+            let index = result.count
+            result.append(FlatQuestion(
+                question: question, parentAnswer: parent,
+                parentKey: parentIndex.map(VLMPrompt.key(forQuestionAt:)), parentIndex: parentIndex
+            ))
             for answer in question.answers {
                 for followUp in answer.followUps {
-                    walk(followUp, parent: answer.record, parentKey: key)
+                    walk(followUp, parent: answer.record, parentIndex: index)
                 }
             }
         }
-        for question in questions { walk(question, parent: nil, parentKey: nil) }
+        for question in questions { walk(question, parent: nil, parentIndex: nil) }
         return result
     }
 

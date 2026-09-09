@@ -81,13 +81,24 @@ public enum VLMPrompt {
     /// to open questions as the preferred wording (NOT part of the cache
     /// key: it only nudges spelling, an older reply stays a valid answer).
     public static func userPrompt(for profile: AIProfile, vocabulary: [Int64: [String]] = [:]) -> String {
+        questions(for: [profile], vocabulary: vocabulary)
+    }
+
+    /// U57: the questions of SEVERAL questionnaires as one text — the
+    /// instructions of each, then every question numbered straight through
+    /// (`q1`…`qN` across questionnaires), then one return shape. For a
+    /// single questionnaire this is exactly `userPrompt(for:)`. The reply
+    /// is cut back into per-questionnaire replies by
+    /// `VLMAnswerParser.split(_:counts:)`, so the reply cache stays keyed
+    /// per questionnaire.
+    public static func questions(for profiles: [AIProfile], vocabulary: [Int64: [String]] = [:]) -> String {
         var lines: [String] = []
-        let instructions = profile.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !instructions.isEmpty {
-            lines.append(instructions)
-            lines.append("")
+        for profile in profiles {
+            let instructions = profile.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !instructions.isEmpty { lines.append(instructions) }
         }
-        let flat = profile.flattened
+        if !lines.isEmpty { lines.append("") }
+        let flat = profiles.flatMap(\.flattened)
         // The list wording appears only when a question takes a list, so
         // a questionnaire without one renders (and caches) as before.
         let hasList = flat.contains { $0.question.kind == .multiple }
@@ -97,12 +108,28 @@ public enum VLMPrompt {
                 : "Questions (answer each with exactly one of its allowed values):"
         )
         var shape: [String] = []
+        // Gates name the parent's key: the parent sits in the same
+        // questionnaire, so its key shifts by the same offset.
+        var offset = 0
+        var keyOffsets: [Int] = []
+        for profile in profiles {
+            keyOffsets.append(offset)
+            offset += profile.flattened.count
+        }
+        var profileIndex = 0
+        var indexWithinProfile = 0
         for (index, entry) in flat.enumerated() {
+            while indexWithinProfile >= profiles[profileIndex].flattened.count {
+                profileIndex += 1
+                indexWithinProfile = 0
+            }
+            indexWithinProfile += 1
             let key = key(forQuestionAt: index)
             let question = entry.question
             var text = ""
             var gate: String?
-            if let parent = entry.parentAnswer, let parentKey = entry.parentKey {
+            if let parent = entry.parentAnswer, let parentIndex = entry.parentIndex {
+                let parentKey = self.key(forQuestionAt: parentIndex + keyOffsets[profileIndex])
                 gate = "\(parentKey) is \"\(parent.value)\""
                 text += "Only if \(gate!): "
             }
@@ -148,6 +175,22 @@ public enum VLMPrompt {
                 + "{\(shape.joined(separator: ", "))}"
         )
         return lines.joined(separator: "\n")
+    }
+
+    /// U57: the user turn beside the photo when the questions travel in the
+    /// system turn (so their KV cache can be reused across photos).
+    public static let photoTurn = "Answer the questions for this photo."
+
+    /// U57: the system turn of a prefix-cached run — the system prompt and
+    /// the questions of every questionnaire being asked.
+    public static func instructions(systemPrompt: String, questions: String) -> String {
+        systemPrompt + "\n\n" + questions
+    }
+
+    /// Answer token budget for `questionCount` questions: a few tokens per
+    /// key and value, with room for lists and long open answers.
+    public static func answerBudget(questionCount: Int) -> Int {
+        max(256, 40 * questionCount)
     }
 
     /// Fingerprint of everything that changes what the model is ASKED — the
@@ -265,6 +308,31 @@ public enum VLMAnswerParser {
             }
         }
         return result
+    }
+
+    /// U57: cuts the reply to a combined prompt (`VLMPrompt.questions(for:)`)
+    /// into one reply per questionnaire, re-keyed `q1`…`qn` so it parses and
+    /// caches exactly like a reply to that questionnaire alone. `counts` is
+    /// the number of flattened questions per questionnaire, in prompt
+    /// order. Nil when the reply carries no JSON object at all (a thinking
+    /// trace that never closed, prose) — nothing to cache for anyone.
+    public static func split(_ reply: String, counts: [Int]) -> [String]? {
+        let total = counts.reduce(0, +)
+        guard let object = extractObject(from: reply, keys: (0..<total).map(VLMPrompt.key)) else { return nil }
+        var parts: [String] = []
+        var offset = 0
+        for count in counts {
+            var part: [String: Any] = [:]
+            for index in 0..<count {
+                if let value = object[VLMPrompt.key(forQuestionAt: offset + index)] {
+                    part[VLMPrompt.key(forQuestionAt: index)] = value
+                }
+            }
+            offset += count
+            let data = (try? JSONSerialization.data(withJSONObject: part, options: [.sortedKeys])) ?? Data("{}".utf8)
+            parts.append(String(decoding: data, as: UTF8.self))
+        }
+        return parts
     }
 
     /// Keyword ids the parsed answers assign (answers without a keyword

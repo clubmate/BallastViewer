@@ -124,6 +124,52 @@ final class AutoTagRunner {
         return result
     }
 
+    /// Run settings that shape the prompt (Settings ▸ AI plus the vocabulary
+    /// hint of open questions) — the same for every photo of a run.
+    struct RunSettings: Sendable {
+        var systemPrompt: String
+        var thinking: Bool
+        var fullResolution: Bool
+        /// Reply-cache model key (`repo@revision`).
+        var modelId: String
+        var vocabulary: [Int64: [String]]
+    }
+
+    /// U57: ONE model call for every questionnaire that still needs asking
+    /// about a photo — the questions travel together in the system turn
+    /// (whose KV cache `VLMService` reuses across photos), the reply is cut
+    /// into per-questionnaire replies and cached per questionnaire, so a
+    /// later run with other questionnaires switched on reuses what it can.
+    /// A reply that parses to nothing for a questionnaire is returned (the
+    /// preview shows it) but not cached — it is asked again next time.
+    nonisolated static func askModel(
+        service: VLMService, store: AIAnswerStore, image: CGImageBox, path: String, mtime: Int,
+        pending: [(profile: AIProfile, questionnaire: String)], settings: RunSettings
+    ) async throws -> [(profile: AIProfile, reply: String, prompt: String)] {
+        let questions = VLMPrompt.questions(for: pending.map(\.profile), vocabulary: settings.vocabulary)
+        let instructions = VLMPrompt.instructions(systemPrompt: settings.systemPrompt, questions: questions)
+        let counts = pending.map { $0.profile.flattened.count }
+        let fresh = try await service.answer(
+            image: image.image, instructions: instructions,
+            thinking: settings.thinking, fullResolution: settings.fullResolution,
+            maxTokens: VLMPrompt.answerBudget(questionCount: counts.reduce(0, +))
+        )
+        try Task.checkCancellation()
+        let parts = VLMAnswerParser.split(fresh, counts: counts)
+        let prompt = "SYSTEM\n" + instructions + "\n\nUSER\n" + VLMPrompt.photoTurn
+        var result: [(profile: AIProfile, reply: String, prompt: String)] = []
+        for (index, item) in pending.enumerated() {
+            // No JSON at all: hand the raw reply back so the preview shows
+            // what came back; it parses to nothing and is not cached.
+            let part = parts?[index] ?? fresh
+            if !VLMAnswerParser.parse(part, profile: item.profile).isEmpty {
+                try await store.store(part, forPath: path, mtime: mtime, modelId: settings.modelId, questionnaire: item.questionnaire)
+            }
+            result.append((item.profile, part, prompt))
+        }
+        return result
+    }
+
     /// The photos as records, in `ids` order (the grid knows ids, the run
     /// wants records).
     static func photos(withIds ids: [Int64], in snapshot: LibrarySnapshot) -> [PhotoRecord] {
@@ -197,9 +243,11 @@ final class AutoTagRunner {
         let settingsHash = VLMPrompt.settingsHash(
             systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution
         )
-        let questionnaires = profiles.map {
-            ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash, VLMPrompt.userPrompt(for: $0, vocabulary: vocabulary))
-        }
+        let questionnaires = profiles.map { ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash) }
+        let settings = RunSettings(
+            systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution,
+            modelId: modelId, vocabulary: vocabulary
+        )
 
         task = Task { [weak self, weak controller] in
             // A 30k-photo run takes days; the Mac must not doze off mid-way.
@@ -243,10 +291,11 @@ final class AutoTagRunner {
                     let decided = (confirmedByPhoto[photoId] ?? [])
                         .union(pendingByPhoto[photoId] ?? [])
                         .union(rejectedByPhoto[photoId] ?? [])
-                    var upright: CGImageBox?
                     var keywordIds = Set<Int64>()
                     var imageMissing = false
-                    for (profile, questionnaire, userPrompt) in questionnaires {
+                    var replies: [(profile: AIProfile, reply: String)] = []
+                    var pending: [(profile: AIProfile, questionnaire: String)] = []
+                    for (profile, questionnaire) in questionnaires {
                         // Every keyword this profile could assign is already
                         // confirmed, pending or rejected on the photo — asking
                         // again could not change anything. (An open question
@@ -255,40 +304,39 @@ final class AutoTagRunner {
                             skipped += 1
                             continue
                         }
-                        var reply = try await store.reply(
+                        if let cached = try await store.reply(
                             forPath: photo.path, mtime: mtime, modelId: modelId, questionnaire: questionnaire
-                        )
-                        if reply == nil {
-                            if upright == nil {
-                                // Full resolution = the decoded original (the
-                                // single view's cache, ≤ 2K previews by the
-                                // image profile); otherwise the 768 bucket.
-                                let box = fullResolution
-                                    ? await thumbnails.originalImage(forPath: photo.path)
-                                    : await thumbnails.thumbnail(forPath: photo.path, longEdge: VLMService.imageLongEdge)
-                                guard let box else {
-                                    imageMissing = true
-                                    break
-                                }
-                                upright = CGImageBox(image: UprightImage.make(box.image, orientation: photo.orientation))
-                            }
-                            let fresh = try await service.answer(
-                                image: upright!.image, systemPrompt: systemPrompt, userPrompt: userPrompt,
-                                thinking: thinking, fullResolution: fullResolution
-                            )
-                            try Task.checkCancellation()
-                            // Only a reply that answered something is worth
-                            // keeping: an exhausted thinking budget or a
-                            // garbled reply must be re-asked next time, not
-                            // cached as "no answer" forever.
-                            if !VLMAnswerParser.parse(fresh, profile: profile).isEmpty {
-                                try await store.store(
-                                    fresh, forPath: photo.path, mtime: mtime, modelId: modelId, questionnaire: questionnaire
-                                )
-                            }
-                            reply = fresh
+                        ) {
+                            replies.append((profile, cached))
+                        } else {
+                            pending.append((profile, questionnaire))
                         }
-                        let parsed = VLMAnswerParser.parse(reply ?? "", profile: profile)
+                    }
+                    if !pending.isEmpty {
+                        // Full resolution = the decoded original (the single
+                        // view's cache, ≤ 2K previews by the image profile);
+                        // otherwise the 768 bucket.
+                        let box = fullResolution
+                            ? await thumbnails.originalImage(forPath: photo.path)
+                            : await thumbnails.thumbnail(forPath: photo.path, longEdge: VLMService.imageLongEdge)
+                        if let box {
+                            let upright = CGImageBox(image: UprightImage.make(box.image, orientation: photo.orientation))
+                            // Only a reply that answered something is cached
+                            // (inside): an exhausted thinking budget or a
+                            // garbled reply is re-asked next time, not kept
+                            // as "no answer" forever.
+                            for fresh in try await Self.askModel(
+                                service: service, store: store, image: upright, path: photo.path, mtime: mtime,
+                                pending: pending, settings: settings
+                            ) {
+                                replies.append((fresh.profile, fresh.reply))
+                            }
+                        } else {
+                            imageMissing = true
+                        }
+                    }
+                    for (profile, reply) in replies {
+                        let parsed = VLMAnswerParser.parse(reply, profile: profile)
                         if parsed.isEmpty { unanswered += 1 }
                         keywordIds.formUnion(VLMAnswerParser.keywordIds(in: parsed))
                         // U50: the model's own words become keywords — found
@@ -384,9 +432,11 @@ final class AutoTagRunner {
         )
         let tree = snapshot.keywordTree
         let vocabulary = Self.vocabulary(for: profiles, tree: tree)
-        let questionnaires = profiles.map {
-            ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash, VLMPrompt.userPrompt(for: $0, vocabulary: vocabulary))
-        }
+        let questionnaires = profiles.map { ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash) }
+        let settings = RunSettings(
+            systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution,
+            modelId: modelId, vocabulary: vocabulary
+        )
         let libraryUUID = snapshot.meta.libraryUUID
 
         task = Task { [weak self] in
@@ -402,33 +452,38 @@ final class AutoTagRunner {
                     try Task.checkCancellation()
                     guard let photoId = photo.id else { continue }
                     let mtime = AIAnswerStore.mtime(of: photo.path)
-                    var upright: CGImageBox?
                     var replies: [PreviewReply] = []
-                    for (profile, questionnaire, userPrompt) in questionnaires {
-                        var reply = try await store.reply(
+                    // Cached replies show the prompt the questionnaire alone
+                    // would send; fresh ones the prompt that was actually sent
+                    // (every questionnaire asked together).
+                    var answered: [(profile: AIProfile, reply: String, prompt: String)] = []
+                    var pending: [(profile: AIProfile, questionnaire: String)] = []
+                    for (profile, questionnaire) in questionnaires {
+                        if let cached = try await store.reply(
                             forPath: photo.path, mtime: mtime, modelId: modelId, questionnaire: questionnaire
-                        )
-                        if reply == nil {
-                            if upright == nil {
-                                let box = fullResolution
-                                    ? await thumbnails.originalImage(forPath: photo.path)
-                                    : await thumbnails.thumbnail(forPath: photo.path, longEdge: VLMService.imageLongEdge)
-                                guard let box else { break }
-                                upright = CGImageBox(image: UprightImage.make(box.image, orientation: photo.orientation))
-                            }
-                            let fresh = try await service.answer(
-                                image: upright!.image, systemPrompt: systemPrompt, userPrompt: userPrompt,
-                                thinking: thinking, fullResolution: fullResolution
+                        ) {
+                            let alone = VLMPrompt.instructions(
+                                systemPrompt: systemPrompt, questions: VLMPrompt.questions(for: [profile], vocabulary: vocabulary)
                             )
-                            try Task.checkCancellation()
-                            if !VLMAnswerParser.parse(fresh, profile: profile).isEmpty {
-                                try await store.store(
-                                    fresh, forPath: photo.path, mtime: mtime, modelId: modelId, questionnaire: questionnaire
-                                )
-                            }
-                            reply = fresh
+                            answered.append((profile, cached, "SYSTEM\n" + alone + "\n\nUSER\n" + VLMPrompt.photoTurn))
+                        } else {
+                            pending.append((profile, questionnaire))
                         }
-                        let parsed = VLMAnswerParser.parse(reply ?? "", profile: profile)
+                    }
+                    if !pending.isEmpty {
+                        let box = fullResolution
+                            ? await thumbnails.originalImage(forPath: photo.path)
+                            : await thumbnails.thumbnail(forPath: photo.path, longEdge: VLMService.imageLongEdge)
+                        if let box {
+                            let upright = CGImageBox(image: UprightImage.make(box.image, orientation: photo.orientation))
+                            answered += try await Self.askModel(
+                                service: service, store: store, image: upright, path: photo.path, mtime: mtime,
+                                pending: pending, settings: settings
+                            )
+                        }
+                    }
+                    for (profile, reply, prompt) in answered {
+                        let parsed = VLMAnswerParser.parse(reply, profile: profile)
                         let answers = profile.allQuestions.flatMap { question -> [PreviewAnswer] in
                             guard let id = question.id, let answer = parsed[id] else { return [] }
                             if let coined = answer.coined {
@@ -447,11 +502,7 @@ final class AutoTagRunner {
                                 )
                             }
                         }
-                        replies.append(PreviewReply(
-                            profileName: profile.name,
-                            prompt: "SYSTEM\n" + systemPrompt + "\n\nUSER\n" + userPrompt,
-                            raw: reply ?? "", answers: answers
-                        ))
+                        replies.append(PreviewReply(profileName: profile.name, prompt: prompt, raw: reply, answers: answers))
                     }
                     state.items.append(PreviewItem(id: photoId, path: photo.path, filename: (photo.path as NSString).lastPathComponent, orientation: photo.orientation, replies: replies
                     ))

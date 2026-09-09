@@ -10,9 +10,17 @@ packages:
   # Pinned EXACTLY: the xcodeproj (and its Package.resolved) is generated and
   # gitignored, so CI resolves fresh on every push — a range would let an
   # upstream release change the build without any commit here.
+  # U57: pinned to a `main` COMMIT (2026-07-15) — the prompt-prefix cache
+  # needs Qwen3.5's warm continuation (`prepareContinuation`: M-RoPE anchored
+  # after a cached prefix, #399, plus #419: prefill state kept by the
+  # TokenIterator) that no tagged release carries yet. This is the LAST
+  # commit before upstream started calling mlx-swift ≥ 0.31.5 API (#369),
+  # and those mlx-swift releases need Swift 6.3 / Xcode 27 — neither here
+  # nor in CI. Go back to `exactVersion` with the first release that carries
+  # #399 — and check the Xcode floor first.
   mlx-swift-lm:
     url: https://github.com/ml-explore/mlx-swift-lm
-    exactVersion: 3.31.4
+    revision: d2424294a6c3bbd0de37a0761d80efc05e6813dd
   swift-huggingface:
     url: https://github.com/huggingface/swift-huggingface
     exactVersion: 0.10.0
