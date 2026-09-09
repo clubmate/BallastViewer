@@ -21,7 +21,16 @@ final class AutoTagRunner {
         case failed(String)
     }
 
-    private(set) var phase: Phase = .idle
+    private(set) var phase: Phase = .idle {
+        didSet {
+            // U58: the Dock badge counts along ("38/3942") and clears with the run.
+            if case .scanning(let done, let total, _, _) = phase {
+                DockBadge.autoTagging = "\(done)/\(total)"
+            } else {
+                DockBadge.autoTagging = nil
+            }
+        }
+    }
     /// Human-readable result of the last completed run.
     private(set) var summary: String?
     private var task: Task<Void, Never>?

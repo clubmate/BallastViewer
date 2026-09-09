@@ -784,9 +784,13 @@ enum TestHooks {
         let photos = Array(snapshot.photos.prefix(count))
         let started = Date()
         runner.run(controller: controller, models: models, photos: photos, scopeName: "VLM TEST")
+        var badges: [String] = []
         while runner.isRunning {
             try? await Task.sleep(for: .milliseconds(200))
+            // U58: the Dock badge as seen during the run, one entry per change.
+            if let badge = DockBadge.current, badges.last != badge { badges.append(badge) }
         }
+        print("BVVLM badges=\(badges.joined(separator: " ")) after=\(DockBadge.current ?? "-")")
         if case .failed(let message) = runner.phase {
             print("BVVLM error=run-failed message=\(message)")
             return
@@ -1164,11 +1168,26 @@ enum TestHooks {
         func runOnce(_ label: String) async {
             backup.run(destination, controller: controller, transport: rsync ? .rsync : .auto)
             var waited = 0
+            var badges: [String] = []
             while backup.isRunning, waited < 6000 {
                 try? await Task.sleep(for: .milliseconds(100))
                 waited += 1
+                if let badge = DockBadge.current, badges.last != badge { badges.append(badge) }
             }
             print("BVBACKUP \(label) phase=\(backup.phase) summary=\(quoted(backup.summary))")
+            print("BVBACKUP \(label) badges=\(badges.joined(separator: " ")) after=\(DockBadge.current ?? "-")")
+        }
+        // U58: the speed badge needs a copy that lasts longer than half a
+        // second — the fixture never does, so the tracker is fed by hand.
+        do {
+            var tracker = BackupService.SpeedTracker()
+            let t0 = ContinuousClock.now
+            let first = tracker.sample(bytes: 0, now: t0)
+            let second = tracker.sample(bytes: 8_000_000, now: t0 + .seconds(1))
+            let tooSoon = tracker.sample(bytes: 8_100_000, now: t0 + .milliseconds(1100))
+            let third = tracker.sample(bytes: 24_000_000, now: t0 + .seconds(2))
+            let texts = [850e3, 8.3e6, 120e6, 1.2e9].map(DockBadge.speedText(bytesPerSecond:))
+            print("BVBACKUP speed first=\(first.map { Int($0) } ?? -1) second=\(second.map { Int($0) } ?? -1) tooSoon=\(tooSoon.map { Int($0) } ?? -1) third=\(third.map { Int($0) } ?? -1) texts=\(texts.joined(separator: "|"))")
         }
         await runOnce("first")
         let after = MetadataReader.read(from: URL(fileURLWithPath: anchor.path)).orientation

@@ -39,7 +39,41 @@ final class BackupService {
 
     static let settingsFilename = "BallastViewer Settings.plist"
 
-    private(set) var phase: Phase = .idle
+    private(set) var phase: Phase = .idle {
+        didSet {
+            // U58: the Dock badge shows the transfer speed ("8 MB/s") while
+            // files are copied and clears with the run.
+            if case .copying(_, _, let bytesDone, _) = phase {
+                DockBadge.backup = speed.sample(bytes: bytesDone).map(DockBadge.speedText(bytesPerSecond:))
+            } else {
+                speed = SpeedTracker()
+                DockBadge.backup = nil
+            }
+        }
+    }
+
+    /// Transfer speed from the progress reports: a smoothed bytes-per-second
+    /// over samples at least half a second apart (rsync reports in bursts).
+    @ObservationIgnored private var speed = SpeedTracker()
+
+    struct SpeedTracker {
+        private var last: (time: ContinuousClock.Instant, bytes: Int64)?
+        private(set) var bytesPerSecond: Double?
+
+        mutating func sample(bytes: Int64, now: ContinuousClock.Instant = .now) -> Double? {
+            guard let last else {
+                self.last = (now, bytes)
+                return nil
+            }
+            let elapsed = now - last.time
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+            guard seconds >= 0.5 else { return bytesPerSecond }
+            let rate = max(0, Double(bytes - last.bytes)) / seconds
+            bytesPerSecond = bytesPerSecond.map { $0 * 0.7 + rate * 0.3 } ?? rate
+            self.last = (now, bytes)
+            return bytesPerSecond
+        }
+    }
     /// Human-readable result of the last completed run (dismissable).
     private(set) var summary: String?
     private(set) var activeDestinationId: UUID?
