@@ -272,9 +272,8 @@ final class VLMModelStore {
     }
 
     nonisolated static func freeGigabytes() -> Double? {
-        let values = try? HubCache.default.cacheDirectory.deletingLastPathComponent()
-            .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        return values?.volumeAvailableCapacityForImportantUsage.map { Double($0) / 1e9 }
+        HubCache.default.cacheDirectory.deletingLastPathComponent()
+            .availableBytesForNewFiles.map { Double($0) / 1e9 }
     }
 
     /// Deletes the model's files from the cache (after unloading it).

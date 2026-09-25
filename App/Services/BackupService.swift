@@ -222,8 +222,7 @@ final class BackupService {
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
             return DriveStatus(isConnected: false, freeBytes: nil)
         }
-        let values = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        return DriveStatus(isConnected: true, freeBytes: values?.volumeAvailableCapacityForImportantUsage)
+        return DriveStatus(isConnected: true, freeBytes: URL(fileURLWithPath: path).availableBytesForNewFiles)
     }
 
     // MARK: Library size
