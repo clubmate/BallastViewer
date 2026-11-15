@@ -179,6 +179,48 @@ final class AutoTagRunner {
         return result
     }
 
+    /// U59: the switched-on questionnaires as they are ASKED — without
+    /// their switched-off questions (and those questions' follow-ups); a
+    /// questionnaire with nothing left to ask drops out.
+    static func askedProfiles(in snapshot: LibrarySnapshot) -> [AIProfile] {
+        snapshot.aiProfiles.filter(\.enabled).map(\.active).filter { !$0.questions.isEmpty }
+    }
+
+    /// The complete questionnaire behind an asked one, with its cache key.
+    typealias CompleteQuestionnaires = [Int64: (profile: AIProfile, questionnaire: String)]
+
+    /// U59: the COMPLETE questionnaires (by profile id) of those asked with
+    /// questions switched off — where `cachedReply` looks when the cut-down
+    /// questionnaire has no reply of its own yet.
+    static func completeQuestionnaires(in snapshot: LibrarySnapshot, settingsHash: String) -> CompleteQuestionnaires {
+        var result: CompleteQuestionnaires = [:]
+        for profile in snapshot.aiProfiles where profile.enabled && profile.hasDisabledQuestions {
+            guard let id = profile.id else { continue }
+            result[id] = (profile, VLMPrompt.questionnaireHash(for: profile) + "|" + settingsHash)
+        }
+        return result
+    }
+
+    /// The cached reply for a questionnaire as it is asked now. U59: when
+    /// questions were switched off since the photo was asked, the reply to
+    /// the complete questionnaire is cut down to the remaining questions
+    /// (and kept under the new key) instead of asking the model again.
+    nonisolated static func cachedReply(
+        store: AIAnswerStore, path: String, mtime: Int, modelId: String,
+        profile: AIProfile, questionnaire: String, complete: CompleteQuestionnaires
+    ) async throws -> String? {
+        if let cached = try await store.reply(forPath: path, mtime: mtime, modelId: modelId, questionnaire: questionnaire) {
+            return cached
+        }
+        guard let id = profile.id, let whole = complete[id],
+              let full = try await store.reply(forPath: path, mtime: mtime, modelId: modelId, questionnaire: whole.questionnaire),
+              let cut = VLMAnswerParser.restrict(full, toActiveOf: whole.profile),
+              !VLMAnswerParser.parse(cut, profile: profile).isEmpty
+        else { return nil }
+        try await store.store(cut, forPath: path, mtime: mtime, modelId: modelId, questionnaire: questionnaire)
+        return cut
+    }
+
     /// The photos as records, in `ids` order (the grid knows ids, the run
     /// wants records).
     static func photos(withIds ids: [Int64], in snapshot: LibrarySnapshot) -> [PhotoRecord] {
@@ -206,9 +248,9 @@ final class AutoTagRunner {
             phase = .failed("Open a library first.")
             return
         }
-        let profiles = snapshot.aiProfiles.filter { $0.enabled && !$0.questions.isEmpty }
+        let profiles = Self.askedProfiles(in: snapshot)
         guard !profiles.isEmpty else {
-            phase = .failed("No questionnaire is switched on — set one up under AI ▸ Keyword Questionnaires.")
+            phase = .failed("No questionnaire with a switched-on question is switched on — set one up under AI ▸ Keyword Questionnaires.")
             return
         }
         guard profiles.contains(where: { !$0.keywordIds.isEmpty || $0.hasOpenQuestions }) else {
@@ -253,6 +295,7 @@ final class AutoTagRunner {
             systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution
         )
         let questionnaires = profiles.map { ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash) }
+        let complete = Self.completeQuestionnaires(in: snapshot, settingsHash: settingsHash)
         let settings = RunSettings(
             systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution,
             modelId: modelId, vocabulary: vocabulary
@@ -313,8 +356,9 @@ final class AutoTagRunner {
                             skipped += 1
                             continue
                         }
-                        if let cached = try await store.reply(
-                            forPath: photo.path, mtime: mtime, modelId: modelId, questionnaire: questionnaire
+                        if let cached = try await Self.cachedReply(
+                            store: store, path: photo.path, mtime: mtime, modelId: modelId,
+                            profile: profile, questionnaire: questionnaire, complete: complete
                         ) {
                             replies.append((profile, cached))
                         } else {
@@ -410,12 +454,12 @@ final class AutoTagRunner {
     func preview(controller: LibraryController, models: VLMModelStore, photos: [PhotoRecord]) {
         guard !isRunning, preview == nil, ask == nil else { return }
         guard let snapshot = controller.snapshot, let thumbnails = controller.thumbnails else { return }
-        let profiles = snapshot.aiProfiles.filter { $0.enabled && !$0.questions.isEmpty }
+        let profiles = Self.askedProfiles(in: snapshot)
         let photos = Array(photos.prefix(Self.previewLimit))
         let state = PreviewState(total: photos.count)
         preview = state
         guard !profiles.isEmpty else {
-            state.error = "No questionnaire is switched on — set one up under AI ▸ Keyword Questionnaires."
+            state.error = "No questionnaire with a switched-on question is switched on — set one up under AI ▸ Keyword Questionnaires."
             state.isRunning = false
             return
         }
@@ -442,6 +486,7 @@ final class AutoTagRunner {
         let tree = snapshot.keywordTree
         let vocabulary = Self.vocabulary(for: profiles, tree: tree)
         let questionnaires = profiles.map { ($0, VLMPrompt.questionnaireHash(for: $0) + "|" + settingsHash) }
+        let complete = Self.completeQuestionnaires(in: snapshot, settingsHash: settingsHash)
         let settings = RunSettings(
             systemPrompt: systemPrompt, thinking: thinking, fullResolution: fullResolution,
             modelId: modelId, vocabulary: vocabulary
@@ -468,8 +513,9 @@ final class AutoTagRunner {
                     var answered: [(profile: AIProfile, reply: String, prompt: String)] = []
                     var pending: [(profile: AIProfile, questionnaire: String)] = []
                     for (profile, questionnaire) in questionnaires {
-                        if let cached = try await store.reply(
-                            forPath: photo.path, mtime: mtime, modelId: modelId, questionnaire: questionnaire
+                        if let cached = try await Self.cachedReply(
+                            store: store, path: photo.path, mtime: mtime, modelId: modelId,
+                            profile: profile, questionnaire: questionnaire, complete: complete
                         ) {
                             let alone = VLMPrompt.instructions(
                                 systemPrompt: systemPrompt, questions: VLMPrompt.questions(for: [profile], vocabulary: vocabulary)

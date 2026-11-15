@@ -60,7 +60,8 @@ public enum AIProfileDAO {
         func insert(_ question: AIQuestion, position: Int, parentAnswerId: Int64?) throws -> AIQuestion {
             var qRecord = AIQuestionRecord(
                 profileId: profileId, parentAnswerId: parentAnswerId, position: position,
-                text: question.text, kind: question.kind, parentKeywordId: question.parentKeywordId
+                text: question.text, kind: question.kind, parentKeywordId: question.parentKeywordId,
+                enabled: question.enabled
             )
             try qRecord.insert(db)
             var answers: [AIAnswer] = []

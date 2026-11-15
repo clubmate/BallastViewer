@@ -281,6 +281,14 @@ public enum LibrarySchema {
             }
         }
 
+        migrator.registerMigration("v11-ai-question-enabled") { db in
+            // U59: a single question can be switched off — kept in the
+            // questionnaire, not asked (nor are its follow-ups).
+            try db.alter(table: "aiQuestion") { t in
+                t.add(column: "enabled", .boolean).notNull().defaults(to: true)
+            }
+        }
+
         return migrator
     }
 

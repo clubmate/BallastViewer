@@ -196,7 +196,9 @@ public enum VLMPrompt {
     /// Fingerprint of everything that changes what the model is ASKED — the
     /// cache key of a raw answer. Keyword mappings (and the vocabulary hint
     /// of open questions) are deliberately left out: re-mapping an answer to
-    /// another keyword must reuse cached answers.
+    /// another keyword must reuse cached answers. Neither is `enabled`
+    /// (U59): the run hashes `profile.active`, which simply lacks the
+    /// switched-off questions.
     public static func questionnaireHash(for profile: AIProfile) -> String {
         var parts: [String] = [profile.instructions]
         for entry in profile.flattened {
@@ -333,6 +335,22 @@ public enum VLMAnswerParser {
             parts.append(String(decoding: data, as: UTF8.self))
         }
         return parts
+    }
+
+    /// U59: a cached reply to the COMPLETE questionnaire cut down to the
+    /// questions still switched on, re-keyed `q1`…`qn` — it then parses and
+    /// caches exactly like a reply to `profile.active`, so switching a
+    /// question off costs no new inference. Nil when the reply carries no
+    /// JSON object.
+    public static func restrict(_ reply: String, toActiveOf profile: AIProfile) -> String? {
+        let keys = profile.flattened.indices.map(VLMPrompt.key)
+        guard let object = extractObject(from: reply, keys: keys) else { return nil }
+        var part: [String: Any] = [:]
+        for (newIndex, oldIndex) in profile.activeIndices.enumerated() {
+            if let value = object[keys[oldIndex]] { part[VLMPrompt.key(forQuestionAt: newIndex)] = value }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: part, options: [.sortedKeys]) else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Keyword ids the parsed answers assign (answers without a keyword

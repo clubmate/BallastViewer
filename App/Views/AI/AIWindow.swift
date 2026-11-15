@@ -168,10 +168,14 @@ struct AIWindow: View {
                     .help("Has unsaved changes — open it to see what is still missing")
             }
             Spacer(minLength: 4)
-            Text("\(profile.allQuestions.count)")
+            let total = profile.allQuestions.count
+            let asked = profile.activeIndices.count
+            Text(asked == total ? "\(total)" : "\(asked)/\(total)")
                 .font(.caption2).monospacedDigit()
                 .foregroundStyle(.secondary)
-                .help("\(profile.allQuestions.count) question\(profile.allQuestions.count == 1 ? "" : "s")")
+                .help(asked == total
+                      ? "\(total) question\(total == 1 ? "" : "s")"
+                      : "\(asked) of \(total) questions switched on")
         }
     }
 

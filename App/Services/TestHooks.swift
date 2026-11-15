@@ -745,6 +745,12 @@ enum TestHooks {
                 answers: answers + [AIAnswer(value: AIAnswerRecord.noneValue)]
             ))
         }
+        // U59 (BV_TEST_VLM_OFF=<n>): the n-th top-level question is switched
+        // off — after a run without it, the replies must come from the
+        // cache (cut down), not from the model.
+        if let off = env["BV_TEST_VLM_OFF"].flatMap(Int.init), profile.questions.indices.contains(off - 1) {
+            profile.questions[off - 1].enabled = false
+        }
         // Replace a previous test profile so reruns do not stack.
         if let stale = controller.snapshot?.aiProfiles.first(where: { $0.name == "VLM TEST" })?.id {
             controller.deleteAIProfile(stale)
@@ -753,7 +759,7 @@ enum TestHooks {
             print("BVVLM error=save-profile")
             return
         }
-        print("BVVLM profile=\(saved.id ?? -1) questions=\(saved.allQuestions.count) mapped=\(saved.keywordIds.count) open=\(saved.hasOpenQuestions)")
+        print("BVVLM profile=\(saved.id ?? -1) questions=\(saved.allQuestions.count) asked=\(saved.activeIndices.count) mapped=\(saved.keywordIds.count) open=\(saved.hasOpenQuestions)")
         // U57: a second questionnaire proves the combined prompt and the
         // per-questionnaire cut of the reply.
         var profiles = [saved]
@@ -775,7 +781,9 @@ enum TestHooks {
             if let savedSecond = controller.saveAIProfile(second) { profiles.append(savedSecond) }
         }
         if env["BV_TEST_VLM_PROMPT"] != nil {
-            let questions = VLMPrompt.questions(for: profiles, vocabulary: AutoTagRunner.vocabulary(for: profiles, tree: controller.snapshot!.keywordTree))
+            // As asked: without the switched-off questions (U59).
+            let asked = profiles.map(\.active)
+            let questions = VLMPrompt.questions(for: asked, vocabulary: AutoTagRunner.vocabulary(for: asked, tree: controller.snapshot!.keywordTree))
             print("BVVLM prompt:\n" + VLMPrompt.instructions(systemPrompt: AISettingsView.currentSystemPrompt, questions: questions) + "\n---\n" + VLMPrompt.photoTurn)
         }
         // U57: BV_TEST_VLM_NOPREFIX=1 sends the full prompt per photo (the

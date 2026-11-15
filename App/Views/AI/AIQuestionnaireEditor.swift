@@ -45,6 +45,8 @@ struct AIQuestionnaireEditor: View {
             var text: String
             var kind: AIQuestionKind
             var parentKeywordId: Int64?
+            /// U59: switched off = kept, but not asked (nor its follow-ups).
+            var enabled: Bool
             var answers: [Answer]
             /// The keyword-less "none" exit — a checkbox, not a row (U50).
             var allowsNone: Bool
@@ -53,6 +55,7 @@ struct AIQuestionnaireEditor: View {
             init(text: String = "", kind: AIQuestionKind = .choice, parentKeywordId: Int64? = nil,
                  answers: [Answer] = [], allowsNone: Bool = false, noneEnds: Bool = false) {
                 id = UUID()
+                enabled = true
                 self.text = text
                 self.kind = kind
                 self.parentKeywordId = parentKeywordId
@@ -66,6 +69,7 @@ struct AIQuestionnaireEditor: View {
                 text = question.text
                 kind = question.kind
                 parentKeywordId = question.parentKeywordId
+                enabled = question.enabled
                 let none = question.noneAnswer
                 allowsNone = none != nil
                 noneEnds = none?.stopsProfile ?? false
@@ -77,6 +81,11 @@ struct AIQuestionnaireEditor: View {
             /// Every question below this one, depth first.
             var descendants: [Question] {
                 answers.flatMap { $0.followUps.flatMap { [$0] + $0.descendants } }
+            }
+
+            /// This question and those below it that are asked.
+            var askedCount: Int {
+                enabled ? 1 + answers.flatMap(\.followUps).map(\.askedCount).reduce(0, +) : 0
             }
         }
 
@@ -167,7 +176,7 @@ struct AIQuestionnaireEditor: View {
             ForEach($draft.questions) { $question in
                 let index = draft.questions.firstIndex { $0.id == question.id } ?? 0
                 QuestionCard(
-                    question: $question, label: "\(index + 1)", gate: nil, depth: 0,
+                    question: $question, label: "\(index + 1)", gate: nil, depth: 0, parentOff: false,
                     onRemove: { draft.questions.removeAll { $0.id == question.id } }
                 )
             }
@@ -194,7 +203,8 @@ struct AIQuestionnaireEditor: View {
             let mapped = draft.allQuestions.flatMap(\.answers).filter { $0.keywordId != nil }.count
             let open = draft.allQuestions.filter { $0.kind == .open }.count
             let multiple = draft.allQuestions.filter { $0.kind == .multiple }.count
-            Text("\(questions) question\(questions == 1 ? "" : "s") · \(mapped) answer\(mapped == 1 ? "" : "s") mapped" + (multiple > 0 ? " · \(multiple) multiple" : "") + (open > 0 ? " · \(open) open" : ""))
+            let off = questions - draft.questions.map(\.askedCount).reduce(0, +)
+            Text("\(questions) question\(questions == 1 ? "" : "s")" + (off > 0 ? " (\(off) switched off)" : "") + " · \(mapped) answer\(mapped == 1 ? "" : "s") mapped" + (multiple > 0 ? " · \(multiple) multiple" : "") + (open > 0 ? " · \(open) open" : ""))
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
@@ -274,7 +284,8 @@ struct AIQuestionnaireEditor: View {
             }
             return AIQuestion(
                 text: q.text.trimmingCharacters(in: .whitespaces), kind: q.kind,
-                parentKeywordId: q.kind == .open ? live(q.parentKeywordId) : nil, answers: answers
+                parentKeywordId: q.kind == .open ? live(q.parentKeywordId) : nil, enabled: q.enabled,
+                answers: answers
             )
         }
         var record = profile.record
@@ -295,7 +306,12 @@ private struct QuestionCard: View {
     let label: String
     let gate: String?
     let depth: Int
+    /// A question above this one is switched off — this one is not asked
+    /// either, whatever its own switch says.
+    let parentOff: Bool
     let onRemove: () -> Void
+
+    private var isOff: Bool { parentOff || !question.enabled }
 
     /// Branch colours cycle by depth so nested follow-ups stay tellable.
     static let branchColors: [Color] = [.accentColor, .orange, .purple, .teal, .pink]
@@ -304,11 +320,15 @@ private struct QuestionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             titleRow
-            if question.kind.hasAnswerRows {
-                answerRows
-            } else {
-                openRows
+            Group {
+                if question.kind.hasAnswerRows {
+                    answerRows
+                } else {
+                    openRows
+                }
             }
+            // Dimmed once per switched-off branch (nested cards inherit it).
+            .opacity(question.enabled ? 1 : 0.45)
         }
         .padding(12)
         .background(
@@ -332,14 +352,29 @@ private struct QuestionCard: View {
                 .foregroundStyle(Self.branchColor(depth - 1))
             }
             HStack(spacing: 8) {
+                Toggle("", isOn: $question.enabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .help(switchHelp)
                 Text(label)
                     .font(.caption.weight(.bold)).monospacedDigit()
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(depth == 0 ? Color.secondary : Self.branchColor(depth - 1), in: Capsule())
+                    .opacity(question.enabled ? 1 : 0.45)
                 TextField("", text: $question.text, prompt: Text(questionPlaceholder))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
+                    .foregroundStyle(isOff ? .secondary : .primary)
+                if !question.enabled {
+                    Text("off")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .overlay(Capsule().stroke(.tertiary))
+                        .help(switchHelp)
+                }
                 Picker("", selection: $question.kind) {
                     Text("Choices").tag(AIQuestionKind.choice)
                     Text("Multiple choices").tag(AIQuestionKind.multiple)
@@ -355,6 +390,15 @@ private struct QuestionCard: View {
                 .help("Remove this question" + (question.descendants.isEmpty ? "" : " and its follow-ups"))
             }
         }
+    }
+
+    private var switchHelp: String {
+        let hasFollowUps = !question.descendants.isEmpty
+        if !question.enabled {
+            return "Switched off — kept here, but not asked" + (hasFollowUps ? ", and neither are its follow-ups" : "")
+        }
+        if parentOff { return "Switched on, but not asked while the question above it is switched off" }
+        return "Asked on every run. Switch off to keep the question without asking it" + (hasFollowUps ? " or its follow-ups" : "")
     }
 
     private var questionPlaceholder: String {
@@ -379,7 +423,7 @@ private struct QuestionCard: View {
             }
             ForEach($question.answers) { $answer in
                 AnswerRow(
-                    answer: $answer, questionLabel: label, depth: depth,
+                    answer: $answer, questionLabel: label, depth: depth, parentOff: isOff,
                     onRemove: { question.answers.removeAll { $0.id == answer.id } }
                 )
             }
@@ -484,6 +528,8 @@ private struct AnswerRow: View {
     @Binding var answer: AIQuestionnaireEditor.Draft.Answer
     let questionLabel: String
     let depth: Int
+    /// The question this answer belongs to is not asked.
+    let parentOff: Bool
     let onRemove: () -> Void
 
     private var color: Color { QuestionCard.branchColor(depth) }
@@ -526,6 +572,7 @@ private struct AnswerRow: View {
                             label: "\(questionLabel).\(index + 1)",
                             gate: answer.value.isEmpty ? "this answer" : answer.value,
                             depth: depth + 1,
+                            parentOff: parentOff,
                             onRemove: { answer.followUps.removeAll { $0.id == followUp.id } }
                         )
                     }

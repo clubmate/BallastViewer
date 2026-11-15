@@ -67,10 +67,13 @@ public struct AIQuestionRecord: Codable, Hashable, Sendable, FetchableRecord, Mu
     /// (nil = top level). Its existing children are offered to the model as
     /// the preferred vocabulary. NULL when that keyword is deleted (FK).
     public var parentKeywordId: Int64?
+    /// U59: a switched-off question is kept in the questionnaire but not
+    /// asked — and neither are the follow-ups hanging off its answers.
+    public var enabled: Bool
 
     public init(
         id: Int64? = nil, profileId: Int64, parentAnswerId: Int64? = nil, position: Int = 0,
-        text: String, kind: AIQuestionKind = .choice, parentKeywordId: Int64? = nil
+        text: String, kind: AIQuestionKind = .choice, parentKeywordId: Int64? = nil, enabled: Bool = true
     ) {
         self.id = id
         self.profileId = profileId
@@ -79,6 +82,7 @@ public struct AIQuestionRecord: Codable, Hashable, Sendable, FetchableRecord, Mu
         self.text = text
         self.kind = kind
         self.parentKeywordId = parentKeywordId
+        self.enabled = enabled
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
@@ -166,8 +170,11 @@ public struct AIQuestion: Hashable, Sendable {
         self.answers = answers
     }
 
-    public init(text: String, kind: AIQuestionKind = .choice, parentKeywordId: Int64? = nil, answers: [AIAnswer] = []) {
-        self.record = AIQuestionRecord(profileId: 0, text: text, kind: kind, parentKeywordId: parentKeywordId)
+    public init(
+        text: String, kind: AIQuestionKind = .choice, parentKeywordId: Int64? = nil, enabled: Bool = true,
+        answers: [AIAnswer] = []
+    ) {
+        self.record = AIQuestionRecord(profileId: 0, text: text, kind: kind, parentKeywordId: parentKeywordId, enabled: enabled)
         self.answers = answers
     }
 
@@ -183,6 +190,10 @@ public struct AIQuestion: Hashable, Sendable {
     public var parentKeywordId: Int64? {
         get { record.parentKeywordId }
         set { record.parentKeywordId = newValue }
+    }
+    public var enabled: Bool {
+        get { record.enabled }
+        set { record.enabled = newValue }
     }
 
     /// The keyword-less "none" exit, if the question has one.
@@ -257,6 +268,38 @@ public struct AIProfile: Hashable, Sendable {
 
     /// Every question of the profile, depth first.
     public var allQuestions: [AIQuestion] { flattened.map(\.question) }
+
+    /// U59: indices (into `flattened`) of the questions that are ASKED — a
+    /// question is asked when it is switched on and so is every question
+    /// above it (a follow-up of a switched-off question has no gate).
+    public var activeIndices: [Int] {
+        let flat = flattened
+        var asked = [Bool](repeating: false, count: flat.count)
+        for (index, entry) in flat.enumerated() {
+            asked[index] = entry.question.enabled && (entry.parentIndex.map { asked[$0] } ?? true)
+        }
+        return flat.indices.filter { asked[$0] }
+    }
+
+    /// Whether any question is switched off.
+    public var hasDisabledQuestions: Bool { allQuestions.contains { !$0.enabled } }
+
+    /// U59: the questionnaire as it is ASKED — switched-off questions and
+    /// their follow-ups removed. Its `flattened` is this profile's
+    /// `flattened` at `activeIndices`, so it prompts, hashes, parses and
+    /// caches exactly like a questionnaire that never had those questions.
+    public var active: AIProfile {
+        func prune(_ questions: [AIQuestion]) -> [AIQuestion] {
+            questions.filter(\.enabled).map { question in
+                var question = question
+                for index in question.answers.indices {
+                    question.answers[index].followUps = prune(question.answers[index].followUps)
+                }
+                return question
+            }
+        }
+        return AIProfile(record: record, questions: prune(questions))
+    }
 
     /// Every keyword any answer of this profile can assign.
     public var keywordIds: Set<Int64> {
