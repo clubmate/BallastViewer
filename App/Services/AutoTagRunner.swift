@@ -250,11 +250,17 @@ final class AutoTagRunner {
         }
         let profiles = Self.askedProfiles(in: snapshot)
         guard !profiles.isEmpty else {
-            phase = .failed("No questionnaire with a switched-on question is switched on — set one up under AI ▸ Keyword Questionnaires.")
+            phase = .failed("Nothing to ask — no questionnaire is switched on, or all of its questions are switched off. See AI ▸ Keyword Questionnaires.")
             return
         }
         guard profiles.contains(where: { !$0.keywordIds.isEmpty || $0.hasOpenQuestions }) else {
-            phase = .failed("No answer of the enabled questionnaires is mapped to a keyword yet — see AI ▸ Keyword Questionnaires.")
+            // U59: mapped answers may exist, but only in switched-off questions.
+            let mappedButOff = snapshot.aiProfiles.contains { $0.enabled && (!$0.keywordIds.isEmpty || $0.hasOpenQuestions) }
+            phase = .failed(
+                mappedButOff
+                    ? "The questions that are switched on assign no keyword — the mapped answers are all in switched-off questions. See AI ▸ Keyword Questionnaires."
+                    : "No answer of the enabled questionnaires is mapped to a keyword yet — see AI ▸ Keyword Questionnaires."
+            )
             return
         }
         guard let model = models.selected, models.isSelectedReady else {
@@ -459,7 +465,7 @@ final class AutoTagRunner {
         let state = PreviewState(total: photos.count)
         preview = state
         guard !profiles.isEmpty else {
-            state.error = "No questionnaire with a switched-on question is switched on — set one up under AI ▸ Keyword Questionnaires."
+            state.error = "Nothing to ask — no questionnaire is switched on, or all of its questions are switched off. See AI ▸ Keyword Questionnaires."
             state.isRunning = false
             return
         }

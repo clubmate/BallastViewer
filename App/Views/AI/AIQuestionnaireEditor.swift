@@ -204,7 +204,7 @@ struct AIQuestionnaireEditor: View {
             let open = draft.allQuestions.filter { $0.kind == .open }.count
             let multiple = draft.allQuestions.filter { $0.kind == .multiple }.count
             let off = questions - draft.questions.map(\.askedCount).reduce(0, +)
-            Text("\(questions) question\(questions == 1 ? "" : "s")" + (off > 0 ? " (\(off) switched off)" : "") + " · \(mapped) answer\(mapped == 1 ? "" : "s") mapped" + (multiple > 0 ? " · \(multiple) multiple" : "") + (open > 0 ? " · \(open) open" : ""))
+            Text("\(questions) question\(questions == 1 ? "" : "s")" + (off > 0 ? " (\(off) not asked)" : "") + " · \(mapped) answer\(mapped == 1 ? "" : "s") mapped" + (multiple > 0 ? " · \(multiple) multiple" : "") + (open > 0 ? " · \(open) open" : ""))
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
@@ -216,19 +216,32 @@ struct AIQuestionnaireEditor: View {
     /// Why the draft is not saved, or nil when it is complete.
     private var problem: String? {
         if draft.name.trimmingCharacters(in: .whitespaces).isEmpty { return "give the questionnaire a name." }
-        for question in draft.allQuestions {
-            if question.text.trimmingCharacters(in: .whitespaces).isEmpty { return "every question needs text." }
+        return Self.problem(in: draft.questions, asked: true)
+    }
+
+    /// The first problem in `questions` and below. A question that is not
+    /// asked (switched off, or below a switched-off one) may be unfinished —
+    /// that is what parking it is for; only what would break the stored
+    /// format is refused there. It is checked in full once it is asked.
+    private static func problem(in questions: [Draft.Question], asked parentAsked: Bool) -> String? {
+        for question in questions {
+            let asked = parentAsked && question.enabled
+            if asked, question.text.trimmingCharacters(in: .whitespaces).isEmpty { return "every question needs text." }
             if question.text.contains("\"") { return "questions cannot contain double quotes." }
-            guard question.kind.hasAnswerRows else { continue }
-            let values = question.answers.map { $0.value.trimmingCharacters(in: .whitespaces).lowercased() }
-            if values.count + (question.allowsNone ? 1 : 0) < 2 { return "every question needs at least two answers (“none” counts)." }
-            if values.contains("") { return "every answer needs a value." }
-            if values.contains(where: { $0.contains("\"") || $0.contains("|") }) {
-                return "answers cannot contain double quotes or |."
+            if question.kind.hasAnswerRows {
+                let values = question.answers.map { $0.value.trimmingCharacters(in: .whitespaces).lowercased() }
+                if values.contains(where: { $0.contains("\"") || $0.contains("|") }) {
+                    return "answers cannot contain double quotes or |."
+                }
+                if asked {
+                    if values.count + (question.allowsNone ? 1 : 0) < 2 { return "every question needs at least two answers (“none” counts)." }
+                    if values.contains("") { return "every answer needs a value." }
+                    if values.contains(AIAnswerRecord.noneValue), question.allowsNone { return "“none” is already the exit of that question." }
+                    if values.contains(VLMPrompt.notApplicable) { return "“n/a” is reserved." }
+                    if Set(values).count != values.count { return "answers of one question must differ." }
+                }
             }
-            if values.contains(AIAnswerRecord.noneValue), question.allowsNone { return "“none” is already the exit of that question." }
-            if values.contains(VLMPrompt.notApplicable) { return "“n/a” is reserved." }
-            if Set(values).count != values.count { return "answers of one question must differ." }
+            if let problem = problem(in: question.answers.flatMap(\.followUps), asked: asked) { return problem }
         }
         return nil
     }
@@ -327,8 +340,9 @@ private struct QuestionCard: View {
                     openRows
                 }
             }
-            // Dimmed once per switched-off branch (nested cards inherit it).
-            .opacity(question.enabled ? 1 : 0.45)
+            // Dimmed once per switched-off branch: below a switched-off
+            // question the cards already sit in its dimmed body.
+            .opacity(question.enabled || parentOff ? 1 : 0.45)
         }
         .padding(12)
         .background(
@@ -362,7 +376,7 @@ private struct QuestionCard: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(depth == 0 ? Color.secondary : Self.branchColor(depth - 1), in: Capsule())
-                    .opacity(question.enabled ? 1 : 0.45)
+                    .opacity(question.enabled || parentOff ? 1 : 0.45)
                 TextField("", text: $question.text, prompt: Text(questionPlaceholder))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
@@ -394,11 +408,16 @@ private struct QuestionCard: View {
 
     private var switchHelp: String {
         let hasFollowUps = !question.descendants.isEmpty
+        // Without the question its "Ends" answer cannot stop anything: the
+        // later questions are then answered for every photo.
+        let ends = question.answers.contains(where: \.stopsProfile) || (question.allowsNone && question.noneEnds)
         if !question.enabled {
             return "Switched off — kept here, but not asked" + (hasFollowUps ? ", and neither are its follow-ups" : "")
+                + (ends ? ". Its “Ends” answer no longer ends the questionnaire: the later questions are answered for every photo" : "")
         }
         if parentOff { return "Switched on, but not asked while the question above it is switched off" }
         return "Asked on every run. Switch off to keep the question without asking it" + (hasFollowUps ? " or its follow-ups" : "")
+            + (ends ? ". Careful: its “Ends” answer then no longer ends the questionnaire" : "")
     }
 
     private var questionPlaceholder: String {

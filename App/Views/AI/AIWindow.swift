@@ -175,7 +175,7 @@ struct AIWindow: View {
                 .foregroundStyle(.secondary)
                 .help(asked == total
                       ? "\(total) question\(total == 1 ? "" : "s")"
-                      : "\(asked) of \(total) questions switched on")
+                      : "\(asked) of \(total) questions asked — the rest is switched off")
         }
     }
 
